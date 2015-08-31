@@ -5886,6 +5886,8 @@ void TemplateInstance::semantic(Scope *sc, Expressions *fargs)
 
     gagged = (global.gag > 0);
 
+    const size_t oldDeferredDim = Module::deferred.dim;
+
     semanticRun = PASSsemantic;
 
 #if LOG
@@ -6179,7 +6181,7 @@ Lerror:
      */
     {
     bool found_deferred_ad = false;
-    for (size_t i = 0; i < Module::deferred.dim; i++)
+    for (size_t i = oldDeferredDim; i < Module::deferred.dim; i++)
     {
         Dsymbol *sd = Module::deferred[i];
         AggregateDeclaration *ad = sd->isAggregateDeclaration();
@@ -6195,7 +6197,7 @@ Lerror:
             }
         }
     }
-    if (found_deferred_ad || Module::deferred.dim)
+    if (found_deferred_ad)
         goto Laftersemantic;
     }
 
