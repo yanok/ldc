@@ -8085,6 +8085,13 @@ bool TemplateInstance::needsCodegen()
         if (!minst->isRoot() && !minst->rootImports())
             return false;
 
+// This breaks compiling wekanode. The issue is that while it looks like 'tnext'
+// is going to be codegen'd elsewhere from the point of this compilation, when
+// it is actually compiled there might be another root module that creates an
+// instance pointing back to 'this', so there the symbol corresponding to 'tnext'
+// would again not be emitted. By commenting out this block, we are always
+// emitting non-speculative instantiations directly from root nodes.
+#if 0
         TemplateInstance *tnext = this->tnext;
         this->tnext = NULL;
 
@@ -8094,6 +8101,7 @@ bool TemplateInstance::needsCodegen()
             assert(!minst->isRoot());
             return false;
         }
+#endif
 
         // Do codegen because this is not included in non-root instances.
         return true;
