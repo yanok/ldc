@@ -347,6 +347,7 @@ if(MSVC)
 endif()
 
 add_definitions(
+    -DIN_WEKA  # Define to enable the Weka modifications
     -DIN_LLVM
     -DOPAQUE_VTBLS
     -DLDC_INSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}"

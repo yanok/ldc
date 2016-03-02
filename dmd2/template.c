@@ -5886,7 +5886,9 @@ void TemplateInstance::semantic(Scope *sc, Expressions *fargs)
 
     gagged = (global.gag > 0);
 
+#if IN_WEKA
     const size_t oldDeferredDim = Module::deferred.dim;
+#endif
 
     semanticRun = PASSsemantic;
 
@@ -6181,7 +6183,11 @@ Lerror:
      */
     {
     bool found_deferred_ad = false;
+#if IN_WEKA
     for (size_t i = oldDeferredDim; i < Module::deferred.dim; i++)
+#else
+    for (size_t i = 0; i < Module::deferred.dim; i++)
+#endif
     {
         Dsymbol *sd = Module::deferred[i];
         AggregateDeclaration *ad = sd->isAggregateDeclaration();
@@ -6197,8 +6203,13 @@ Lerror:
             }
         }
     }
+#if IN_WEKA
     if (found_deferred_ad)
         goto Laftersemantic;
+#else
+    if (found_deferred_ad || Module::deferred.dim)
+        goto Laftersemantic;
+#endif
     }
 
     /* The problem is when to parse the initializer for a variable.
@@ -8091,7 +8102,7 @@ bool TemplateInstance::needsCodegen()
 // instance pointing back to 'this', so there the symbol corresponding to 'tnext'
 // would again not be emitted. By commenting out this block, we are always
 // emitting non-speculative instantiations directly from root nodes.
-#if 0
+#if !IN_WEKA
         TemplateInstance *tnext = this->tnext;
         this->tnext = NULL;
 

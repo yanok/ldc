@@ -107,6 +107,9 @@ void printVersion() {
   printf("LDC - the LLVM D compiler (%s):\n", global.ldc_version);
   printf("  based on DMD %s and LLVM %s\n", global.version,
          global.llvm_version);
+#if IN_WEKA
+  printf("  with Weka.io modifications\n");
+#endif
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
   printf("  compiled with address sanitizer enabled\n");
@@ -795,6 +798,9 @@ static void registerPredefinedTargetVersions() {
 /// Registers all predefined D version identifiers for the current
 /// configuration with VersionCondition.
 static void registerPredefinedVersions() {
+#if IN_WEKA
+  VersionCondition::addPredefinedGlobalIdent("WEKA");
+#endif
   VersionCondition::addPredefinedGlobalIdent("LDC");
   VersionCondition::addPredefinedGlobalIdent("all");
   VersionCondition::addPredefinedGlobalIdent("D_Version2");
