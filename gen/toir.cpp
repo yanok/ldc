@@ -56,10 +56,9 @@ llvm::cl::opt<bool> checkPrintf(
     llvm::cl::ZeroOrMore);
 
 bool walkPostorder(Expression *e, StoppableVisitor *v);
-extern LLConstant *get_default_initializer(VarDeclaration *vd,
-                                           Initializer *init);
+extern LLConstant *get_default_initializer(VarDeclaration *vd);
 
-//////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 dinteger_t undoStrideMul(Loc &loc, Type *t, dinteger_t offset) {
   assert(t->ty == Tpointer);
@@ -70,7 +69,7 @@ dinteger_t undoStrideMul(Loc &loc, Type *t, dinteger_t offset) {
   return offset / elemSize;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static LLValue *write_zeroes(LLValue *mem, unsigned start, unsigned end) {
   mem = DtoBitCast(mem, getVoidPtrType());
@@ -79,7 +78,7 @@ static LLValue *write_zeroes(LLValue *mem, unsigned start, unsigned end) {
   return mem;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static void write_struct_literal(Loc loc, LLValue *mem, StructDeclaration *sd,
                                  Expressions *elements) {
@@ -158,7 +157,7 @@ static void write_struct_literal(Loc loc, LLValue *mem, StructDeclaration *sd,
       }
       IF_LOG Logger::println("using default initializer");
       LOG_SCOPE
-      cv.c = get_default_initializer(vd, nullptr);
+      cv.c = get_default_initializer(vd);
       val = &cv;
     }
 
@@ -202,7 +201,7 @@ void pushVarDtorCleanup(IRState *p, VarDeclaration *vd) {
 }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 // Tries to find the proper lvalue subexpression of an assign/binassign
 // expression.
@@ -276,7 +275,7 @@ DValue *toElem(Expression *e, bool tryGetLvalue) {
   return !nestedLval ? value : DtoCast(e->loc, nestedLval, e->type);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 class ToElemVisitor : public Visitor {
   IRState *p;
@@ -314,12 +313,12 @@ public:
     return result;
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   // Import all functions from class Visitor
   using Visitor::visit;
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(DeclarationExp *e) override {
     IF_LOG Logger::print("DeclarationExp::toElem: %s | T=%s\n", e->toChars(),
@@ -338,7 +337,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(VarExp *e) override {
     IF_LOG Logger::print("VarExp::toElem: %s @ %s\n", e->toChars(),
@@ -356,7 +355,7 @@ public:
     result = DtoSymbolAddress(e->loc, e->type, e->var);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(IntegerExp *e) override {
     IF_LOG Logger::print("IntegerExp::toElem: %s @ %s\n", e->toChars(),
@@ -366,7 +365,7 @@ public:
     result = new DConstValue(e->type, c);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(RealExp *e) override {
     IF_LOG Logger::print("RealExp::toElem: %s @ %s\n", e->toChars(),
@@ -376,7 +375,7 @@ public:
     result = new DConstValue(e->type, c);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(NullExp *e) override {
     IF_LOG Logger::print("NullExp::toElem(type=%s): %s\n", e->type->toChars(),
@@ -386,7 +385,7 @@ public:
     result = new DNullValue(e->type, c);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(ComplexExp *e) override {
     IF_LOG Logger::print("ComplexExp::toElem(): %s @ %s\n", e->toChars(),
@@ -417,7 +416,7 @@ public:
     result = new DImValue(e->type, res);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(StringExp *e) override {
     IF_LOG Logger::print("StringExp::toElem: %s @ %s\n", e->toChars(),
@@ -495,7 +494,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(AssignExp *e) override {
     IF_LOG Logger::print("AssignExp::toElem: %s | (%s)(%s = %s)\n",
@@ -579,7 +578,7 @@ public:
     if (e->e1->type->toBasetype()->ty == Tstruct && e->e2->op == TOKint64) {
       Logger::println("performing aggregate zero initialization");
       assert(e->e2->toInteger() == 0);
-      DtoAggrZeroInit(l->getLVal());
+      DtoMemSetZero(l->getLVal());
       TypeStruct *ts = static_cast<TypeStruct *>(e->e1->type);
       if (ts->sym->isNested() && ts->sym->vthis) {
         DtoResolveNestedContext(e->loc, ts->sym, l->getLVal());
@@ -608,7 +607,7 @@ public:
     result = l;
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   template <typename BinExp, bool useLvalForBinExpLhs>
   static DValue *binAssign(BinAssignExp *e) {
@@ -670,7 +669,7 @@ public:
 
 #undef BIN_ASSIGN
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void errorOnIllegalArrayOp(Expression *base, Expression *e1, Expression *e2) {
     Type *t1 = e1->type->toBasetype();
@@ -740,8 +739,8 @@ public:
       if (negateOffset) {
         noStrideInc = p->ir->CreateNeg(noStrideInc);
       }
-      return new DImValue(
-          base->type, DtoGEP1(base->getRVal(), noStrideInc, "", p->scopebb()));
+      return new DImValue(base->type,
+                          DtoGEP1(base->getRVal(), noStrideInc, false));
     }
 
     // This might not actually be generated by the frontend, just to be
@@ -751,7 +750,7 @@ public:
       inc = p->ir->CreateNeg(inc);
     }
     llvm::Value *bytePtr = DtoBitCast(base->getRVal(), getVoidPtrType());
-    DValue *result = new DImValue(Type::tvoidptr, DtoGEP1(bytePtr, inc));
+    DValue *result = new DImValue(Type::tvoidptr, DtoGEP1(bytePtr, inc, false));
     return DtoCast(loc, result, resultType);
   }
 
@@ -812,7 +811,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(MulExp *e) override {
     IF_LOG Logger::print("MulExp::toElem: %s @ %s\n", e->toChars(),
@@ -831,7 +830,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(DivExp *e) override {
     IF_LOG Logger::print("DivExp::toElem: %s @ %s\n", e->toChars(),
@@ -850,7 +849,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(ModExp *e) override {
     IF_LOG Logger::print("ModExp::toElem: %s @ %s\n", e->toChars(),
@@ -869,7 +868,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(CallExp *e) override {
     IF_LOG Logger::print("CallExp::toElem: %s @ %s\n", e->toChars(),
@@ -967,7 +966,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(CastExp *e) override {
     IF_LOG Logger::print("CastExp::toElem: %s @ %s\n", e->toChars(),
@@ -997,7 +996,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(SymOffExp *e) override {
     IF_LOG Logger::print("SymOffExp::toElem: %s @ %s\n", e->toChars(),
@@ -1044,7 +1043,7 @@ public:
     result = DtoCast(e->loc, new DImValue(offsetType, offsetValue), e->type);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(AddrExp *e) override {
     IF_LOG Logger::println("AddrExp::toElem: %s @ %s", e->toChars(),
@@ -1099,7 +1098,7 @@ public:
     result = new DImValue(e->type, DtoBitCast(lval, DtoType(e->type)));
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(PtrExp *e) override {
     IF_LOG Logger::println("PtrExp::toElem: %s @ %s", e->toChars(),
@@ -1148,7 +1147,7 @@ public:
     result = new DVarValue(e->type, V);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(DotVarExp *e) override {
     IF_LOG Logger::print("DotVarExp::toElem: %s @ %s\n", e->toChars(),
@@ -1221,7 +1220,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(ThisExp *e) override {
     IF_LOG Logger::print("ThisExp::toElem: %s @ %s\n", e->toChars(),
@@ -1260,7 +1259,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(IndexExp *e) override {
     IF_LOG Logger::print("IndexExp::toElem: %s @ %s\n", e->toChars(),
@@ -1281,22 +1280,20 @@ public:
     DValue *r = toElem(e->e2);
     p->arrays.pop_back();
 
-    LLValue *zero = DtoConstUint(0);
-
     LLValue *arrptr = nullptr;
     if (e1type->ty == Tpointer) {
-      arrptr = DtoGEP1(l->getRVal(), r->getRVal());
+      arrptr = DtoGEP1(l->getRVal(), r->getRVal(), false);
     } else if (e1type->ty == Tsarray) {
       if (p->emitArrayBoundsChecks() && !e->indexIsInBounds) {
         DtoIndexBoundsCheck(e->loc, l, r);
       }
-      arrptr = DtoGEP(l->getRVal(), zero, r->getRVal());
+      arrptr = DtoGEP(l->getRVal(), DtoConstUint(0), r->getRVal(),
+                      e->indexIsInBounds);
     } else if (e1type->ty == Tarray) {
       if (p->emitArrayBoundsChecks() && !e->indexIsInBounds) {
         DtoIndexBoundsCheck(e->loc, l, r);
       }
-      arrptr = DtoArrayPtr(l);
-      arrptr = DtoGEP1(arrptr, r->getRVal());
+      arrptr = DtoGEP1(DtoArrayPtr(l), r->getRVal(), e->indexIsInBounds);
     } else if (e1type->ty == Taarray) {
       result = DtoAAIndex(e->loc, e->type, l, r, e->modifiable);
       return;
@@ -1307,7 +1304,7 @@ public:
     result = new DVarValue(e->type, arrptr);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(SliceExp *e) override {
     IF_LOG Logger::print("SliceExp::toElem: %s @ %s\n", e->toChars(),
@@ -1383,7 +1380,7 @@ public:
       }
 
       // offset by lower
-      eptr = DtoGEP1(eptr, vlo, "lowerbound");
+      eptr = DtoGEP1(eptr, vlo, !needCheckLower, "lowerbound");
 
       // adjust length
       elen = p->ir->CreateSub(vup, vlo);
@@ -1420,7 +1417,7 @@ public:
     result = new DSliceValue(e->type, elen, eptr);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(CmpExp *e) override {
     IF_LOG Logger::print("CmpExp::toElem: %s @ %s\n", e->toChars(),
@@ -1548,7 +1545,7 @@ public:
     result = new DImValue(e->type, eval);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(EqualExp *e) override {
     IF_LOG Logger::print("EqualExp::toElem: %s @ %s\n", e->toChars(),
@@ -1611,7 +1608,7 @@ public:
     result = new DImValue(e->type, eval);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(PostExp *e) override {
     IF_LOG Logger::print("PostExp::toElem: %s @ %s\n", e->toChars(),
@@ -1638,19 +1635,9 @@ public:
       }
     } else if (e1type->ty == Tpointer) {
       assert(e->e2->op == TOKint64);
-      LLConstant *offset;
-      if (e->op == TOKplusplus) {
-        offset =
-            LLConstantInt::get(DtoSize_t(), static_cast<uint64_t>(1), false);
-      } else {
-        offset =
-            LLConstantInt::get(DtoSize_t(), static_cast<uint64_t>(-1), true);
-      }
-      post = llvm::GetElementPtrInst::Create(
-#if LDC_LLVM_VER >= 307
-          isaPointer(val)->getElementType(),
-#endif
-          val, offset, "", p->scopebb());
+      LLConstant *offset =
+          e->op == TOKplusplus ? DtoConstUint(1) : DtoConstInt(-1);
+      post = DtoGEP1(val, offset, false, "", p->scopebb());
     } else if (e1type->isfloating()) {
       assert(e2type->isfloating());
       LLValue *one = DtoConstFP(e1type, ldouble(1.0));
@@ -1667,7 +1654,7 @@ public:
     result = new DImValue(e->type, val);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(NewExp *e) override {
     IF_LOG Logger::print("NewExp::toElem: %s @ %s\n", e->toChars(),
@@ -1787,7 +1774,7 @@ public:
     assert(e->argprefix == NULL || isArgprefixHandled);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(DeleteExp *e) override {
     IF_LOG Logger::print("DeleteExp::toElem: %s @ %s\n", e->toChars(),
@@ -1841,7 +1828,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(ArrayLengthExp *e) override {
     IF_LOG Logger::print("ArrayLengthExp::toElem: %s @ %s\n", e->toChars(),
@@ -1852,7 +1839,7 @@ public:
     result = new DImValue(e->type, DtoArrayLen(u));
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(AssertExp *e) override {
     IF_LOG Logger::print("AssertExp::toElem: %s\n", e->toChars());
@@ -1913,7 +1900,7 @@ public:
         !(static_cast<TypeClass *>(condty)->sym->isInterfaceDeclaration()) &&
         !(static_cast<TypeClass *>(condty)->sym->isCPPclass())) {
       Logger::println("calling class invariant");
-      llvm::Function *fn = LLVM_D_GetRuntimeFunction(
+      llvm::Function *fn = getRuntimeFunction(
           e->loc, gIR->module,
           gABI->mangleForLLVM("_D9invariant12_d_invariantFC6ObjectZv", LINKd)
               .c_str());
@@ -1933,7 +1920,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(NotExp *e) override {
     IF_LOG Logger::print("NotExp::toElem: %s @ %s\n", e->toChars(),
@@ -1950,7 +1937,7 @@ public:
     result = new DImValue(e->type, b);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(AndAndExp *e) override {
     IF_LOG Logger::print("AndAndExp::toElem: %s @ %s\n", e->toChars(),
@@ -1999,7 +1986,7 @@ public:
     result = new DImValue(e->type, resval);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(OrOrExp *e) override {
     IF_LOG Logger::print("OrOrExp::toElem: %s @ %s\n", e->toChars(),
@@ -2048,7 +2035,7 @@ public:
     result = new DImValue(e->type, resval);
   }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 #define BIN_BLIT_EXP(X, Y)                                                     \
   void visit(X##Exp *e) override {                                             \
@@ -2087,7 +2074,7 @@ public:
     result = new DImValue(e->type, x);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(HaltExp *e) override {
     IF_LOG Logger::print("HaltExp::toElem: %s\n", e->toChars());
@@ -2108,7 +2095,7 @@ public:
     p->scope() = IRScope(bb);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(DelegateExp *e) override {
     IF_LOG Logger::print("DelegateExp::toElem: %s @ %s\n", e->toChars(),
@@ -2175,7 +2162,7 @@ public:
         e->type, DtoAggrPair(DtoType(e->type), castcontext, castfptr, ".dg"));
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(IdentityExp *e) override {
     IF_LOG Logger::print("IdentityExp::toElem: %s @ %s\n", e->toChars(),
@@ -2231,7 +2218,7 @@ public:
     result = new DImValue(e->type, eval);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(CommaExp *e) override {
     IF_LOG Logger::print("CommaExp::toElem: %s @ %s\n", e->toChars(),
@@ -2251,7 +2238,7 @@ public:
     // assert(e2->type == type);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(CondExp *e) override {
     IF_LOG Logger::print("CondExp::toElem: %s @ %s\n", e->toChars(),
@@ -2300,7 +2287,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(ComExp *e) override {
     IF_LOG Logger::print("ComExp::toElem: %s @ %s\n", e->toChars(),
@@ -2318,7 +2305,7 @@ public:
     result = new DImValue(e->type, value);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(NegExp *e) override {
     IF_LOG Logger::print("NegExp::toElem: %s @ %s\n", e->toChars(),
@@ -2343,7 +2330,7 @@ public:
     result = new DImValue(e->type, val);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(CatExp *e) override {
     IF_LOG Logger::print("CatExp::toElem: %s @ %s\n", e->toChars(),
@@ -2353,7 +2340,7 @@ public:
     result = DtoCatArrays(e->loc, e->type, e->e1, e->e2);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(CatAssignExp *e) override {
     IF_LOG Logger::print("CatAssignExp::toElem: %s @ %s\n", e->toChars(),
@@ -2386,7 +2373,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(FuncExp *e) override {
     IF_LOG Logger::print("FuncExp::toElem: %s @ %s\n", e->toChars(),
@@ -2458,7 +2445,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(ArrayLiteralExp *e) override {
     IF_LOG Logger::print("ArrayLiteralExp::toElem: %s @ %s\n", e->toChars(),
@@ -2515,7 +2502,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(StructLiteralExp *e) override {
     IF_LOG Logger::print("StructLiteralExp::toElem: %s @ %s\n", e->toChars(),
@@ -2556,7 +2543,7 @@ public:
     e->inProgressMemory = nullptr;
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(ClassReferenceExp *e) override {
     IF_LOG Logger::print("ClassReferenceExp::toElem: %s @ %s\n", e->toChars(),
@@ -2566,7 +2553,7 @@ public:
     result = new DImValue(e->type, toConstElem(e, p));
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(InExp *e) override {
     IF_LOG Logger::print("InExp::toElem: %s @ %s\n", e->toChars(),
@@ -2589,7 +2576,7 @@ public:
     result = DtoAARemove(e->loc, aa, key);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   /// Constructs an array initializer constant with the given constants as its
   /// elements. If the element types differ (unions, …), an anonymous struct
@@ -2669,8 +2656,8 @@ public:
       Type *indexType = static_cast<TypeAArray *>(aatype)->index;
       assert(indexType && vtype);
 
-      llvm::Function *func = LLVM_D_GetRuntimeFunction(
-          e->loc, gIR->module, "_d_assocarrayliteralTX");
+      llvm::Function *func =
+          getRuntimeFunction(e->loc, gIR->module, "_d_assocarrayliteralTX");
       LLFunctionType *funcTy = func->getFunctionType();
       LLValue *aaTypeInfo =
           DtoBitCast(DtoTypeInfoOf(stripModifiers(aatype)),
@@ -2745,7 +2732,7 @@ public:
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   DValue *toGEP(UnaExp *exp, unsigned index) {
     // (&a.foo).funcptr is a case where toElem(e1) is genuinely not an l-value.
@@ -2770,7 +2757,7 @@ public:
     result = toGEP(e, 1);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(BoolExp *e) override {
     IF_LOG Logger::print("BoolExp::toElem: %s @ %s\n", e->toChars(),
@@ -2781,7 +2768,7 @@ public:
         e->type, DtoCast(e->loc, toElem(e->e1), Type::tbool)->getRVal());
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(DotTypeExp *e) override {
     IF_LOG Logger::print("DotTypeExp::toElem: %s @ %s\n", e->toChars(),
@@ -2792,7 +2779,7 @@ public:
     result = toElem(e->e1);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(TypeExp *e) override {
     e->error("type %s is not an expression", e->toChars());
@@ -2801,7 +2788,7 @@ public:
     fatal();
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(TupleExp *e) override {
     IF_LOG Logger::print("TupleExp::toElem() %s\n", e->toChars());
@@ -2823,8 +2810,8 @@ public:
       Expression *el = (*e->exps)[i];
       DValue *ep = toElem(el);
       LLValue *gep = DtoGEPi(val, 0, i);
-      if (DtoIsPassedByRef(el->type)) {
-        DtoStore(DtoLoad(ep->getRVal()), gep);
+      if (DtoIsInMemoryOnly(el->type)) {
+        DtoMemCpy(gep, ep->getRVal());
       } else if (el->type->ty != Tvoid) {
         DtoStoreZextI8(ep->getRVal(), gep);
       } else {
@@ -2835,7 +2822,7 @@ public:
     result = new DVarValue(e->type, val);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(VectorExp *e) override {
     IF_LOG Logger::print("VectorExp::toElem() %s\n", e->toChars());
@@ -2871,7 +2858,7 @@ public:
     result = new DVarValue(e->to, vector);
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(PowExp *e) override {
     IF_LOG Logger::print("PowExp::toElem() %s\n", e->toChars());
@@ -2881,7 +2868,7 @@ public:
     result = new DNullValue(e->type, llvm::UndefValue::get(DtoType(e->type)));
   }
 
-  //////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
 
   void visit(TypeidExp *e) override {
     if (Type *t = isType(e->obj)) {
@@ -2917,7 +2904,7 @@ public:
     llvm_unreachable("Unknown TypeidExp argument kind");
   }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 #define STUB(x)                                                                \
   void visit(x *e) override {                                                  \
@@ -2932,7 +2919,7 @@ public:
 #undef STUB
 };
 
-//////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DValue *toElem(Expression *e) {
   ToElemVisitor v(gIR, false);

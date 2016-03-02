@@ -29,7 +29,7 @@
 #include "ir/irfunction.h"
 #include "ir/irtypeclass.h"
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 // FIXME: this needs to be cleaned up
 
@@ -75,7 +75,7 @@ void DtoResolveClass(ClassDeclaration *cd) {
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DValue *DtoNewClass(Loc &loc, TypeClass *tc, NewExp *newexp) {
   // resolve type
@@ -97,7 +97,7 @@ DValue *DtoNewClass(Loc &loc, TypeClass *tc, NewExp *newexp) {
   // default allocator
   else {
     llvm::Function *fn =
-        LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_newclass");
+        getRuntimeFunction(loc, gIR->module, "_d_newclass");
     LLConstant *ci = DtoBitCast(getIrAggr(tc->sym)->getClassInfoSymbol(),
                                 DtoType(Type::typeinfoclass->type));
     mem =
@@ -144,7 +144,7 @@ DValue *DtoNewClass(Loc &loc, TypeClass *tc, NewExp *newexp) {
   return new DImValue(tc, mem);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void DtoInitClass(TypeClass *tc, LLValue *dst) {
   DtoResolveClass(tc->sym);
@@ -181,18 +181,18 @@ void DtoInitClass(TypeClass *tc, LLValue *dst) {
   DtoMemCpy(dstarr, srcarr, DtoConstSize_t(dataBytes));
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void DtoFinalizeClass(Loc &loc, LLValue *inst) {
   // get runtime function
   llvm::Function *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_callfinalizer");
+      getRuntimeFunction(loc, gIR->module, "_d_callfinalizer");
 
   gIR->CreateCallOrInvoke(
       fn, DtoBitCast(inst, fn->getFunctionType()->getParamType(0)), "");
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DValue *DtoCastClass(Loc &loc, DValue *val, Type *_to) {
   IF_LOG Logger::println("DtoCastClass(%s, %s)", val->getType()->toChars(),
@@ -320,7 +320,7 @@ DValue *DtoCastClass(Loc &loc, DValue *val, Type *_to) {
   return DtoDynamicCastObject(loc, val, _to);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DValue *DtoDynamicCastObject(Loc &loc, DValue *val, Type *_to) {
   // call:
@@ -330,7 +330,7 @@ DValue *DtoDynamicCastObject(Loc &loc, DValue *val, Type *_to) {
   DtoResolveClass(Type::typeinfoclass);
 
   llvm::Function *func =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_dynamic_cast");
+      getRuntimeFunction(loc, gIR->module, "_d_dynamic_cast");
   LLFunctionType *funcTy = func->getFunctionType();
 
   // Object o
@@ -358,7 +358,7 @@ DValue *DtoDynamicCastObject(Loc &loc, DValue *val, Type *_to) {
   return new DImValue(_to, ret);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DValue *DtoDynamicCastInterface(Loc &loc, DValue *val, Type *_to) {
   // call:
@@ -368,7 +368,7 @@ DValue *DtoDynamicCastInterface(Loc &loc, DValue *val, Type *_to) {
   DtoResolveClass(Type::typeinfoclass);
 
   llvm::Function *func =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_interface_cast");
+      getRuntimeFunction(loc, gIR->module, "_d_interface_cast");
   LLFunctionType *funcTy = func->getFunctionType();
 
   // void* p
@@ -393,7 +393,7 @@ DValue *DtoDynamicCastInterface(Loc &loc, DValue *val, Type *_to) {
   return new DImValue(_to, ret);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 LLValue *DtoVirtualFunctionPointer(DValue *inst, FuncDeclaration *fdecl,
                                    char *name) {
@@ -434,7 +434,7 @@ LLValue *DtoVirtualFunctionPointer(DValue *inst, FuncDeclaration *fdecl,
   return funcval;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 #if GENERATE_OFFTI
 

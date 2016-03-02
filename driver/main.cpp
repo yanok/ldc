@@ -97,6 +97,12 @@ static cl::opt<bool> linkDebugLib(
     cl::desc("Link with libraries specified in -debuglib, not -defaultlib"),
     cl::ZeroOrMore);
 
+static cl::opt<bool> staticFlag(
+    "static",
+    cl::desc(
+        "Create a statically linked binary, including all system dependencies"),
+    cl::ZeroOrMore);
+
 void printVersion() {
   printf("LDC - the LLVM D compiler (%s):\n", global.ldc_version);
   printf("  based on DMD %s and LLVM %s\n", global.version,
@@ -169,6 +175,7 @@ static void hide(llvm::StringMap<cl::Option *> &map, const char *name) {
   }
 }
 
+#if LDC_LLVM_VER >= 307
 static void rename(llvm::StringMap<cl::Option *> &map, const char *from,
                    const char *to) {
   auto i = map.find(from);
@@ -179,6 +186,7 @@ static void rename(llvm::StringMap<cl::Option *> &map, const char *from,
     map[to] = opt;
   }
 }
+#endif
 
 /// Removes command line options exposed from within LLVM that are unlikely
 /// to be useful for end users from the -help output.
@@ -741,6 +749,7 @@ static void registerPredefinedTargetVersions() {
     VersionCondition::addPredefinedGlobalIdent("Posix");
     break;
   case llvm::Triple::Darwin:
+  case llvm::Triple::MacOSX:
     VersionCondition::addPredefinedGlobalIdent("OSX");
     VersionCondition::addPredefinedGlobalIdent(
         "darwin"); // For backwards compatibility.
@@ -963,12 +972,7 @@ int main(int argc, char **argv) {
   {
     llvm::Triple triple = llvm::Triple(gTargetMachine->getTargetTriple());
     global.params.targetTriple = triple;
-    global.params.isLinux = triple.getOS() == llvm::Triple::Linux;
-    global.params.isOSX = triple.isMacOSX();
     global.params.isWindows = triple.isOSWindows();
-    global.params.isFreeBSD = triple.getOS() == llvm::Triple::FreeBSD;
-    global.params.isOpenBSD = triple.getOS() == llvm::Triple::OpenBSD;
-    global.params.isSolaris = triple.getOS() == llvm::Triple::Solaris;
     global.params.isLP64 = gDataLayout->getPointerSizeInBits() == 64;
     global.params.is64bit = triple.isArch64Bit();
   }
@@ -1278,7 +1282,7 @@ int main(int argc, char **argv) {
     emitJson(modules);
   }
 
-  LLVM_D_FreeRuntime();
+  freeRuntime();
   llvm::llvm_shutdown();
 
   if (global.errors) {
@@ -1296,7 +1300,7 @@ int main(int argc, char **argv) {
     }
   } else {
     if (global.params.link) {
-      status = linkObjToBinary(createSharedLib);
+      status = linkObjToBinary(createSharedLib, staticFlag);
     } else if (createStaticLib) {
       status = createStaticLibrary();
     }

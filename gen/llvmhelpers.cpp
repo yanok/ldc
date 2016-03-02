@@ -56,15 +56,14 @@ llvm::cl::opt<llvm::GlobalVariable::ThreadLocalMode> clThreadModel(
 
 Type *getTypeInfoType(Type *t, Scope *sc);
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-// DYNAMIC MEMORY HELPERS
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * DYNAMIC MEMORY HELPERS
+ ******************************************************************************/
 
 LLValue *DtoNew(Loc &loc, Type *newtype) {
   // get runtime function
   llvm::Function *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_allocmemoryT");
+      getRuntimeFunction(loc, gIR->module, "_d_allocmemoryT");
   // get type info
   LLConstant *ti = DtoTypeInfoOf(newtype);
   assert(isaPointer(ti));
@@ -75,7 +74,7 @@ LLValue *DtoNew(Loc &loc, Type *newtype) {
 }
 
 LLValue *DtoNewStruct(Loc &loc, TypeStruct *newtype) {
-  llvm::Function *fn = LLVM_D_GetRuntimeFunction(
+  llvm::Function *fn = getRuntimeFunction(
       loc, gIR->module,
       newtype->isZeroInit(newtype->sym->loc) ? "_d_newitemT" : "_d_newitemiT");
   LLConstant *ti = DtoTypeInfoOf(newtype);
@@ -85,7 +84,7 @@ LLValue *DtoNewStruct(Loc &loc, TypeStruct *newtype) {
 
 void DtoDeleteMemory(Loc &loc, DValue *ptr) {
   llvm::Function *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_delmemory");
+      getRuntimeFunction(loc, gIR->module, "_d_delmemory");
   LLValue *lval = (ptr->isLVal() ? ptr->getLVal() : makeLValue(loc, ptr));
   gIR->CreateCallOrInvoke(
       fn, DtoBitCast(lval, fn->getFunctionType()->getParamType(0)));
@@ -93,7 +92,7 @@ void DtoDeleteMemory(Loc &loc, DValue *ptr) {
 
 void DtoDeleteStruct(Loc &loc, DValue *ptr) {
   llvm::Function *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_delstruct");
+      getRuntimeFunction(loc, gIR->module, "_d_delstruct");
   LLValue *lval = (ptr->isLVal() ? ptr->getLVal() : makeLValue(loc, ptr));
   gIR->CreateCallOrInvoke(
       fn, DtoBitCast(lval, fn->getFunctionType()->getParamType(0)),
@@ -103,7 +102,7 @@ void DtoDeleteStruct(Loc &loc, DValue *ptr) {
 
 void DtoDeleteClass(Loc &loc, DValue *inst) {
   llvm::Function *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_delclass");
+      getRuntimeFunction(loc, gIR->module, "_d_delclass");
   LLValue *lval = (inst->isLVal() ? inst->getLVal() : makeLValue(loc, inst));
   gIR->CreateCallOrInvoke(
       fn, DtoBitCast(lval, fn->getFunctionType()->getParamType(0)));
@@ -111,7 +110,7 @@ void DtoDeleteClass(Loc &loc, DValue *inst) {
 
 void DtoDeleteInterface(Loc &loc, DValue *inst) {
   llvm::Function *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_delinterface");
+      getRuntimeFunction(loc, gIR->module, "_d_delinterface");
   LLValue *lval = (inst->isLVal() ? inst->getLVal() : makeLValue(loc, inst));
   gIR->CreateCallOrInvoke(
       fn, DtoBitCast(lval, fn->getFunctionType()->getParamType(0)));
@@ -119,7 +118,7 @@ void DtoDeleteInterface(Loc &loc, DValue *inst) {
 
 void DtoDeleteArray(Loc &loc, DValue *arr) {
   llvm::Function *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_delarray_t");
+      getRuntimeFunction(loc, gIR->module, "_d_delarray_t");
   llvm::FunctionType *fty = fn->getFunctionType();
 
   // the TypeInfo argument must be null if the type has no dtor
@@ -134,10 +133,9 @@ void DtoDeleteArray(Loc &loc, DValue *arr) {
                           DtoBitCast(typeInfo, fty->getParamType(1)));
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-// ALIGNMENT HELPERS
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * ALIGNMENT HELPERS
+ ******************************************************************************/
 
 unsigned DtoAlignment(Type *type) {
   structalign_t alignment = type->alignment();
@@ -152,10 +150,9 @@ unsigned DtoAlignment(VarDeclaration *vd) {
                                               : vd->alignment;
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-// ALLOCA HELPERS
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * ALLOCA HELPERS
+ ******************************************************************************/
 
 llvm::AllocaInst *DtoAlloca(Type *type, const char *name) {
   return DtoRawAlloca(DtoMemType(type), DtoAlignment(type), name);
@@ -186,7 +183,7 @@ llvm::AllocaInst *DtoRawAlloca(LLType *lltype, size_t alignment,
 LLValue *DtoGcMalloc(Loc &loc, LLType *lltype, const char *name) {
   // get runtime function
   llvm::Function *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_allocmemory");
+      getRuntimeFunction(loc, gIR->module, "_d_allocmemory");
   // parameters
   LLValue *size = DtoConstSize_t(getTypeAllocSize(lltype));
   // call runtime allocator
@@ -228,15 +225,14 @@ LLValue *DtoAllocaDump(LLValue *val, LLType *asType, int alignment,
   return DtoBitCast(mem, asType->getPointerTo());
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-// ASSERT HELPER
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * ASSERT HELPER
+ ******************************************************************************/
 
 void DtoAssert(Module *M, Loc &loc, DValue *msg) {
   // func
   const char *fname = msg ? "_d_assert_msg" : "_d_assert";
-  llvm::Function *fn = LLVM_D_GetRuntimeFunction(loc, gIR->module, fname);
+  llvm::Function *fn = getRuntimeFunction(loc, gIR->module, fname);
 
   // Arguments
   llvm::SmallVector<LLValue *, 3> args;
@@ -259,20 +255,19 @@ void DtoAssert(Module *M, Loc &loc, DValue *msg) {
   gIR->ir->CreateUnreachable();
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-// Module file name
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * MODULE FILE NAME
+ ******************************************************************************/
 
 LLValue *DtoModuleFileName(Module *M, const Loc &loc) {
   return DtoConstString(loc.filename ? loc.filename
                                      : M->srcfile->name->toChars());
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-// GOTO HELPER
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * GOTO HELPER
+ ******************************************************************************/
+
 void DtoGoto(Loc &loc, LabelDsymbol *target) {
   assert(!gIR->scopereturned());
 
@@ -285,9 +280,9 @@ void DtoGoto(Loc &loc, LabelDsymbol *target) {
   gIR->func()->scopes->jumpToLabel(loc, target->ident);
 }
 
-/*////////////////////////////////////////////////////////////////////////////////////////
-// ASSIGNMENT HELPER (store this in that)
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * ASSIGNMENT HELPER (store this in that)
+ ******************************************************************************/
 
 // is this a good approach at all ?
 
@@ -313,7 +308,7 @@ void DtoAssign(Loc &loc, DValue *lhs, DValue *rhs, int op,
       // time as to not emit an invalid (overlapping) memcpy on trivial
       // struct self-assignments like 'A a; a = a;'.
       if (src != dst) {
-        DtoAggrCopy(dst, src);
+        DtoMemCpy(dst, src);
       }
     }
   } else if (t->ty == Tarray || t->ty == Tsarray) {
@@ -369,10 +364,9 @@ void DtoAssign(Loc &loc, DValue *lhs, DValue *rhs, int op,
   }
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-//      NULL VALUE HELPER
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * NULL VALUE HELPER
+ ******************************************************************************/
 
 DValue *DtoNullValue(Type *type, Loc loc) {
   Type *basetype = type->toBasetype();
@@ -402,10 +396,9 @@ DValue *DtoNullValue(Type *type, Loc loc) {
   fatal();
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-//      CASTING HELPERS
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * CASTING HELPERS
+ ******************************************************************************/
 
 DValue *DtoCastInt(Loc &loc, DValue *val, Type *_to) {
   LLType *tolltype = DtoType(_to);
@@ -657,7 +650,7 @@ DValue *DtoCast(Loc &loc, DValue *val, Type *to) {
   fatal();
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DValue *DtoPaintType(Loc &loc, DValue *val, Type *to) {
   Type *from = val->getType()->toBasetype();
@@ -712,10 +705,9 @@ DValue *DtoPaintType(Loc &loc, DValue *val, Type *to) {
   return new DImValue(to, val->getRVal());
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-//      TEMPLATE HELPERS
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * TEMPLATE HELPERS
+ ******************************************************************************/
 
 TemplateInstance *DtoIsTemplateInstance(Dsymbol *s) {
   if (!s) {
@@ -730,10 +722,9 @@ TemplateInstance *DtoIsTemplateInstance(Dsymbol *s) {
   return nullptr;
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-//      PROCESSING QUEUE HELPERS
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * PROCESSING QUEUE HELPERS
+ ******************************************************************************/
 
 void DtoResolveDsymbol(Dsymbol *dsym) {
   if (StructDeclaration *sd = dsym->isStructDeclaration()) {
@@ -839,10 +830,9 @@ void DtoResolveVariable(VarDeclaration *vd) {
   }
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-//      DECLARATION EXP HELPER
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * DECLARATION EXP HELPER
+ ******************************************************************************/
 
 // TODO: Merge with DtoRawVarDeclaration!
 void DtoVarDeclaration(VarDeclaration *vd) {
@@ -1097,10 +1087,9 @@ LLValue *DtoRawVarDeclaration(VarDeclaration *var, LLValue *addr) {
   return irLocal->value;
 }
 
-/****************************************************************************************/
-/*////////////////////////////////////////////////////////////////////////////////////////
-//      INITIALIZER HELPERS
-////////////////////////////////////////////////////////////////////////////////////////*/
+/******************************************************************************
+ * INITIALIZER HELPERS
+ ******************************************************************************/
 
 LLConstant *DtoConstInitializer(Loc &loc, Type *type, Initializer *init) {
   LLConstant *_init = nullptr; // may return zero
@@ -1127,7 +1116,7 @@ LLConstant *DtoConstInitializer(Loc &loc, Type *type, Initializer *init) {
   return _init;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 LLConstant *DtoConstExpInit(Loc &loc, Type *targetType, Expression *exp) {
   IF_LOG Logger::println("DtoConstExpInit(targetType = %s, exp = %s)",
@@ -1201,7 +1190,7 @@ LLConstant *DtoConstExpInit(Loc &loc, Type *targetType, Expression *exp) {
   return val;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 LLConstant *DtoTypeInfoOf(Type *type, bool base) {
   IF_LOG Logger::println("DtoTypeInfoOf(type = '%s', base='%d')",
@@ -1222,7 +1211,7 @@ LLConstant *DtoTypeInfoOf(Type *type, bool base) {
   return c;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void DtoOverloadedIntrinsicName(TemplateInstance *ti, TemplateDeclaration *td,
                                 std::string &name) {
@@ -1282,7 +1271,7 @@ void DtoOverloadedIntrinsicName(TemplateInstance *ti, TemplateDeclaration *td,
   IF_LOG Logger::println("final intrinsic name: %s", name.c_str());
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 bool hasUnalignedFields(Type *t) {
   t = t->toBasetype();
@@ -1318,7 +1307,7 @@ bool hasUnalignedFields(Type *t) {
   return false;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 size_t getMemberSize(Type *type) {
   const dinteger_t dSize = type->size();
@@ -1336,7 +1325,7 @@ size_t getMemberSize(Type *type) {
   return llSize;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 Type *stripModifiers(Type *type, bool transitive) {
   if (type->ty == Tfunction) {
@@ -1349,7 +1338,7 @@ Type *stripModifiers(Type *type, bool transitive) {
   return type->castMod(0);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 LLValue *makeLValue(Loc &loc, DValue *value) {
   Type *valueType = value->getType();
@@ -1357,7 +1346,7 @@ LLValue *makeLValue(Loc &loc, DValue *value) {
   LLValue *valuePointer;
   if (value->isIm()) {
     valuePointer = value->getRVal();
-    needsMemory = !DtoIsPassedByRef(valueType);
+    needsMemory = !DtoIsInMemoryOnly(valueType);
   } else if (value->isVar()) {
     valuePointer = value->getLVal();
     needsMemory = false;
@@ -1378,7 +1367,7 @@ LLValue *makeLValue(Loc &loc, DValue *value) {
   return valuePointer;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void callPostblit(Loc &loc, Expression *exp, LLValue *val) {
 
@@ -1401,17 +1390,17 @@ void callPostblit(Loc &loc, Expression *exp, LLValue *val) {
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 bool isSpecialRefVar(VarDeclaration *vd) {
   return (vd->storage_class & STCref) && (vd->storage_class & STCforeach);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 bool isLLVMUnsigned(Type *t) { return t->isunsigned() || t->ty == Tpointer; }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void printLabelName(std::ostream &target, const char *func_mangle,
                     const char *label_name) {
@@ -1419,7 +1408,7 @@ void printLabelName(std::ostream &target, const char *func_mangle,
          << func_mangle << "_" << label_name;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void AppendFunctionToLLVMGlobalCtorsDtors(llvm::Function *func,
                                           const uint32_t priority,
@@ -1431,7 +1420,7 @@ void AppendFunctionToLLVMGlobalCtorsDtors(llvm::Function *func,
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void tokToIcmpPred(TOK op, bool isUnsigned, llvm::ICmpInst::Predicate *outPred,
                    llvm::Value **outConst) {
@@ -1544,7 +1533,7 @@ DValue *DtoSymbolAddress(Loc &loc, Type *type, Declaration *decl) {
         assert(type->ty == Tdelegate);
         return new DVarValue(type, getIrValue(vd));
       }
-      if (vd->isRef() || vd->isOut() || DtoIsPassedByRef(vd->type) ||
+      if (vd->isRef() || vd->isOut() || DtoIsInMemoryOnly(vd->type) ||
           llvm::isa<llvm::AllocaInst>(getIrValue(vd))) {
         return new DVarValue(type, vd, getIrValue(vd));
       }

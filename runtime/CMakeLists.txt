@@ -75,6 +75,12 @@ list(REMOVE_ITEM DCRT_C ${RUNTIME_DIR}/src/rt/deh.c ${RUNTIME_DIR}/src/rt/dylib_
 if(APPLE)
     list(APPEND DCRT_C ${RUNTIME_DIR}/src/ldc/osx_tls.c)
 endif()
+if(MSVC)
+    list(APPEND DCRT_C ${RUNTIME_DIR}/src/ldc/msvc.c)
+else()
+    list(REMOVE_ITEM DCRT_C ${RUNTIME_DIR}/src/rt/msvc.c)
+    list(REMOVE_ITEM DCRT_C ${RUNTIME_DIR}/src/rt/msvc_math.c)
+endif()
 file(GLOB_RECURSE CORE_D_UNIX ${RUNTIME_DIR}/src/core/sys/posix/*.d)
 file(GLOB_RECURSE CORE_D_FREEBSD ${RUNTIME_DIR}/src/core/sys/freebsd/*.d)
 file(GLOB_RECURSE CORE_D_LINUX ${RUNTIME_DIR}/src/core/sys/linux/*.d)
@@ -109,8 +115,6 @@ if(UNIX)
     if(APPLE)
         list(APPEND CORE_D_SYS ${CORE_D_OSX})
     endif()
-    list(REMOVE_ITEM DCRT_C ${RUNTIME_DIR}/src/rt/msvc.c)
-    list(REMOVE_ITEM DCRT_C ${RUNTIME_DIR}/src/rt/stdio_msvc.c)
 
     # Using CMAKE_SYSTEM_PROCESSOR might be inacurrate when somebody is
     # cross-compiling by just setting the tool executbles to a cross toolchain,
@@ -120,9 +124,6 @@ elseif(WIN32)
     list(APPEND CORE_D_SYS ${CORE_D_WIN})
     list(REMOVE_ITEM DCRT_C ${RUNTIME_DIR}/src/rt/monitor.c)
     list(REMOVE_ITEM DCRT_C ${RUNTIME_DIR}/src/rt/bss_section.c)
-    if(NOT MSVC)
-        list(REMOVE_ITEM DCRT_C ${RUNTIME_DIR}/src/rt/stdio_msvc.c)
-    endif()
 endif()
 list(APPEND CORE_D ${CORE_D_INTERNAL} ${CORE_D_SYNC} ${CORE_D_SYS} ${CORE_D_STDC})
 list(APPEND CORE_D ${LDC_D} ${RUNTIME_DIR}/src/object.d)
@@ -191,11 +192,6 @@ endif()
 #
 # Create configuration files.
 #
-
-# Add a lib required by VS 2015+ when building LDC with VS 2015+.
-if(MSVC AND (MSVC_VERSION GREATER 1800))
-    set(ADDITIONAL_DEFAULT_LDC_SWITCHES ",\n        \"-Llegacy_stdio_definitions.lib\"")
-endif()
 
 # Add extra paths on Linux and disable linker arch mismatch warnings (like
 # DMD and GDC do). OS X doesn't need extra configuration due to the use of
@@ -617,6 +613,7 @@ macro(build_test_runner name_suffix d_flags c_flags)
     else()
         set(druntime_o "")
         set(druntime_bc "")
+        set(casm_lib_path "${CMAKE_BINARY_DIR}/lib")
         compile_druntime("${flags}" "-unittest${name_suffix}" "" druntime_o druntime_bc)
 
         # We need to compile a small static library with the C/ASM files, as
@@ -632,7 +629,7 @@ macro(build_test_runner name_suffix d_flags c_flags)
             LINKER_LANGUAGE             C
             COMPILE_FLAGS               "${RT_CFLAGS} ${c_flags}"
             LINK_FLAGS                  "${LD_FLAGS} ${ld_flags}"
-            ARCHIVE_OUTPUT_DIRECTORY    ${output_path}
+            ARCHIVE_OUTPUT_DIRECTORY    ${casm_lib_path}
         )
 
         # See shared library case for explanation.
@@ -664,7 +661,7 @@ macro(build_test_runner name_suffix d_flags c_flags)
                 LINKER_LANGUAGE             C
                 COMPILE_FLAGS               "${RT_CFLAGS} ${c_flags}"
                 LINK_FLAGS                  "${LD_FLAGS} ${ld_flags}"
-                ARCHIVE_OUTPUT_DIRECTORY    ${output_path}
+                ARCHIVE_OUTPUT_DIRECTORY    ${casm_lib_path}
             )
 
             set_target_properties(${phobos2-casm} PROPERTIES EXCLUDE_FROM_ALL ON EXCLUDE_FROM_DEFAULT_BUILD ON)
@@ -712,19 +709,13 @@ endmacro()
 function(add_tests d_files runner name_suffix)
     foreach(file ${d_files})
         file_to_module_name(${file} module)
-        if("${module}" STREQUAL "core.internal.convert")
-            # Exclude unit tests for now, as they fail due to a CTFE vs. runtime
-            # issue with floating point numbers. See the discussion on GitHub
-            # pull request #770. To be revisited after 0.15.0 is out.
-        else()
-            add_test(NAME "${module}${name_suffix}"
-                WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
-                COMMAND ${runner}-test-runner${name_suffix} ${module}
-            )
-            set_tests_properties("${module}${name_suffix}" PROPERTIES
-                DEPENDS build-${runner}-test-runner${name_suffix}
-            )
-        endif()
+        add_test(NAME "${module}${name_suffix}"
+            WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+            COMMAND ${runner}-test-runner${name_suffix} ${module}
+        )
+        set_tests_properties("${module}${name_suffix}" PROPERTIES
+            DEPENDS build-${runner}-test-runner${name_suffix}
+	)
     endforeach()
 endfunction()
 function(add_runtime_tests name_suffix)

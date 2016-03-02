@@ -24,7 +24,7 @@
 #include "ir/irfunction.h"
 #include "ir/irtype.h"
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 IrFuncTy &DtoIrTypeFunction(DValue *fnval) {
   if (DFuncValue *dfnval = fnval->isFunc()) {
@@ -66,7 +66,7 @@ TypeFunction *DtoTypeFunction(DValue *fnval) {
   llvm_unreachable("Cannot get TypeFunction* from non lazy/function/delegate");
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 LLValue *DtoCallableValue(DValue *fn) {
   Type *type = fn->getType()->toBasetype();
@@ -87,7 +87,7 @@ LLValue *DtoCallableValue(DValue *fn) {
   llvm_unreachable("Not a callable type.");
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 LLFunctionType *DtoExtractFunctionType(LLType *type) {
   if (LLFunctionType *fty = isaFunction(type)) {
@@ -101,7 +101,7 @@ LLFunctionType *DtoExtractFunctionType(LLType *type) {
   return nullptr;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static void addExplicitArguments(std::vector<LLValue *> &args, AttrSet &attrs,
                                  IrFuncTy &irFty, LLFunctionType *callableTy,
@@ -126,7 +126,7 @@ static void addExplicitArguments(std::vector<LLValue *> &args, AttrSet &attrs,
 
     AttrBuilder initialAttrs;
     if (passByVal) {
-      initialAttrs.add(LLAttribute::ByVal);
+      initialAttrs.addByVal(DtoAlignment(argType));
     } else {
       initialAttrs.add(DtoShouldExtend(argType));
     }
@@ -172,7 +172,7 @@ static void addExplicitArguments(std::vector<LLValue *> &args, AttrSet &attrs,
     // Hack around LDC assuming structs and static arrays are in memory:
     // If the function wants a struct, and the argument value is a
     // pointer to a struct, load from it before passing it in.
-    if (isaPointer(llVal) && DtoIsPassedByRef(argType) &&
+    if (isaPointer(llVal) && DtoIsInMemoryOnly(argType) &&
         ((!isVararg && !isaPointer(callableArgType)) ||
          (isVararg && !irArg->byref && !irArg->isByVal()))) {
       Logger::println("Loading struct type for function argument");
@@ -202,7 +202,7 @@ static void addExplicitArguments(std::vector<LLValue *> &args, AttrSet &attrs,
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static LLValue *getTypeinfoArrayArgumentForDVarArg(Expressions *arguments,
                                                    int begin) {
@@ -251,7 +251,7 @@ static LLValue *getTypeinfoArrayArgumentForDVarArg(Expressions *arguments,
   return DtoLoad(typeinfoarrayparam);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
                             DValue *&result) {
@@ -264,7 +264,7 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
     LLValue *pAp = toElem((*e->arguments)[0])->getLVal(); // va_list*
     // variadic extern(D) function with implicit _argptr?
     if (LLValue *pArgptr = p->func()->_argptr) {
-      DtoStore(DtoLoad(pArgptr), pAp); // ap = _argptr
+      DtoMemCpy(pAp, pArgptr); // ap = _argptr
       result = new DImValue(e->type, pAp);
     } else {
       LLValue *vaStartArg = gABI->prepareVaStart(pAp);
@@ -297,7 +297,7 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
     LLValue *pAp = toElem((*e->arguments)[0])->getLVal(); // va_list*
     LLValue *vaArgArg = gABI->prepareVaArg(pAp);
     LLType *llType = DtoType(e->type);
-    if (DtoIsPassedByRef(e->type)) {
+    if (DtoIsInMemoryOnly(e->type)) {
       llType = getPtrToType(llType);
     }
     result = new DImValue(e->type, p->ir->CreateVAArg(vaArgArg, llType));
@@ -531,7 +531,7 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
     assert(bitmask == 31 || bitmask == 63);
     // auto q = cast(size_t*)ptr + (bitnum >> (64bit ? 6 : 5));
     LLValue *q = DtoBitCast(ptr, DtoSize_t()->getPointerTo());
-    q = DtoGEP1(q, p->ir->CreateLShr(bitnum, bitmask == 63 ? 6 : 5), "bitop.q");
+    q = DtoGEP1(q, p->ir->CreateLShr(bitnum, bitmask == 63 ? 6 : 5), true, "bitop.q");
 
     // auto mask = 1 << (bitnum & bitmask);
     LLValue *mask =
@@ -602,7 +602,7 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
   return false;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 class ImplicitArgumentsBuilder {
 public:
@@ -610,8 +610,7 @@ public:
                            Loc &loc, DValue *fnval,
                            LLFunctionType *llCalleeType, Expressions *arguments,
                            Type *resulttype, LLValue *retvar)
-      : args(args), attrs(attrs), loc(loc), fnval(fnval),
-        llCalleeType(llCalleeType), arguments(arguments),
+      : args(args), attrs(attrs), loc(loc), fnval(fnval), arguments(arguments),
         resulttype(resulttype), retvar(retvar),
         // computed:
         calleeType(fnval->getType()), dfnval(fnval->isFunc()),
@@ -636,7 +635,6 @@ private:
   AttrSet &attrs;
   Loc &loc;
   DValue *const fnval;
-  LLFunctionType *const llCalleeType;
   Expressions *const arguments;
   Type *const resulttype;
   LLValue *const retvar;
@@ -747,7 +745,7 @@ private:
   }
 };
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 // FIXME: this function is a mess !
 
@@ -777,8 +775,8 @@ DValue *DtoCallFunction(Loc &loc, Type *resulttype, DValue *fnval,
   LLFunctionType *const callableTy =
       DtoExtractFunctionType(callable->getType());
   assert(callableTy);
-  const llvm::CallingConv::ID callconv =
-      gABI->callingConv(callableTy, tf->linkage);
+  const auto callconv = gABI->callingConv(callableTy, tf->linkage,
+                                          dfnval ? dfnval->func : nullptr);
 
   //     IF_LOG Logger::cout() << "callable: " << *callable << '\n';
 

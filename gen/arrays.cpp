@@ -27,7 +27,7 @@
 
 static void DtoSetArray(DValue *array, LLValue *dim, LLValue *ptr);
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static LLValue *DtoSlice(DValue *dval) {
   LLValue *val = dval->getRVal();
@@ -56,7 +56,7 @@ static LLValue *DtoSlice(LLValue *ptr, LLValue *length,
   return DtoLoad(array);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static LLValue *DtoSlicePtr(DValue *dval) {
   Loc loc;
@@ -75,7 +75,7 @@ static LLValue *DtoSlicePtr(DValue *dval) {
   return array;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 LLStructType *DtoArrayType(Type *arrayTy) {
   assert(arrayTy->nextOf());
@@ -88,7 +88,7 @@ LLStructType *DtoArrayType(LLType *t) {
   return llvm::StructType::get(gIR->context(), elems, false);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 LLArrayType *DtoStaticArrayType(Type *t) {
   t = t->toBasetype();
@@ -99,7 +99,7 @@ LLArrayType *DtoStaticArrayType(Type *t) {
   return LLArrayType::get(DtoMemType(tnext), tsa->dim->toUInteger());
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void DtoSetArrayToNull(LLValue *v) {
   IF_LOG Logger::println("DtoSetArrayToNull");
@@ -111,7 +111,7 @@ void DtoSetArrayToNull(LLValue *v) {
   DtoStore(LLConstant::getNullValue(t), v);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static void DtoArrayInit(Loc &loc, LLValue *ptr, LLValue *length,
                          DValue *dvalue, int op) {
@@ -119,7 +119,7 @@ static void DtoArrayInit(Loc &loc, LLValue *ptr, LLValue *length,
   LOG_SCOPE;
 
   LLValue *value = dvalue->getRVal();
-  LLValue *elementSize = DtoConstSize_t(getTypePaddedSize(value->getType()));
+  LLValue *elementSize = DtoConstSize_t(getTypeAllocSize(value->getType()));
 
   // lets first optimize all zero/constant i8 initializations down to a memset.
   // this simplifies codegen later on as llvm null's have no address!
@@ -167,7 +167,7 @@ static void DtoArrayInit(Loc &loc, LLValue *ptr, LLValue *length,
   LLValue *itr_val = DtoLoad(itr);
   // assign array element value
   DValue *arrayelem = new DVarValue(
-      dvalue->type->toBasetype(), DtoGEP1(ptr, itr_val, "arrayinit.arrayelem"));
+      dvalue->type->toBasetype(), DtoGEP1(ptr, itr_val, true, "arrayinit.arrayelem"));
   DtoAssign(loc, arrayelem, dvalue, op);
 
   // increment iterator
@@ -181,7 +181,7 @@ static void DtoArrayInit(Loc &loc, LLValue *ptr, LLValue *length,
   gIR->scope() = IRScope(endbb);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static Type *DtoArrayElementType(Type *arrayType) {
   assert(arrayType->toBasetype()->nextOf());
@@ -192,7 +192,7 @@ static Type *DtoArrayElementType(Type *arrayType) {
   return t;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static void copySlice(Loc &loc, LLValue *dstarr, LLValue *sz1, LLValue *srcarr,
                       LLValue *sz2, bool knownInBounds) {
@@ -200,7 +200,7 @@ static void copySlice(Loc &loc, LLValue *dstarr, LLValue *sz1, LLValue *srcarr,
       global.params.useAssert || gIR->emitArrayBoundsChecks();
   if (checksEnabled && !knownInBounds) {
     LLValue *fn =
-        LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_array_slice_copy");
+        getRuntimeFunction(loc, gIR->module, "_d_array_slice_copy");
     gIR->CreateCallOrInvoke(fn, dstarr, sz1, srcarr, sz2);
   } else {
     // We might have dstarr == srcarr at compile time, but as long as
@@ -210,7 +210,7 @@ static void copySlice(Loc &loc, LLValue *dstarr, LLValue *sz1, LLValue *srcarr,
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 // Determine whether t is an array of structs that need a postblit.
 static bool arrayNeedsPostblit(Type *t) {
@@ -272,7 +272,7 @@ void DtoArrayAssign(Loc &loc, DValue *lhs, DValue *rhs, int op,
     if (!needsDestruction && !needsPostblit) {
       // fast version
       LLValue *elemSize =
-          DtoConstSize_t(getTypePaddedSize(DtoMemType(elemType)));
+          DtoConstSize_t(getTypeAllocSize(DtoMemType(elemType)));
       LLValue *lhsSize = gIR->ir->CreateMul(elemSize, lhsLength);
 
       if (rhs->isNull()) {
@@ -285,7 +285,7 @@ void DtoArrayAssign(Loc &loc, DValue *lhs, DValue *rhs, int op,
       }
     } else if (isConstructing) {
       LLFunction *fn =
-          LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_arrayctor");
+          getRuntimeFunction(loc, gIR->module, "_d_arrayctor");
       LLCallSite call = gIR->CreateCallOrInvoke(fn, DtoTypeInfoOf(elemType),
                                                 DtoSlice(rhsPtr, rhsLength),
                                                 DtoSlice(lhsPtr, lhsLength));
@@ -293,7 +293,7 @@ void DtoArrayAssign(Loc &loc, DValue *lhs, DValue *rhs, int op,
     } else // assigning
     {
       LLValue *tmpSwap = DtoAlloca(elemType, "arrayAssign.tmpSwap");
-      LLFunction *fn = LLVM_D_GetRuntimeFunction(
+      LLFunction *fn = getRuntimeFunction(
           loc, gIR->module,
           !canSkipPostblit ? "_d_arrayassign_l" : "_d_arrayassign_r");
       LLCallSite call = gIR->CreateCallOrInvoke(
@@ -308,15 +308,15 @@ void DtoArrayAssign(Loc &loc, DValue *lhs, DValue *rhs, int op,
     if (!needsDestruction && !needsPostblit) {
       // fast version
       LLValue *elemSize = DtoConstSize_t(
-          getTypePaddedSize(realLhsPtr->getType()->getContainedType(0)));
+          getTypeAllocSize(realLhsPtr->getType()->getContainedType(0)));
       LLValue *lhsSize = gIR->ir->CreateMul(elemSize, lhsLength);
       LLType *rhsType = DtoMemType(t2);
-      LLValue *rhsSize = DtoConstSize_t(getTypePaddedSize(rhsType));
+      LLValue *rhsSize = DtoConstSize_t(getTypeAllocSize(rhsType));
       LLValue *actualPtr = DtoBitCast(lhsPtr, rhsType->getPointerTo());
       LLValue *actualLength = gIR->ir->CreateExactUDiv(lhsSize, rhsSize);
       DtoArrayInit(loc, actualPtr, actualLength, rhs, op);
     } else {
-      LLFunction *fn = LLVM_D_GetRuntimeFunction(
+      LLFunction *fn = getRuntimeFunction(
           loc, gIR->module,
           isConstructing ? "_d_arraysetctor" : "_d_arraysetassign");
       LLCallSite call = gIR->CreateCallOrInvoke(
@@ -329,7 +329,7 @@ void DtoArrayAssign(Loc &loc, DValue *lhs, DValue *rhs, int op,
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static void DtoSetArray(DValue *array, LLValue *dim, LLValue *ptr) {
   IF_LOG Logger::println("SetArray");
@@ -339,7 +339,7 @@ static void DtoSetArray(DValue *array, LLValue *dim, LLValue *ptr) {
   DtoStore(ptr, DtoGEPi(arr, 0, 1));
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 LLConstant *DtoConstArrayInitializer(ArrayInitializer *arrinit,
                                      Type *targetType) {
@@ -488,7 +488,7 @@ LLConstant *DtoConstArrayInitializer(ArrayInitializer *arrinit,
   return DtoConstSlice(DtoConstSize_t(arrlen), gep, arrty);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 bool isConstLiteral(ArrayLiteralExp *ale) {
   // FIXME: This is overly pessemistic, isConst() always returns 0 e.g. for
@@ -503,7 +503,7 @@ bool isConstLiteral(ArrayLiteralExp *ale) {
   return true;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 llvm::Constant *arrayLiteralToConst(IRState *p, ArrayLiteralExp *ale) {
   // Build the initializer. We have to take care as due to unions in the
@@ -539,7 +539,7 @@ llvm::Constant *arrayLiteralToConst(IRState *p, ArrayLiteralExp *ale) {
   return llvm::ConstantArray::get(t, vals);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void initializeArrayLiteral(IRState *p, ArrayLiteralExp *ale, LLValue *dstMem) {
   size_t elemCount = ale->elements->dim;
@@ -565,7 +565,7 @@ void initializeArrayLiteral(IRState *p, ArrayLiteralExp *ale, LLValue *dstMem) {
                                            constarr, ".arrayliteral");
       gvar->setUnnamedAddr(true);
       DtoMemCpy(dstMem, gvar,
-                DtoConstSize_t(getTypePaddedSize(constarr->getType())));
+                DtoConstSize_t(getTypeAllocSize(constarr->getType())));
     }
   } else {
     // Store the elements one by one.
@@ -579,7 +579,7 @@ void initializeArrayLiteral(IRState *p, ArrayLiteralExp *ale, LLValue *dstMem) {
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 LLConstant *DtoConstSlice(LLConstant *dim, LLConstant *ptr, Type *type) {
   LLConstant *values[2] = {dim, ptr};
   llvm::ArrayRef<LLConstant *> valuesRef = llvm::makeArrayRef(values, 2);
@@ -589,7 +589,7 @@ LLConstant *DtoConstSlice(LLConstant *dim, LLConstant *ptr, Type *type) {
   return LLConstantStruct::get(lltype, valuesRef);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static DSliceValue *getSlice(Type *arrayType, LLValue *array) {
   // Get ptr and length of the array
@@ -605,7 +605,7 @@ static DSliceValue *getSlice(Type *arrayType, LLValue *array) {
   return new DSliceValue(arrayType, arrayLen, newptr);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 DSliceValue *DtoNewDynArray(Loc &loc, Type *arrayType, DValue *dim,
                             bool defaultInit) {
   IF_LOG Logger::println("DtoNewDynArray : %s", arrayType->toChars());
@@ -625,7 +625,7 @@ DSliceValue *DtoNewDynArray(Loc &loc, Type *arrayType, DValue *dim,
   const char *fnname = defaultInit
                            ? (zeroInit ? "_d_newarrayT" : "_d_newarrayiT")
                            : "_d_newarrayU";
-  LLFunction *fn = LLVM_D_GetRuntimeFunction(loc, gIR->module, fnname);
+  LLFunction *fn = getRuntimeFunction(loc, gIR->module, fnname);
 
   // call allocator
   LLValue *newArray =
@@ -635,7 +635,7 @@ DSliceValue *DtoNewDynArray(Loc &loc, Type *arrayType, DValue *dim,
   return getSlice(arrayType, newArray);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 DSliceValue *DtoNewMulDimDynArray(Loc &loc, Type *arrayType, DValue **dims,
                                   size_t ndims) {
   IF_LOG Logger::println("DtoNewMulDimDynArray : %s", arrayType->toChars());
@@ -653,7 +653,7 @@ DSliceValue *DtoNewMulDimDynArray(Loc &loc, Type *arrayType, DValue **dims,
   // get runtime function
   const char *fnname =
       vtype->isZeroInit() ? "_d_newarraymTX" : "_d_newarraymiTX";
-  LLFunction *fn = LLVM_D_GetRuntimeFunction(loc, gIR->module, fnname);
+  LLFunction *fn = getRuntimeFunction(loc, gIR->module, fnname);
 
   // Check if constant
   bool allDimsConst = true;
@@ -704,7 +704,7 @@ DSliceValue *DtoNewMulDimDynArray(Loc &loc, Type *arrayType, DValue **dims,
   return getSlice(arrayType, newptr);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 DSliceValue *DtoResizeDynArray(Loc &loc, Type *arrayType, DValue *array,
                                LLValue *newdim) {
   IF_LOG Logger::println("DtoResizeDynArray : %s", arrayType->toChars());
@@ -720,7 +720,7 @@ DSliceValue *DtoResizeDynArray(Loc &loc, Type *arrayType, DValue *array,
   bool zeroInit = arrayType->toBasetype()->nextOf()->isZeroInit();
 
   // call runtime
-  LLFunction *fn = LLVM_D_GetRuntimeFunction(loc, gIR->module,
+  LLFunction *fn = getRuntimeFunction(loc, gIR->module,
                                              zeroInit ? "_d_arraysetlengthT"
                                                       : "_d_arraysetlengthiT");
 
@@ -734,7 +734,7 @@ DSliceValue *DtoResizeDynArray(Loc &loc, Type *arrayType, DValue *array,
   return getSlice(arrayType, newArray);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void DtoCatAssignElement(Loc &loc, Type *arrayType, DValue *array,
                          Expression *exp) {
@@ -750,7 +750,7 @@ void DtoCatAssignElement(Loc &loc, Type *arrayType, DValue *array,
   DValue *expVal = toElem(exp);
 
   LLFunction *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_arrayappendcTX");
+      getRuntimeFunction(loc, gIR->module, "_d_arrayappendcTX");
   LLValue *appendedArray =
       gIR->CreateCallOrInvoke(
              fn, DtoTypeInfoOf(arrayType),
@@ -761,12 +761,12 @@ void DtoCatAssignElement(Loc &loc, Type *arrayType, DValue *array,
   appendedArray = DtoAggrPaint(appendedArray, DtoType(arrayType));
 
   LLValue *val = DtoArrayPtr(array);
-  val = DtoGEP1(val, oldLength, ".lastElem");
+  val = DtoGEP1(val, oldLength, true, ".lastElem");
   DtoAssign(loc, new DVarValue(arrayType->nextOf(), val), expVal, TOKblit);
   callPostblit(loc, exp, val);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DSliceValue *DtoCatAssignArray(Loc &loc, DValue *arr, Expression *exp) {
   IF_LOG Logger::println("DtoCatAssignArray");
@@ -774,7 +774,7 @@ DSliceValue *DtoCatAssignArray(Loc &loc, DValue *arr, Expression *exp) {
   Type *arrayType = arr->getType();
 
   LLFunction *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_arrayappendT");
+      getRuntimeFunction(loc, gIR->module, "_d_arrayappendT");
   // Call _d_arrayappendT(TypeInfo ti, byte[] *px, byte[] y)
   LLValue *newArray =
       gIR->CreateCallOrInvoke(
@@ -788,7 +788,7 @@ DSliceValue *DtoCatAssignArray(Loc &loc, DValue *arr, Expression *exp) {
   return getSlice(arrayType, newArray);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DSliceValue *DtoCatArrays(Loc &loc, Type *arrayType, Expression *exp1,
                           Expression *exp2) {
@@ -799,7 +799,7 @@ DSliceValue *DtoCatArrays(Loc &loc, Type *arrayType, Expression *exp1,
   LLFunction *fn = nullptr;
 
   if (exp1->op == TOKcat) { // handle multiple concat
-    fn = LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_arraycatnTX");
+    fn = getRuntimeFunction(loc, gIR->module, "_d_arraycatnTX");
 
     // Create array of slices
     typedef llvm::SmallVector<llvm::Value *, 16> ArgVector;
@@ -839,7 +839,7 @@ DSliceValue *DtoCatArrays(Loc &loc, Type *arrayType, Expression *exp1,
     // byte[][] arrs
     args.push_back(val);
   } else {
-    fn = LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_arraycatT");
+    fn = getRuntimeFunction(loc, gIR->module, "_d_arraycatT");
 
     // TypeInfo ti
     args.push_back(DtoTypeInfoOf(arrayType));
@@ -859,7 +859,7 @@ DSliceValue *DtoCatArrays(Loc &loc, Type *arrayType, Expression *exp1,
   return getSlice(arrayType, newArray);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DSliceValue *DtoAppendDChar(Loc &loc, DValue *arr, Expression *exp,
                             const char *func) {
@@ -867,7 +867,7 @@ DSliceValue *DtoAppendDChar(Loc &loc, DValue *arr, Expression *exp,
   DValue *valueToAppend = toElem(exp);
 
   // Prepare arguments
-  LLFunction *fn = LLVM_D_GetRuntimeFunction(loc, gIR->module, func);
+  LLFunction *fn = getRuntimeFunction(loc, gIR->module, func);
 
   // Call function (ref string x, dchar c)
   LLValue *newArray =
@@ -882,7 +882,7 @@ DSliceValue *DtoAppendDChar(Loc &loc, DValue *arr, Expression *exp,
   return getSlice(arrayType, newArray);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DSliceValue *DtoAppendDCharToString(Loc &loc, DValue *arr, Expression *exp) {
   IF_LOG Logger::println("DtoAppendDCharToString");
@@ -890,7 +890,7 @@ DSliceValue *DtoAppendDCharToString(Loc &loc, DValue *arr, Expression *exp) {
   return DtoAppendDChar(loc, arr, exp, "_d_arrayappendcd");
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DSliceValue *DtoAppendDCharToUnicodeString(Loc &loc, DValue *arr,
                                            Expression *exp) {
@@ -899,12 +899,12 @@ DSliceValue *DtoAppendDCharToUnicodeString(Loc &loc, DValue *arr,
   return DtoAppendDChar(loc, arr, exp, "_d_arrayappendwd");
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // helper for eq and cmp
 static LLValue *DtoArrayEqCmp_impl(Loc &loc, const char *func, DValue *l,
                                    DValue *r, bool useti) {
   IF_LOG Logger::println("comparing arrays");
-  LLFunction *fn = LLVM_D_GetRuntimeFunction(loc, gIR->module, func);
+  LLFunction *fn = getRuntimeFunction(loc, gIR->module, func);
   assert(fn);
 
   // find common dynamic array type
@@ -933,7 +933,7 @@ static LLValue *DtoArrayEqCmp_impl(Loc &loc, const char *func, DValue *l,
   return gIR->func()->scopes->callOrInvoke(fn, args).getInstruction();
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 LLValue *DtoArrayEquals(Loc &loc, TOK op, DValue *l, DValue *r) {
   LLValue *res = DtoArrayEqCmp_impl(loc, "_adEq2", l, r, true);
   res = gIR->ir->CreateICmpNE(res, DtoConstInt(0));
@@ -944,7 +944,7 @@ LLValue *DtoArrayEquals(Loc &loc, TOK op, DValue *l, DValue *r) {
   return res;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 LLValue *DtoArrayCompare(Loc &loc, TOK op, DValue *l, DValue *r) {
   LLValue *res = nullptr;
   llvm::ICmpInst::Predicate cmpop;
@@ -964,7 +964,7 @@ LLValue *DtoArrayCompare(Loc &loc, TOK op, DValue *l, DValue *r) {
   return res;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 LLValue *DtoArrayCastLength(Loc &loc, LLValue *len, LLType *elemty,
                             LLType *newelemty) {
   IF_LOG Logger::println("DtoArrayCastLength");
@@ -974,21 +974,21 @@ LLValue *DtoArrayCastLength(Loc &loc, LLValue *len, LLType *elemty,
   assert(elemty);
   assert(newelemty);
 
-  size_t esz = getTypePaddedSize(elemty);
-  size_t nsz = getTypePaddedSize(newelemty);
+  size_t esz = getTypeAllocSize(elemty);
+  size_t nsz = getTypeAllocSize(newelemty);
   if (esz == nsz) {
     return len;
   }
 
   LLFunction *fn =
-      LLVM_D_GetRuntimeFunction(loc, gIR->module, "_d_array_cast_len");
+      getRuntimeFunction(loc, gIR->module, "_d_array_cast_len");
   return gIR->CreateCallOrInvoke(fn, len,
                                  LLConstantInt::get(DtoSize_t(), esz, false),
                                  LLConstantInt::get(DtoSize_t(), nsz, false))
       .getInstruction();
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 LLValue *DtoDynArrayIs(TOK op, DValue *l, DValue *r) {
   LLValue *len1, *ptr1, *len2, *ptr2;
 
@@ -1012,7 +1012,7 @@ LLValue *DtoDynArrayIs(TOK op, DValue *l, DValue *r) {
   return (op == TOKnotidentity) ? gIR->ir->CreateNot(res) : res;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 LLValue *DtoArrayLen(DValue *v) {
   IF_LOG Logger::println("DtoArrayLen");
   LOG_SCOPE;
@@ -1040,7 +1040,7 @@ LLValue *DtoArrayLen(DValue *v) {
   llvm_unreachable("unsupported array for len");
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 LLValue *DtoArrayPtr(DValue *v) {
   IF_LOG Logger::println("DtoArrayPtr");
   LOG_SCOPE;
@@ -1072,7 +1072,7 @@ LLValue *DtoArrayPtr(DValue *v) {
   return DtoBitCast(ptr, wantedLLPtrType);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 DValue *DtoCastArray(Loc &loc, DValue *u, Type *to) {
   IF_LOG Logger::println("DtoCastArray");
   LOG_SCOPE;
@@ -1213,7 +1213,7 @@ void DtoIndexBoundsCheck(Loc &loc, DValue *arr, DValue *index) {
 
 void DtoBoundsCheckFailCall(IRState *irs, Loc &loc) {
   llvm::Function *errorfn =
-      LLVM_D_GetRuntimeFunction(loc, irs->module, "_d_arraybounds");
+      getRuntimeFunction(loc, irs->module, "_d_arraybounds");
   irs->CreateCallOrInvoke(
       errorfn, DtoModuleFileName(irs->func()->decl->getModule(), loc),
       DtoConstUint(loc.linnum));

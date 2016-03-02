@@ -92,7 +92,7 @@ static std::string getOutputName(bool const sharedLib) {
 
 static std::string gExePath;
 
-static int linkObjToBinaryGcc(bool sharedLib) {
+static int linkObjToBinaryGcc(bool sharedLib, bool fullyStatic) {
   Logger::println("*** Linking executable ***");
 
   // find gcc for linking
@@ -118,6 +118,10 @@ static int linkObjToBinaryGcc(bool sharedLib) {
 
   if (sharedLib) {
     args.push_back("-shared");
+  }
+
+  if (fullyStatic) {
+    args.push_back("-static");
   }
 
   args.push_back("-o");
@@ -354,11 +358,16 @@ int executeMsvcToolAndWait(const std::string &tool,
      * be parsed properly.
      */
 
-    std::string cmdPath = getenv("ComSpec");
+    auto comspecEnv = getenv("ComSpec");
+    if (!comspecEnv) {
+      warning(Loc(), "'ComSpec' environment variable is not set, assuming 'cmd.exe'.");
+      comspecEnv = "cmd.exe";
+    }
+    std::string cmdExecutable = comspecEnv;
     std::string batchFile = exe_path::prependBinDir(
         global.params.targetTriple.isArch64Bit() ? "amd64.bat" : "x86.bat");
 
-    commandLine.append(windows::quoteArg(cmdPath));
+    commandLine.append(windows::quoteArg(cmdExecutable));
     commandLine.append(" /s /c \"");
     commandLine.append(windows::quoteArg(batchFile));
     commandLine.push_back(' ');
@@ -550,14 +559,13 @@ static int linkObjToBinaryWin(bool sharedLib) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-int linkObjToBinary(bool sharedLib) {
-  int exitCode;
+int linkObjToBinary(bool sharedLib, bool fullyStatic) {
   if (global.params.targetTriple.isWindowsMSVCEnvironment()) {
-    exitCode = linkObjToBinaryWin(sharedLib);
-  } else {
-    exitCode = linkObjToBinaryGcc(sharedLib);
+    // TODO: Choose dynamic/static MSVCRT version based on fullyStatic?
+    return linkObjToBinaryWin(sharedLib);
   }
-  return exitCode;
+
+  return linkObjToBinaryGcc(sharedLib, fullyStatic);
 }
 
 //////////////////////////////////////////////////////////////////////////////

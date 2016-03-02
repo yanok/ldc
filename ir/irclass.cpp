@@ -36,9 +36,6 @@
 
 //////////////////////////////////////////////////////////////////////////////
 
-extern LLConstant *get_default_initializer(VarDeclaration *vd,
-                                           Initializer *init);
-
 extern LLConstant *DtoDefineClassInfo(ClassDeclaration *cd);
 
 //////////////////////////////////////////////////////////////////////////////
@@ -366,7 +363,7 @@ llvm::GlobalVariable *IrAggr::getInterfaceVtbl(BaseClass *b, bool new_instance,
       llvm::Function::arg_iterator origArg = irFunc->func->arg_begin();
       for (; thunkArg != thunk->arg_end(); ++thunkArg, ++origArg) {
         thunkArg->setName(origArg->getName());
-        args.push_back(thunkArg);
+        args.push_back(&(*thunkArg));
       }
 
       // cast 'this' to Object
@@ -376,7 +373,7 @@ llvm::GlobalVariable *IrAggr::getInterfaceVtbl(BaseClass *b, bool new_instance,
                                    : 1];
       LLType *targetThisType = thisArg->getType();
       thisArg = DtoBitCast(thisArg, getVoidPtrType());
-      thisArg = DtoGEP1(thisArg, DtoConstInt(-b->offset));
+      thisArg = DtoGEP1(thisArg, DtoConstInt(-b->offset), true);
       thisArg = DtoBitCast(thisArg, targetThisType);
 
       // call the real vtbl function.

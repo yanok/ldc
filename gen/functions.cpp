@@ -32,6 +32,7 @@
 #include "gen/pragma.h"
 #include "gen/runtime.h"
 #include "gen/tollvm.h"
+#include "gen/uda.h"
 #include "ir/irfunction.h"
 #include "ir/irmodule.h"
 #include "llvm/IR/Intrinsics.h"
@@ -70,35 +71,44 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
   } else {
     Type *rt = f->next;
     const bool byref = f->isref && rt->toBasetype()->ty != Tvoid;
-    AttrBuilder attrBuilder;
+    AttrBuilder attrs;
 
     if (abi->returnInArg(f)) {
       // sret return
       newIrFty.arg_sret = new IrFuncTyArg(
           rt, true,
           AttrBuilder().add(LLAttribute::StructRet).add(LLAttribute::NoAlias));
+      const unsigned alignment = DtoAlignment(rt);
+      if (alignment &&
+          // FIXME: LLVM inliner issues for std.bitmanip and std.uni on Win64
+          !global.params.targetTriple.isOSMSVCRT()) {
+        newIrFty.arg_sret->attrs.addAlignment(alignment);
+      }
       rt = Type::tvoid;
       ++nextLLArgIdx;
     } else {
       // sext/zext return
-      attrBuilder.add(DtoShouldExtend(byref ? rt->pointerTo() : rt));
+      attrs.add(DtoShouldExtend(byref ? rt->pointerTo() : rt));
     }
-    newIrFty.ret = new IrFuncTyArg(rt, byref, attrBuilder);
+    newIrFty.ret = new IrFuncTyArg(rt, byref, attrs);
   }
   ++nextLLArgIdx;
 
   if (thistype) {
     // Add the this pointer for member functions
-    AttrBuilder attrBuilder;
+    AttrBuilder attrs;
+    attrs.add(LLAttribute::NonNull);
     if (isCtor) {
-      attrBuilder.add(LLAttribute::Returned);
+      attrs.add(LLAttribute::Returned);
     }
-    newIrFty.arg_this = new IrFuncTyArg(
-        thistype, thistype->toBasetype()->ty == Tstruct, attrBuilder);
+    newIrFty.arg_this =
+        new IrFuncTyArg(thistype, thistype->toBasetype()->ty == Tstruct, attrs);
     ++nextLLArgIdx;
   } else if (nesttype) {
     // Add the context pointer for nested functions
-    newIrFty.arg_nest = new IrFuncTyArg(nesttype, false);
+    AttrBuilder attrs;
+    attrs.add(LLAttribute::NonNull);
+    newIrFty.arg_nest = new IrFuncTyArg(nesttype, false, attrs);
     ++nextLLArgIdx;
   }
 
@@ -135,27 +145,30 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
     bool passPointer = arg->storageClass & (STCref | STCout);
 
     Type *loweredDType = arg->type;
-    AttrBuilder attrBuilder;
+    AttrBuilder attrs;
     if (arg->storageClass & STClazy) {
       // Lazy arguments are lowered to delegates.
       Logger::println("lazy param");
       auto ltf = new TypeFunction(nullptr, arg->type, 0, LINKd);
       auto ltd = new TypeDelegate(ltf);
       loweredDType = ltd;
-    } else if (!passPointer) {
+    } else if (passPointer) {
+      // ref/out
+      attrs.addDereferenceable(loweredDType->size());
+    } else {
       if (abi->passByVal(loweredDType)) {
         // LLVM ByVal parameters are pointers to a copy in the function
         // parameters stack. The caller needs to provide a pointer to the
         // original argument.
-        attrBuilder.add(LLAttribute::ByVal);
+        attrs.addByVal(DtoAlignment(loweredDType));
         passPointer = true;
       } else {
         // Add sext/zext as needed.
-        attrBuilder.add(DtoShouldExtend(loweredDType));
+        attrs.add(DtoShouldExtend(loweredDType));
       }
     }
-    newIrFty.args.push_back(
-        new IrFuncTyArg(loweredDType, passPointer, attrBuilder));
+
+    newIrFty.args.push_back(new IrFuncTyArg(loweredDType, passPointer, attrs));
     newIrFty.args.back()->parametersIdx = i;
     ++nextLLArgIdx;
   }
@@ -206,7 +219,7 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
   return irFty.funcType;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static llvm::FunctionType *DtoVaFunctionType(FuncDeclaration *fdecl) {
   IrFuncTy &irFty = getIrFunc(fdecl, true)->irFty;
@@ -231,7 +244,7 @@ static llvm::FunctionType *DtoVaFunctionType(FuncDeclaration *fdecl) {
   return irFty.funcType;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 llvm::FunctionType *DtoFunctionType(FuncDeclaration *fdecl) {
   // handle for C vararg intrinsics
@@ -272,7 +285,7 @@ llvm::FunctionType *DtoFunctionType(FuncDeclaration *fdecl) {
   return functype;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static llvm::Function *DtoDeclareVaFunction(FuncDeclaration *fdecl) {
   DtoVaFunctionType(fdecl);
@@ -291,7 +304,7 @@ static llvm::Function *DtoDeclareVaFunction(FuncDeclaration *fdecl) {
   return func;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void DtoResolveFunction(FuncDeclaration *fdecl) {
   if ((!global.params.useUnitTests || !fdecl->type) &&
@@ -376,49 +389,16 @@ void DtoResolveFunction(FuncDeclaration *fdecl) {
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
-static void set_param_attrs(TypeFunction *f, llvm::Function *func,
-                            FuncDeclaration *fdecl) {
-  IrFuncTy &irFty = getIrFunc(fdecl)->irFty;
+void applyParamAttrsToLLFunc(TypeFunction *f, IrFuncTy &irFty,
+                             llvm::Function *func) {
   AttrSet newAttrs = AttrSet::extractFunctionAndReturnAttributes(func);
-
-  int idx = 0;
-
-// handle implicit args
-#define ADD_PA(X)                                                              \
-  if (irFty.X) {                                                               \
-    newAttrs.add(idx, irFty.X->attrs);                                         \
-    idx++;                                                                     \
-  }
-
-  ADD_PA(ret)
-
-  if (irFty.arg_sret && irFty.arg_this && gABI->passThisBeforeSret(f)) {
-    ADD_PA(arg_this)
-    ADD_PA(arg_sret)
-  } else {
-    ADD_PA(arg_sret)
-    ADD_PA(arg_this)
-  }
-
-  ADD_PA(arg_nest)
-  ADD_PA(arg_arguments)
-
-#undef ADD_PA
-
-  // Set attributes on the explicit parameters.
-  const size_t n = irFty.args.size();
-  for (size_t k = 0; k < n; k++) {
-    const size_t i = idx + (irFty.reverseParams ? (n - k - 1) : k);
-    newAttrs.add(i, irFty.args[k]->attrs);
-  }
-
-  // Store the final attribute set
+  newAttrs.merge(irFty.getParamAttrs(gABI->passThisBeforeSret(f)));
   func->setAttributes(newAttrs);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void DtoDeclareFunction(FuncDeclaration *fdecl) {
   DtoResolveFunction(fdecl);
@@ -490,7 +470,7 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
     fatal();
   }
 
-  func->setCallingConv(gABI->callingConv(func->getFunctionType(), link));
+  func->setCallingConv(gABI->callingConv(func->getFunctionType(), link, fdecl));
 
   IF_LOG Logger::cout() << "func = " << *func << std::endl;
 
@@ -499,11 +479,13 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
 
   // parameter attributes
   if (!DtoIsIntrinsic(fdecl)) {
-    set_param_attrs(f, func, fdecl);
+    applyParamAttrsToLLFunc(f, getIrFunc(fdecl)->irFty, func);
     if (global.params.disableRedZone) {
       func->addFnAttr(LLAttribute::NoRedZone);
     }
   }
+
+  applyFuncDeclUDAs(fdecl, func);
 
   // main
   if (fdecl->isMain()) {
@@ -535,13 +517,13 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
 
   if (irFty.arg_sret && !passThisBeforeSret) {
     iarg->setName(".sret_arg");
-    irFunc->retArg = iarg;
+    irFunc->retArg = &(*iarg);
     ++iarg;
   }
 
   if (irFty.arg_this) {
     iarg->setName(".this_arg");
-    irFunc->thisArg = iarg;
+    irFunc->thisArg = &(*iarg);
 
     VarDeclaration *v = fdecl->vthis;
     if (v) {
@@ -551,7 +533,7 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
       // context types. Will be given storage in DtoDefineFunction.
       assert(!isIrParameterCreated(v));
       IrParameter *irParam = getIrParameter(v, true);
-      irParam->value = iarg;
+      irParam->value = &(*iarg);
       irParam->arg = irFty.arg_this;
       irParam->isVthis = true;
     }
@@ -559,20 +541,20 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
     ++iarg;
   } else if (irFty.arg_nest) {
     iarg->setName(".nest_arg");
-    irFunc->nestArg = iarg;
+    irFunc->nestArg = &(*iarg);
     assert(irFunc->nestArg);
     ++iarg;
   }
 
   if (passThisBeforeSret) {
     iarg->setName(".sret_arg");
-    irFunc->retArg = iarg;
+    irFunc->retArg = &(*iarg);
     ++iarg;
   }
 
   if (irFty.arg_arguments) {
     iarg->setName("._arguments");
-    irFunc->_arguments = iarg;
+    irFunc->_arguments = &(*iarg);
     ++iarg;
   }
 
@@ -595,11 +577,11 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
 
     IrParameter *irParam = getIrParameter(argvd, true);
     irParam->arg = arg;
-    irParam->value = iarg;
+    irParam->value = &(*iarg);
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static LinkageWithCOMDAT lowerFuncLinkage(FuncDeclaration *fdecl) {
   // Intrinsics are always external.
@@ -928,8 +910,7 @@ void DtoDefineFunction(FuncDeclaration *fd) {
     bb->eraseFromParent();
   } else if (!gIR->scopereturned()) {
     // llvm requires all basic blocks to end with a TerminatorInst but DMD does
-    // not put a return statement
-    // in automatically, so we do it here.
+    // not put a return statement in automatically, so we do it here.
 
     // pass the previous block into this block
     gIR->DBuilder.EmitStopPoint(fd->endloc);
@@ -961,7 +942,7 @@ void DtoDefineFunction(FuncDeclaration *fd) {
   gIR->functions.pop_back();
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 DValue *DtoArgument(Parameter *fnarg, Expression *argexp) {
   IF_LOG Logger::println("DtoArgument");
@@ -985,7 +966,7 @@ DValue *DtoArgument(Parameter *fnarg, Expression *argexp) {
   }
 
   // byval arg, but expr has no storage yet
-  if (DtoIsPassedByRef(argexp->type) && (arg->isSlice() || arg->isNull())) {
+  if (DtoIsInMemoryOnly(argexp->type) && (arg->isSlice() || arg->isNull())) {
     LLValue *alloc = DtoAlloca(argexp->type, ".tmp_arg");
     auto vv = new DVarValue(argexp->type, alloc);
     DtoAssign(argexp->loc, vv, arg);
@@ -995,7 +976,7 @@ DValue *DtoArgument(Parameter *fnarg, Expression *argexp) {
   return arg;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 int binary(const char *p, const char **tab, int high) {
   int i = 0, j = high, k, l;

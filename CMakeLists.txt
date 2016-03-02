@@ -15,8 +15,8 @@ include(CheckCXXCompilerFlag)
 # Locate LLVM.
 #
 
-find_package(LLVM 3.1 REQUIRED
-    all-targets analysis asmparser asmprinter bitreader bitwriter codegen core debuginfodwarf instcombine ipa ipo instrumentation linker lto mc mcdisassembler mcparser objcarcopts object option profiledata scalaropts selectiondag support tablegen target transformutils vectorize ${EXTRA_LLVM_MODULES})
+find_package(LLVM 3.5 REQUIRED
+    all-targets analysis asmparser asmprinter bitreader bitwriter codegen core debuginfodwarf instcombine ipa ipo instrumentation irreader linker lto mc mcdisassembler mcparser objcarcopts object option profiledata scalaropts selectiondag support tablegen target transformutils vectorize ${EXTRA_LLVM_MODULES})
 math(EXPR LDC_LLVM_VER ${LLVM_VERSION_MAJOR}*100+${LLVM_VERSION_MINOR})
 # Remove LLVMTableGen library from list of libraries
 string(REGEX MATCH "^-.*LLVMTableGen[^;]*;|;-.*LLVMTableGen[^;]*" LLVM_TABLEGEN_LIBRARY "${LLVM_LIBRARIES}")
@@ -146,6 +146,10 @@ elseif(MSVC)
     # warning C4800: forcing value to bool 'true' or 'false' (performance warning)
     # warning C4996: we're not using Microsoft's secure stringOp_s() functions
     append("/wd4018 /wd4101 /wd4102 /wd4146 /wd4244 /wd4267 /wd4456 /wd4457 /wd4458 /wd4459 /wd4624 /wd4800 /wd4996" DMD_CXXFLAGS LDC_CXXFLAGS)
+    if(LDC_LLVM_VER GREATER 307)
+        # Suppress noisy warning C4141 'modifier' used more than once', because of __forceinline combined with inline in LLVM headers
+        append("/wd4141" DMD_CXXFLAGS LDC_CXXFLAGS)
+    endif()
 endif()
 # Append -mminimal-toc for gcc 4.0.x - 4.5.x on ppc64
 if( CMAKE_COMPILER_IS_GNUCXX
@@ -496,6 +500,24 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
     target_link_libraries(gen_gccbuiltins dl)
 endif()
 
+
+# Build FileCheck for testing (build source version depending on LLVM version)
+set(FILECHECK_SRC utils/FileCheck-${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.cpp)
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${FILECHECK_SRC})
+    add_executable(FileCheck ${FILECHECK_SRC})
+    set_target_properties(
+        FileCheck PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin
+        COMPILE_FLAGS "${LLVM_CXXFLAGS} ${LDC_CXXFLAGS}"
+        LINK_FLAGS "${SANITIZE_LDFLAGS}"
+    )
+    target_link_libraries(FileCheck  ${LLVM_LIBRARIES} ${TERMINFO_LIBS} ${CMAKE_DL_LIBS} "${LLVM_LDFLAGS}")
+else()
+    message(STATUS "Skip building FileCheck, assuming it can be found in LLVM bin directory")
+endif()
+
+
+
 #
 # LDMD
 #
@@ -530,6 +552,7 @@ add_subdirectory(runtime)
 if(D_VERSION EQUAL 2)
     add_subdirectory(tests/d2)
 endif()
+add_subdirectory(tests/ir)
 
 #
 # Install target.
@@ -546,6 +569,11 @@ install(FILES ${PROJECT_BINARY_DIR}/bin/${LDC_EXE}_install.conf DESTINATION ${CO
 
 if(MSVC)
     install(DIRECTORY vcbuild/ DESTINATION ${CMAKE_INSTALL_PREFIX}/bin FILES_MATCHING PATTERN "*.bat")
+    # Also put the VCBuild scripts in the build/bin folder, so that ${PROJECT_BINARY_DIR}/bin/ldc2 is functional.
+    # This is necessary for the IR tests that use ${PROJECT_BINARY_DIR}/bin/ldc2.
+    configure_file(vcbuild/amd64.bat   ${PROJECT_BINARY_DIR}/bin/amd64.bat   COPYONLY)
+    configure_file(vcbuild/msvcEnv.bat ${PROJECT_BINARY_DIR}/bin/msvcEnv.bat COPYONLY)
+    configure_file(vcbuild/x86.bat     ${PROJECT_BINARY_DIR}/bin/x86.bat     COPYONLY)
 endif()
 
 if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
