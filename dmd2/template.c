@@ -6184,6 +6184,11 @@ Lerror:
     {
     bool found_deferred_ad = false;
 #if IN_WEKA
+    /* Fixes a template instantiation bug ("not a constant")
+     * This breaks dmd-testsuite, runnable/aliasthis.d issue 12008.
+     * Not upstreamed yet because we couldn't get a self-contained test case
+     * supporting the need of this patch yet.
+     */
     for (size_t i = oldDeferredDim; i < Module::deferred.dim; i++)
 #else
     for (size_t i = 0; i < Module::deferred.dim; i++)
