@@ -34,6 +34,7 @@ enum __OpenBSD__    = xversion!`OpenBSD`;
 enum __sun          = xversion!`Solaris`;
 
 enum IN_GCC     = xversion!`IN_GCC`;
+enum IN_WEKA    = xversion!`IN_WEKA`;
 enum IN_LLVM    = xversion!`IN_LLVM`;
 enum IN_LLVM_MSVC = xversion!`IN_LLVM_MSVC`;
 

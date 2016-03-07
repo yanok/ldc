@@ -5564,6 +5564,11 @@ public:
             minst = null;
         }
         gagged = (global.gag > 0);
+
+version(IN_WEKA) {
+        const size_t oldDeferredDim = Module.deferred.dim;
+}
+
         semanticRun = PASSsemantic;
         static if (LOG)
         {
@@ -5833,7 +5838,13 @@ public:
          */
         {
             bool found_deferred_ad = false;
-            for (size_t i = 0; i < Module.deferred.dim; i++)
+
+            /* IN_WEKA Fixes a template instantiation bug ("not a constant")
+             * This breaks dmd-testsuite, runnable/aliasthis.d issue 12008.
+             * Not upstreamed yet because we couldn't get a self-contained test case
+             * supporting the need of this patch yet.
+             */
+            for (size_t i = IN_WEKA ? oldDeferredDim : 0; i < Module.deferred.dim; i++)
             {
                 Dsymbol sd = Module.deferred[i];
                 AggregateDeclaration ad = sd.isAggregateDeclaration();
@@ -5849,8 +5860,13 @@ public:
                     }
                 }
             }
+version(IN_WEKA) {
+            if (found_deferred_ad)
+                goto Laftersemantic;
+} else {
             if (found_deferred_ad || Module.deferred.dim)
                 goto Laftersemantic;
+}
         }
         /* The problem is when to parse the initializer for a variable.
          * Perhaps VarDeclaration::semantic() should do it like it does
@@ -6464,6 +6480,15 @@ public:
             if (!minst.isRoot() && !minst.rootImports())
                 return false;
 
+// This breaks compiling wekanode. The issue is that while it looks like 'tnext'
+// is going to be codegen'd elsewhere from the point of this compilation, when
+// it is actually compiled there might be another root module that creates an
+// instance pointing back to 'this', so there the symbol corresponding to 'tnext'
+// would again not be emitted. By commenting out this block, we are always
+// emitting non-speculative instantiations directly from root nodes.
+version(IN_WEKA) {}
+else
+{
             TemplateInstance tnext = this.tnext;
             this.tnext = null;
 
@@ -6473,6 +6498,7 @@ public:
                 assert(!minst.isRoot());
                 return false;
             }
+}
 
             // Do codegen because this is not included in non-root instances.
             return true;

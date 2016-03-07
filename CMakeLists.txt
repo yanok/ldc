@@ -504,6 +504,8 @@ endif()
 if(MSVC)
     append("-version=IN_LLVM_MSVC" DDMD_DFLAGS)
 endif()
+append("-version=IN_WEKA" DDMD_DFLAGS)  # Define to enable the Weka modifications
+append("-DIN_WEKA" CMAKE_CXX_FLAGS)     # Define to enable the Weka modifications
 append("-version=IN_LLVM" DDMD_DFLAGS)
 append("-DIN_LLVM" CMAKE_CXX_FLAGS)
 append("-DOPAQUE_VTBLS" CMAKE_CXX_FLAGS)
