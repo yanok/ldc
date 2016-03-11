@@ -6923,6 +6923,14 @@ else
             else if (isParameter(o))
             {
             }
+            else if (Tuple tup = isTuple(o))
+            {
+                // Expand tuple and insert its elements into tiargs
+                tiargs.remove(j);
+                tiargs.insert(j, &tup.objects);
+                j--;
+                continue;
+            }
             else
             {
                 assert(0);
