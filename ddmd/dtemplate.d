@@ -1806,20 +1806,23 @@ else
                     }
                 }
                 oded = declareParameter(paramscope, tparam, oded);
-                /* Bugzilla 7469: Normalize ti->tiargs for the correct mangling of template instance.
-                 */
-                Tuple va = isTuple(oded);
-                if (va && va.objects.dim)
-                {
-                    dedargs.setDim(parameters.dim - 1 + va.objects.dim);
-                    for (size_t j = 0; j < va.objects.dim; j++)
-                        (*dedargs)[i + j] = va.objects[j];
-                    i = dedargs.dim - 1;
-                }
-                else
-                    (*dedargs)[i] = oded;
+                (*dedargs)[i] = oded;
             }
         }
+
+        /* Bugzilla 7469: As same as the code for 7469 in findBestMatch,
+         * expand a Tuple in dedargs to normalize template arguments.
+         */
+        if (auto d = dedargs.dim)
+        {
+            if (auto va = isTuple((*dedargs)[d - 1]))
+            {
+                dedargs.setDim(d - 1);
+                dedargs.insert(d - 1, &va.objects);
+            }
+        }
+        ti.tiargs = dedargs; // update to the normalized template arguments.
+
         // Partially instantiate function for constraint and fd->leastAsSpecialized()
         {
             assert(paramsym);
@@ -1835,7 +1838,7 @@ else
             if (!fd)
                 goto Lnomatch;
         }
-        ti.tiargs = dedargs; // update to the normalized template arguments.
+
         if (constraint)
         {
             if (!evaluateConstraint(ti, sc, paramscope, dedargs, fd))
@@ -6922,14 +6925,6 @@ else
             }
             else if (isParameter(o))
             {
-            }
-            else if (Tuple tup = isTuple(o))
-            {
-                // Expand tuple and insert its elements into tiargs
-                tiargs.remove(j);
-                tiargs.insert(j, &tup.objects);
-                j--;
-                continue;
             }
             else
             {
