@@ -17,7 +17,7 @@ include(CheckCXXCompilerFlag)
 #
 
 find_package(LLVM 3.5 REQUIRED
-    all-targets analysis asmparser asmprinter bitreader bitwriter codegen core debuginfocodeview debuginfodwarf debuginfopdb instcombine ipa ipo instrumentation irreader linker lto mc mcdisassembler mcparser objcarcopts object option profiledata scalaropts selectiondag support tablegen target transformutils vectorize ${EXTRA_LLVM_MODULES})
+    all-targets analysis asmparser asmprinter bitreader bitwriter codegen core debuginfocodeview debuginfodwarf debuginfopdb globalisel instcombine ipa ipo instrumentation irreader linker lto mc mcdisassembler mcparser objcarcopts object option profiledata scalaropts selectiondag support tablegen target transformutils vectorize ${EXTRA_LLVM_MODULES})
 math(EXPR LDC_LLVM_VER ${LLVM_VERSION_MAJOR}*100+${LLVM_VERSION_MINOR})
 # Remove LLVMTableGen library from list of libraries
 string(REGEX MATCH "^-.*LLVMTableGen[^;]*;|;-.*LLVMTableGen[^;]*" LLVM_TABLEGEN_LIBRARY "${LLVM_LIBRARIES}")
@@ -52,8 +52,8 @@ endfunction()
 set(LDC_VERSION "1.0.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   69)
-set(DMDFE_FIX_LEVEL       2) # Comment out if not used
+set(DMDFE_PATCH_VERSION   70)
+set(DMDFE_FIX_LEVEL       0) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -83,7 +83,6 @@ if(D_VERSION EQUAL 1)
     message(FATAL_ERROR "D version 1 is no longer supported.
 Please consider using D version 2 or checkout the 'd1' git branch for the last version supporting D version 1.")
 elseif(D_VERSION EQUAL 2)
-    set(DMDFE_PATH dmd2)
     set(DDMDFE_PATH ddmd)
     set(LDC_EXE ldc2)
     set(LDMD_EXE ldmd2)
@@ -98,7 +97,6 @@ set(LDMD_EXE_NAME ${PROGRAM_PREFIX}${LDMD_EXE}${PROGRAM_SUFFIX})
 
 file(MAKE_DIRECTORY
     ${PROJECT_BINARY_DIR}
-    ${PROJECT_BINARY_DIR}/${DMDFE_PATH}
     ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}
 )
 
@@ -154,15 +152,14 @@ elseif(UNIX AND NOT APPLE)
     endif()
 elseif(WIN32)
     if(${D_COMPILER_ID} STREQUAL "DigitalMars")
-        # FIXME: Detect whether 32 or 64bit
-        set( IS_64_BIT 1 )
-        message(STATUS "Let DMD output 64bit object files")
-        if (IS_64_BIT)
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            message(STATUS "Let DMD output 64bit object files")
             append("-m64" DDMD_DFLAGS)
             append("${D_COMPILER_PATH}\\..\\lib64\\phobos64.lib" Dcode_LDFLAGS)
         else()
-            append("-m32" DDMD_DFLAGS)
-            append("${D_COMPILER_PATH}\\..\\lib\\phobos.lib" Dcode_LDFLAGS)
+            message(STATUS "Let DMD output 32bit COFF object files")
+            append("-m32mscoff" DDMD_DFLAGS)
+            append("${D_COMPILER_PATH}\\..\\lib32mscoff\\phobos32mscoff.lib" Dcode_LDFLAGS)
         endif()
     elseif(${D_COMPILER_ID} STREQUAL "LDMD")
         append("${D_COMPILER_PATH}\\..\\lib\\druntime-ldc.lib" Dcode_LDFLAGS)
@@ -390,10 +387,8 @@ configure_file(driver/ldc-version.cpp.in driver/ldc-version.cpp)
 
 # Also add the header files to the build so that they are available in IDE
 # project files generated via CMake.
-file(GLOB_RECURSE FE_SRC ${DMDFE_PATH}/*.c)
-file(GLOB_RECURSE FE_HDR ${DMDFE_PATH}/*.h)
 file(GLOB_RECURSE FE_SRC_D ${DDMDFE_PATH}/*.d)
-file(GLOB_RECURSE FE_HDR_D ${DDMDFE_PATH}/*.h)
+file(GLOB_RECURSE FE_HDR   ${DDMDFE_PATH}/*.h)
 file(GLOB_RECURSE GEN_SRC gen/*.cpp)
 file(GLOB_RECURSE GEN_HDR gen/*.h)
 file(GLOB_RECURSE GEN_SRC_D gen/*.d)
@@ -432,9 +427,7 @@ list(REMOVE_ITEM FE_SRC_D
 )
 set(LDC_CXX_SOURCE_FILES
     ${LDC_CXX_GENERATED}
-    ${FE_SRC}
     ${FE_HDR}
-    ${FE_HDR_D}
     ${GEN_SRC}
     ${GEN_HDR}
     ${IR_SRC}
@@ -462,10 +455,8 @@ foreach(file ${LDC_CXX_SOURCE_FILES} ${DRV_SRC} ${DRV_HDR})
     endif()
 endforeach()
 
-source_group("Source Files\\${DMDFE_PATH}" FILES ${FE_SRC})
-source_group("Header Files\\${DMDFE_PATH}" FILES ${FE_HDR})
 source_group("Source Files\\${DDMDFE_PATH}" FILES ${FE_SRC_D})
-source_group("Header Files\\${DDMDFE_PATH}" FILES ${FE_HDR_D})
+source_group("Header Files\\${DDMDFE_PATH}" FILES ${FE_HDR})
 source_group("Source Files\\gen" FILES ${GEN_SRC})
 source_group("Header Files\\gen" FILES ${GEN_HDR})
 source_group("Source Files\\ir" FILES ${IR_SRC})
@@ -478,11 +469,8 @@ source_group("Generated Files" REGULAR_EXPRESSION "(id\\.[cdh]|impcnvtab\\.c)$")
 
 include_directories(
     .
-    ${DMDFE_PATH}
-    ${DMDFE_PATH}/root
     ${DDMDFE_PATH}
     ${DDMDFE_PATH}/root
-    ${PROJECT_BINARY_DIR}/${DMDFE_PATH}
     ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}
     ${PROJECT_SOURCE_DIR}
 )

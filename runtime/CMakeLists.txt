@@ -67,6 +67,7 @@ list(REMOVE_ITEM DCRT_D
     ${RUNTIME_DIR}/src/rt/deh.d
     ${RUNTIME_DIR}/src/rt/deh_win32.d
     ${RUNTIME_DIR}/src/rt/deh_win64_posix.d
+    ${RUNTIME_DIR}/src/rt/dwarfeh.d
     ${RUNTIME_DIR}/src/rt/llmath.d
     ${RUNTIME_DIR}/src/rt/trace.d
 )
@@ -116,6 +117,7 @@ if(UNIX)
         message(WARNING "Please consider updating CMake to at least 2.8.5.")
     else()
         list(APPEND DCRT_ASM ${RUNTIME_DIR}/src/core/threadasm.S)
+        list(APPEND DCRT_ASM ${RUNTIME_DIR}/src/ldc/eh_asm.S)
     endif()
     if(APPLE)
         list(APPEND CORE_D_SYS ${CORE_D_OSX})

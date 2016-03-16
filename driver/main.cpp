@@ -68,12 +68,6 @@ extern "C" {
 int rt_init();
 }
 
-// in traits.c
-void initTraitsStringTable();
-
-// In ddmd/lexer.d
-void Lexer_initLexer();
-
 // In ddmd/doc.d
 void gendocfile(Module *m);
 
@@ -1021,7 +1015,6 @@ int main(int argc, char **argv) {
   }
 
   // Initialization
-  Lexer_initLexer();
   Type::_init();
   Id::initialize();
   Module::_init();
@@ -1029,7 +1022,6 @@ int main(int argc, char **argv) {
   Expression::_init();
   objc_tryMain_init();
   builtin_init();
-  initTraitsStringTable();
 
   // Build import search path
   if (global.params.imppath) {
