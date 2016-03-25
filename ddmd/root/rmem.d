@@ -163,7 +163,9 @@ else
         goto L1;
     }
 
-    version(DigitalMars)
+    version(DigitalMars) version = ReplaceMemAlloc;
+    version(IN_WEKA) version = ReplaceMemAlloc;
+    version(ReplaceMemAlloc)
     {
         extern (C) void* _d_allocmemory(size_t m_size)
         {
