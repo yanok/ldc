@@ -343,7 +343,7 @@ public:
                         }
                         if (!(result & BEfallthru) && !s.comeFrom())
                         {
-                            if (s.blockExit(func, mustNotThrow) != BEhalt && s.hasCode())
+                            if (!IN_WEKA && s.blockExit(func, mustNotThrow) != BEhalt && s.hasCode())
                                 s.warning("statement is not reachable");
                         }
                         else
