@@ -687,8 +687,8 @@ add_subdirectory(tests)
 # Install target.
 #
 
-install(FILES ${LDC_EXE_FULL} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin PERMISSIONS OWNER_EXECUTE GROUP_EXECUTE WORLD_EXECUTE)
-install(FILES ${LDMD_EXE_FULL} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin PERMISSIONS OWNER_EXECUTE GROUP_EXECUTE WORLD_EXECUTE)
+install(PROGRAMS ${LDC_EXE_FULL} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+install(PROGRAMS ${LDMD_EXE_FULL} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 if(${BUILD_SHARED})
     # For now, only install libldc if explicitely building the shared library.
     # While it might theoretically be possible to use LDC as a static library
