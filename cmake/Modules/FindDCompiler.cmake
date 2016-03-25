@@ -6,6 +6,8 @@
 #  D_COMPILER_FOUND          - true if a D compiler was found
 #  D_COMPILER          - D compiler
 #  D_COMPILER_FLAGS    - D compiler flags (could be passed in the DMD environment variable)
+#  D_COMPILER_ID       = {"DigitalMars", "LDMD", "LDC", "GDC"}
+#  D_COMPILER_VERSION_STRING - String containing the compiler version, e.g. "DMD64 D Compiler v2.070.2"
 
 
 set(D_COMPILER_FOUND "FALSE")
