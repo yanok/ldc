@@ -109,14 +109,16 @@ endif()
 # Setup D compiler flags and linker flags for phobos (system linker) etc. We use
 # DMD syntax for all the flags so we can work with both DMD and LDMD.
 set(DDMD_DFLAGS "-wi")
-if(CMAKE_BUILD_TYPE MATCHES Debug)
-    append("-g" DDMD_DFLAGS)
+if(CMAKE_BUILD_TYPE MATCHES "Debug")
+    append("-g -link-debuglib" DDMD_FLAGS)
+elseif(CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
+    append("-g -O -inline -release" DDMD_DFLAGS)
 else()
     # Default to a Release build type
     append("-O -inline -release" DDMD_DFLAGS)
 endif()
 
-if(WIN32)
+if(MSVC)
     if(${D_COMPILER_ID} STREQUAL "DigitalMars")
         if(CMAKE_SIZEOF_VOID_P EQUAL 8)
             message(STATUS "Let DMD output 64bit object files")
@@ -125,9 +127,28 @@ if(WIN32)
             message(STATUS "Let DMD output 32bit COFF object files")
             append("-m32mscoff" DDMD_DFLAGS)
         endif()
+
+        if(MSVC_VERSION GREATER 1800) # VS 2015+
+            append("-Llegacy_stdio_definitions.lib" DDMD_DFLAGS)
+        endif()
+    endif()
+
+    # LDC and LDMD are both linked against the dynamic MSVC runtime by
+    # default (due to default CMAKE_C[XX]_FLAGS_*).
+    # Host DMD/LDMD will default to linking against the static MSVC runtime.
+    # So disable some default libs based on CMAKE_C_FLAGS_RELEASE.
+    if(CMAKE_C_FLAGS_RELEASE MATCHES "(^| )[/-]MD( |$)")
+        append("-L/DEFAULTLIB:msvcrt -L/NODEFAULTLIB:libcmt" DDMD_DFLAGS)
+        if(MSVC_VERSION GREATER 1800) # VS 2015+
+            append("-L/NODEFAULTLIB:libvcruntime" DDMD_DFLAGS)
+        endif()
+    else()
+        append("-L/DEFAULTLIB:libcmt -L/NODEFAULTLIB:msvcrt" DDMD_DFLAGS)
+        if(MSVC_VERSION GREATER 1800) # VS 2015+
+            append("-L/NODEFAULTLIB:vcruntime" DDMD_DFLAGS)
+        endif()
     endif()
 endif()
-
 
 append("-J${PROJECT_SOURCE_DIR}/${DDMDFE_PATH}" DDMD_DFLAGS) # Needed for importing text files
 string(STRIP "${DDMD_DFLAGS}" DDMD_DFLAGS)
@@ -135,11 +156,8 @@ string(STRIP "${DDMD_DFLAGS}" DDMD_DFLAGS)
 # Use separate compiler flags for the frontend and for the LDC-specific parts,
 # as enabling warnings on the DMD frontend only leads to a lot of clutter in
 # the output (LLVM_CXXFLAGS sometimes already includes -Wall).
-set(DMD_CXXFLAGS)
 set(LDC_CXXFLAGS)
 if(CMAKE_COMPILER_IS_GNUCXX OR (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang"))
-    append("-w" DMD_CXXFLAGS)
-
     # Disable some noisy warnings:
     #  * -Wunused-parameter triggers for LLVM headers
     #  * -Wmissing-field-initializer leads to reams of warnings in gen/asm-*.h
@@ -173,24 +191,23 @@ elseif(MSVC)
     # warning C4624: destructor was implicitly defined as deleted because a base class destructor is inaccessible or deleted
     # warning C4800: forcing value to bool 'true' or 'false' (performance warning)
     # warning C4996: we're not using Microsoft's secure stringOp_s() functions
-    append("/wd4018 /wd4101 /wd4102 /wd4146 /wd4244 /wd4267 /wd4456 /wd4457 /wd4458 /wd4459 /wd4624 /wd4800 /wd4996" DMD_CXXFLAGS LDC_CXXFLAGS)
+    append("/wd4018 /wd4101 /wd4102 /wd4146 /wd4244 /wd4267 /wd4456 /wd4457 /wd4458 /wd4459 /wd4624 /wd4800 /wd4996" LDC_CXXFLAGS)
     if(LDC_LLVM_VER GREATER 307)
         # Suppress noisy warning C4141 'modifier' used more than once', because of __forceinline combined with inline in LLVM headers
-        append("/wd4141" DMD_CXXFLAGS LDC_CXXFLAGS)
+        append("/wd4141" LDC_CXXFLAGS)
     endif()
 endif()
 # Append -mminimal-toc for gcc 4.0.x - 4.5.x on ppc64
 if( CMAKE_COMPILER_IS_GNUCXX
     AND CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64|powerpc64"
     AND CMAKE_C_COMPILER_VERSION VERSION_LESS "4.6.0" )
-    append("-mminimal-toc" DMD_CXXFLAGS LDC_CXXFLAGS)
+    append("-mminimal-toc" LDC_CXXFLAGS)
 endif()
 # Do not use doubledouble on ppc
 if( CMAKE_SYSTEM_PROCESSOR MATCHES "ppc|powerpc")
-    append("-mlong-double-64" DMD_CXXFLAGS LDC_CXXFLAGS)
+    append("-mlong-double-64" LDC_CXXFLAGS)
 endif()
 if(UNIX)
-    append("-DPOSIX -DLDC_POSIX" DMD_CXXFLAGS)
     append("-DLDC_POSIX" LDC_CXXFLAGS)
 endif()
 set(SANITIZE_CXXFLAGS)
@@ -203,7 +220,6 @@ if(SANITIZE)
         message(WARNING "Option SANITIZE specified but compiler is not clang.")
     endif()
 endif()
-append("${SANITIZE_CXXFLAGS}" DMD_CXXFLAGS)
 append("${SANITIZE_CXXFLAGS}" LDC_CXXFLAGS)
 # LLVM_CXXFLAGS may contain -Werror which causes compile errors with dmd source
 string(REPLACE "-Werror " "" LLVM_CXXFLAGS ${LLVM_CXXFLAGS})
@@ -392,20 +408,6 @@ set(LDC_D_SOURCE_FILES
     ${IR_SRC_D}
 )
 
-# DMD source files have a .c extension, but are actually C++ code.
-foreach(file ${LDC_CXX_SOURCE_FILES} ${DRV_SRC} ${DRV_HDR})
-    if(file MATCHES ".*\\.c$")
-        set_source_files_properties(${file} PROPERTIES
-            LANGUAGE CXX
-            COMPILE_FLAGS "${DMD_CXXFLAGS}"
-        )
-    else()
-        set_source_files_properties(${file} PROPERTIES
-            COMPILE_FLAGS "${LDC_CXXFLAGS}"
-        )
-    endif()
-endforeach()
-
 source_group("Source Files\\${DDMDFE_PATH}" FILES ${FE_SRC_D})
 source_group("Header Files\\${DDMDFE_PATH}" FILES ${FE_HDR})
 source_group("Source Files\\gen" FILES ${GEN_SRC})
@@ -539,7 +541,7 @@ set_target_properties(
     ARCHIVE_OUTPUT_NAME ldc
     LIBRARY_OUTPUT_NAME ldc
     RUNTIME_OUTPUT_NAME ldc
-    COMPILE_FLAGS "${LLVM_CXXFLAGS} ${EXTRA_CXXFLAGS}"
+    COMPILE_FLAGS "${LLVM_CXXFLAGS} ${LDC_CXXFLAGS} ${EXTRA_CXXFLAGS}"
     LINK_FLAGS "${SANITIZE_LDFLAGS}"
 )
 # LDFLAGS should actually be in target property LINK_FLAGS, but this works, and gets around linking problems
@@ -555,7 +557,8 @@ if(WIN32)
 endif()
 set(LDC_EXE_FULL ${PROJECT_BINARY_DIR}/bin/${LDC_EXE_NAME}${EXECUTABLE_EXTENSION})
 set(LDMD_EXE_FULL ${PROJECT_BINARY_DIR}/bin/${LDMD_EXE_NAME}${EXECUTABLE_EXTENSION})
-add_custom_target(${LDC_EXE} DEPENDS ${LDC_EXE_FULL} ${LDMD_EXE_FULL})
+add_custom_target(${LDC_EXE} ALL DEPENDS ${LDC_EXE_FULL})
+add_custom_target(${LDMD_EXE} ALL DEPENDS ${LDMD_EXE_FULL})
 string (REPLACE ";" " " LDC_LINKERFLAG_LIST "${SANITIZE_LDFLAGS} ${WINDOWS_STACK_SIZE} ${LIBCONFIG_LIBRARY} ${LLVM_LIBRARIES} ${LLVM_LDFLAGS}")
 string (REPLACE "-Wl," "" LDC_LINKERFLAG_LIST ${LDC_LINKERFLAG_LIST})
 separate_arguments(LDC_LINKERFLAG_LIST WINDOWS_COMMAND ${LDC_LINKERFLAG_LIST})
@@ -563,11 +566,11 @@ set(tempVar "")
 FOREACH(f ${LDC_LINKERFLAG_LIST})
       append("-L${f}" tempVar)
 ENDFOREACH(f)
-if(WIN32)
+if(MSVC)
     # Issue 1297
     # The default system-allocated stack size is 8MB on Linux and Mac, but only 1MB on Windows
     # Set LDC's stack to 8MB also on Windows:
-    append("-L/STACK:8388608 -L/DEFAULTLIB:msvcrt -L/NODEFAULTLIB:libcmt legacy_stdio_definitions.lib" tempVar)
+    append("-L/STACK:8388608" tempVar)
 else()
     append("-L-lstdc++" tempVar)
 endif()
@@ -577,7 +580,7 @@ add_custom_command(
     OUTPUT ${LDC_EXE_FULL}
     COMMAND ${D_COMPILER} -L$<TARGET_LINKER_FILE:${LDC_LIB}> ${LDC_FLAG_LIST} -I${PROJECT_SOURCE_DIR}/${DDMDFE_PATH} -of${LDC_EXE_FULL} ${LDC_D_SOURCE_FILES}
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    DEPENDS ${LDC_D_SOURCE_FILES} ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.d ${LDC_LIB} ${LDMD_EXE_FULL}
+    DEPENDS ${LDC_D_SOURCE_FILES} ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.d ${LDC_LIB}
 )
 
 
@@ -690,7 +693,7 @@ add_subdirectory(tests)
 install(PROGRAMS ${LDC_EXE_FULL} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 install(PROGRAMS ${LDMD_EXE_FULL} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 if(${BUILD_SHARED})
-    # For now, only install libldc if explicitely building the shared library.
+    # For now, only install libldc if explicitly building the shared library.
     # While it might theoretically be possible to use LDC as a static library
     # as well, for the time being this just bloats the normal packages.
     install(TARGETS ${LDC_LIB} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
