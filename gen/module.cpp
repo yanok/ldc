@@ -29,6 +29,7 @@
 #include "gen/llvm.h"
 #include "gen/llvmhelpers.h"
 #include "gen/logger.h"
+#include "gen/objcgen.h"
 #include "gen/optimizer.h"
 #include "gen/programs.h"
 #include "gen/rttibuilder.h"
@@ -892,12 +893,16 @@ static void genModuleInfo(Module *m, bool emitFullModuleInfo) {
   llvm::ArrayType *at = llvm::ArrayType::get(it, len);
   b.push(toConstantArray(it, at, name, len, false));
 
+  objc_Module_genmoduleinfo_classes();
+
   // create and set initializer
   LLGlobalVariable *moduleInfoSym = getIrModule(m)->moduleInfoSymbol();
   b.finalize(moduleInfoSym->getType()->getPointerElementType(), moduleInfoSym);
   setLinkage({LLGlobalValue::ExternalLinkage, false}, moduleInfoSym);
 
-  if (global.params.targetTriple->isOSLinux() || global.params.targetTriple->isOSFreeBSD() ||
+  if ((global.params.targetTriple->isOSLinux() &&
+       global.params.targetTriple->getEnvironment() != llvm::Triple::Android) ||
+      global.params.targetTriple->isOSFreeBSD() ||
 #if LDC_LLVM_VER > 305
       global.params.targetTriple->isOSNetBSD() || global.params.targetTriple->isOSOpenBSD() ||
       global.params.targetTriple->isOSDragonFly()

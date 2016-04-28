@@ -17,6 +17,7 @@
 #include "gen/coverage.h"
 #include "gen/dvalue.h"
 #include "gen/functions.h"
+#include "gen/inlineir.h"
 #include "gen/irstate.h"
 #include "gen/llvm.h"
 #include "gen/llvmhelpers.h"
@@ -876,6 +877,10 @@ public:
           result = DtoInlineAsmExpr(e->loc, fd, e->arguments);
           return;
         }
+        if (fd->llvmInternal == LLVMinline_ir) {
+          result = DtoInlineIRExpr(e->loc, fd, e->arguments);
+          return;
+        }
       }
     }
 
@@ -1416,7 +1421,7 @@ public:
 
     if (t->isintegral() || t->ty == Tpointer || t->ty == Tnull) {
       llvm::ICmpInst::Predicate icmpPred;
-      tokToIcmpPred(e->op, isLLVMUnsigned(t), &icmpPred, &eval);
+      tokToICmpPred(e->op, isLLVMUnsigned(t), &icmpPred, &eval);
 
       if (!eval) {
         LLValue *a = l->getRVal();
@@ -1481,7 +1486,7 @@ public:
       eval = LLConstantInt::getFalse(gIR->context());
     } else if (t->ty == Tdelegate) {
       llvm::ICmpInst::Predicate icmpPred;
-      tokToIcmpPred(e->op, isLLVMUnsigned(t), &icmpPred, &eval);
+      tokToICmpPred(e->op, isLLVMUnsigned(t), &icmpPred, &eval);
 
       if (!eval) {
         // First compare the function pointers, then the context ones. This is
