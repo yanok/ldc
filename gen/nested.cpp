@@ -19,23 +19,6 @@
 #include "ir/irtypeaggr.h"
 #include "llvm/Analysis/ValueTracking.h"
 
-static void storeVariable(VarDeclaration *vd, LLValue *dst) {
-  LLValue *value = getIrLocal(vd)->value;
-  int ty = vd->type->ty;
-  FuncDeclaration *fd = getParentFunc(vd, true);
-  assert(fd && "No parent function for nested variable?");
-  if (fd->needsClosure() && !vd->isRef() && (ty == Tstruct || ty == Tsarray) &&
-      isaPointer(value->getType())) {
-    // Copy structs and static arrays
-    LLValue *mem = DtoGcMalloc(vd->loc, DtoType(vd->type), ".gc_mem");
-    DtoMemCpy(mem, value);
-    DtoAlignedStore(mem, dst);
-  } else {
-    // Store the address into the frame
-    DtoAlignedStore(value, dst);
-  }
-}
-
 static unsigned getVthisIdx(AggregateDeclaration *ad) {
   return getFieldGEPIndex(ad, ad->vthis);
 }
@@ -83,12 +66,14 @@ DValue *DtoNestedVariable(Loc &loc, Type *astype, VarDeclaration *vd,
   // get the nested context
   LLValue *ctx = nullptr;
   if (irfunc->nestedVar) {
-    // If this function has its own nested context struct, always load it.
+    Logger::println("Using own nested context of current function");
+
     ctx = irfunc->nestedVar;
     dwarfValue = ctx;
   } else if (irfunc->decl->isMember2()) {
-    // If this is a member function of a nested class without its own
-    // context, load the vthis member.
+    Logger::println(
+        "Current function is member of nested class, loading vthis");
+
     AggregateDeclaration *cd = irfunc->decl->isMember2();
     LLValue *val = irfunc->thisArg;
     if (cd->isClassDeclaration()) {
@@ -96,15 +81,17 @@ DValue *DtoNestedVariable(Loc &loc, Type *astype, VarDeclaration *vd,
     }
     ctx = DtoLoad(DtoGEPi(val, 0, getVthisIdx(cd), ".vthis"));
   } else {
-    // Otherwise, this is a simple nested function, load from the context
-    // argument.
+    Logger::println("Regular nested function, loading context arg");
+
     ctx = DtoLoad(irfunc->nestArg);
     dwarfValue = irfunc->nestArg;
     if (global.params.symdebug) {
       gIR->DBuilder.OpDeref(dwarfAddr);
     }
   }
+
   assert(ctx);
+  IF_LOG { Logger::cout() << "Context: " << *ctx << '\n'; }
 
   DtoCreateNestedContextType(vdparent->isFuncDeclaration());
   assert(isIrLocalCreated(vd));
@@ -112,11 +99,9 @@ DValue *DtoNestedVariable(Loc &loc, Type *astype, VarDeclaration *vd,
   ////////////////////////////////////
   // Extract variable from nested context
 
-  LLValue *val = DtoBitCast(ctx, LLPointerType::getUnqual(irfunc->frameType));
-  IF_LOG {
-    Logger::cout() << "Context: " << *val << '\n';
-    Logger::cout() << "of type: " << *irfunc->frameType << '\n';
-  }
+  const auto frameType = LLPointerType::getUnqual(irfunc->frameType);
+  IF_LOG { Logger::cout() << "casting to: " << *irfunc->frameType << '\n'; }
+  LLValue *val = DtoBitCast(ctx, frameType);
 
   IrLocal *const irLocal = getIrLocal(vd);
   const auto vardepth = irLocal->nestedDepth;
@@ -159,8 +144,7 @@ DValue *DtoNestedVariable(Loc &loc, Type *astype, VarDeclaration *vd,
     Logger::cout() << "Addr: " << *val << '\n';
     Logger::cout() << "of type: " << *val->getType() << '\n';
   }
-  if (byref || (vd->isParameter() && getIrParameter(vd)->arg &&
-                getIrParameter(vd)->arg->byref)) {
+  if (!isSpecialRefVar(vd) && (byref || vd->isRef() || vd->isOut())) {
     val = DtoAlignedLoad(val);
     // dwarfOpDeref(dwarfAddr);
     IF_LOG {
@@ -400,31 +384,12 @@ static void DtoCreateNestedContextType(FuncDeclaration *fd) {
     irLocal.nestedDepth = depth;
 
     LLType *t = nullptr;
-    if (vd->isParameter() && getIrParameter(vd)->arg) {
-      // Parameters that are part of the LLVM signature will have
-      // storage associated with them (to handle byref etc.), so
-      // handle those cases specially by storing a pointer instead
-      // of a value.
-      const IrParameter *irparam = getIrParameter(vd);
-      const bool refout = vd->storage_class & (STCref | STCout);
-      const bool lazy = vd->storage_class & STClazy;
-      const bool byref = irparam->arg->byref;
-      const bool isVthisPtr = irparam->isVthis && !byref;
-      if (!(refout || (byref && !lazy)) || isVthisPtr) {
-        // This will be copied to the nesting frame.
-        if (lazy) {
-          t = irparam->value->getType()->getContainedType(0);
-        } else {
-          t = DtoMemType(vd->type);
-        }
-      } else {
-        t = irparam->value->getType();
-      }
-    } else if (isSpecialRefVar(vd)) {
+    if (vd->isRef() || vd->isOut())
       t = DtoType(vd->type->pointerTo());
-    } else {
+    else if (vd->isParameter() && (vd->storage_class & STClazy))
+      t = getIrParameter(vd)->value->getType()->getContainedType(0);
+    else
       t = DtoMemType(vd->type);
-    }
 
     builder.addType(t, getTypeAllocSize(t));
 
@@ -503,7 +468,7 @@ void DtoCreateNestedContext(FuncDeclaration *fd) {
 
     // go through all nested vars and assign addresses where possible.
     for (auto vd : fd->closureVars) {
-      if (needsClosure && vd->needsAutoDtor()) {
+      if (needsClosure && vd->needsScopeDtor()) {
         // This should really be a front-end, not a glue layer error,
         // but we need to fix this in DMD too.
         vd->error("has scoped destruction, cannot build closure");
@@ -515,9 +480,12 @@ void DtoCreateNestedContext(FuncDeclaration *fd) {
         IF_LOG Logger::println("nested param: %s", vd->toChars());
         LOG_SCOPE
         IrParameter *parm = getIrParameter(vd);
+        assert(parm->value);
+        assert(parm->value->getType()->isPointerTy());
 
-        if (parm->arg && parm->arg->byref) {
-          storeVariable(vd, gep);
+        if (vd->isRef() || vd->isOut()) {
+          Logger::println("Captured by reference, copying pointer to nested frame");
+          DtoAlignedStore(parm->value, gep);
         } else {
           Logger::println("Copying to nested frame");
           // The parameter value is an alloca'd stack slot.

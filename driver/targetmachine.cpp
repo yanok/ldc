@@ -96,7 +96,11 @@ MipsABI::Type getMipsABI() {
 #endif
     if (dl.getPointerSizeInBits() == 64)
       return MipsABI::N64;
+#if LDC_LLVM_VER >= 309
+    else if (dl.getLargestLegalIntTypeSizeInBits() == 64)
+#else
     else if (dl.getLargestLegalIntTypeSize() == 64)
+#endif
       return MipsABI::N32;
     else
       return MipsABI::O32;
@@ -402,9 +406,11 @@ const llvm::Target *lookupTarget(const std::string &arch, llvm::Triple &triple,
 
     // Adjust the triple to match (if known), otherwise stick with the
     // given triple.
-    llvm::Triple::ArchType Type = llvm::Triple::getArchTypeForLLVMName(arch);
+    const auto Type = llvm::Triple::getArchTypeForLLVMName(arch);
     if (Type != llvm::Triple::UnknownArch) {
       triple.setArch(Type);
+      if (Type == llvm::Triple::x86)
+        triple.setArchName("i686"); // instead of i386
     }
   } else {
     std::string tempError;
@@ -421,7 +427,12 @@ const llvm::Target *lookupTarget(const std::string &arch, llvm::Triple &triple,
 llvm::TargetMachine *createTargetMachine(
     std::string targetTriple, std::string arch, std::string cpu,
     std::vector<std::string> attrs, ExplicitBitness::Type bitness,
-    FloatABI::Type floatABI, llvm::Reloc::Model relocModel,
+    FloatABI::Type floatABI,
+#if LDC_LLVM_VER >= 309
+    llvm::Optional<llvm::Reloc::Model> relocModel,
+#else
+    llvm::Reloc::Model relocModel,
+#endif
     llvm::CodeModel::Model codeModel, llvm::CodeGenOpt::Level codeGenOptLevel,
     bool noFramePointerElim, bool noLinkerStripDead) {
   // Determine target triple. If the user didn't explicitly specify one, use
@@ -436,10 +447,12 @@ llvm::TargetMachine *createTargetMachine(
     }
 
     // Handle -m32/-m64.
-    if (sizeof(void *) == 4 && bitness == ExplicitBitness::M64) {
+    if (sizeof(void *) != 8 && bitness == ExplicitBitness::M64) {
       triple = triple.get64BitArchVariant();
-    } else if (sizeof(void *) == 8 && bitness == ExplicitBitness::M32) {
+    } else if (sizeof(void *) != 4 && bitness == ExplicitBitness::M32) {
       triple = triple.get32BitArchVariant();
+      if (triple.getArch() == llvm::Triple::ArchType::x86)
+        triple.setArchName("i686"); // instead of i386
     }
   } else {
     triple = llvm::Triple(llvm::Triple::normalize(targetTriple));
@@ -506,7 +519,11 @@ llvm::TargetMachine *createTargetMachine(
   }
 
   // Handle cases where LLVM picks wrong default relocModel
+#if LDC_LLVM_VER >= 309
+  if (!relocModel.hasValue()) {
+#else
   if (relocModel == llvm::Reloc::Default) {
+#endif
     if (triple.isOSDarwin()) {
       // Darwin defaults to PIC (and as of 10.7.5/LLVM 3.1-3.3, TLS use leads
       // to crashes for non-PIC code). LLVM doesn't handle this.

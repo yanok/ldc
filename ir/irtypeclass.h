@@ -80,11 +80,14 @@ protected:
 
   /// Builds a vtable type given the type of the first entry and an array
   /// of all entries.
+  /// If first is nullptr for C++ interfaces, the vtbl_array will be added
+  /// as is without replacing the first entry.
   std::vector<llvm::Type *> buildVtblType(Type *first,
                                           FuncDeclarations *vtbl_array);
 
-  ///
-  void addBaseClassData(AggrTypeBuilder &builder, ClassDeclaration *base);
+  /// Adds the data members for the given class to the type builder, including
+  /// those inherited from base classes/interfaces.
+  void addClassData(AggrTypeBuilder &builder, ClassDeclaration *currCd);
 
   /// Adds the interface and all it's base interface to the interface
   /// to index map.

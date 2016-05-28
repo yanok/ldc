@@ -70,18 +70,32 @@ static std::string getOutputName(bool const sharedLib) {
   } else {
     result = "a.out";
   }
+
+  const char *extension = nullptr;
   if (sharedLib) {
-    std::string libExt = std::string(".") + global.dll_ext;
-    if (!endsWith(result, libExt)) {
-      if (global.params.targetTriple->getOS() != llvm::Triple::Win32) {
-        result = "lib" + result + libExt;
-      } else {
-        result.append(libExt);
-      }
+    extension = global.dll_ext;
+    if (global.params.targetTriple->getOS() != llvm::Triple::Win32) {
+      result = "lib" + result;
     }
-  } else if (global.params.targetTriple->isOSWindows() &&
-             !endsWith(result, ".exe")) {
-    result.append(".exe");
+  } else if (global.params.targetTriple->isOSWindows()) {
+    extension = "exe";
+  }
+
+  if (global.params.run) {
+    // If `-run` is passed, the executable is temporary and is removed
+    // after execution. Make sure the name does not collide with other files
+    // from other processes by creating a unique filename.
+    llvm::SmallString<128> tempFilename;
+    auto EC = llvm::sys::fs::createTemporaryFile(
+        result, extension ? extension : "", tempFilename);
+    if (!EC) {
+      result = tempFilename.str();
+    }
+  } else {
+    if (extension) {
+      result += ".";
+      result += extension;
+    }
   }
 
   return result;
@@ -153,7 +167,11 @@ static int linkObjToBinaryGcc(bool sharedLib, bool fullyStatic) {
     // Don't push -l and -L switches using -Xlinker, but pass them indirectly
     // via GCC. This makes sure user-defined paths take precedence over
     // GCC's builtin LIBRARY_PATHs.
-    if (!p[0] || !(p[0] == '-' && (p[1] == 'l' || p[1] == 'L'))) {
+    // Options starting with -shared and -static are not handled by
+    // the linker and must be passed to the driver.
+    auto str = llvm::StringRef(p);
+    if (!(str.startswith("-l") || str.startswith("-L") ||
+          str.startswith("-shared") || str.startswith("-static"))) {
       args.push_back("-Xlinker");
     }
     args.push_back(p);

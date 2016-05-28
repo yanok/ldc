@@ -112,6 +112,20 @@ static cl::opt<bool> staticFlag(
         "Create a statically linked binary, including all system dependencies"),
     cl::ZeroOrMore);
 
+#if LDC_LLVM_VER >= 309
+static inline llvm::Optional<llvm::Reloc::Model> getRelocModel() {
+  if (mRelocModel.getNumOccurrences()) {
+    llvm::Reloc::Model R = mRelocModel;
+    return R;
+  }
+  return llvm::None;
+}
+#else
+static inline llvm::Reloc::Model getRelocModel() {
+  return mRelocModel;
+}
+#endif
+
 void printVersion() {
   printf("LDC - the LLVM D compiler (%s):\n", global.ldc_version);
   printf("  based on DMD %s and LLVM %s\n", global.version,
@@ -167,6 +181,40 @@ static void processVersions(std::vector<std::string> &list, const char *type,
       }
     }
   }
+}
+
+// Helper function to handle -transition=*
+static void processTransitions(std::vector<std::string> &list) {
+    for (const auto &i : list) {
+        if (i == "?") {
+            printf("Language changes listed by -transition=id:\n");
+            printf("  = all           list information on all language changes\n");
+            printf("  = checkimports  give deprecation messages about 10378 anomalies\n");
+            printf("  = complex,14488 list all usages of complex or imaginary types\n");
+            printf("  = field,3449    list all non - mutable fields which occupy an object instance\n");
+            printf("  = import,10378  revert to single phase name lookup\n");
+            printf("  = tls           list all variables going into thread local storage\n");
+            exit(EXIT_SUCCESS);
+        } else if (i == "all") {
+            global.params.vtls = true;
+            global.params.vfield = true;
+            global.params.vcomplex = true;
+            global.params.bug10378 = true; // not set in DMD
+            global.params.check10378 = true; // not set in DMD
+        } else if (i == "checkimports") {
+            global.params.check10378 = true;
+        } else if (i == "complex" || i == "14488") {
+            global.params.vcomplex = true;
+        } else if (i == "field" || i == "3449") {
+            global.params.vfield = true;
+        } else if (i == "import" || i == "10378") {
+            global.params.bug10378 = true;
+        } else if (i == "tls") {
+            global.params.vtls = true;
+        } else {
+            error(Loc(), "Invalid transition %s", i.c_str());
+        }
+    }
 }
 
 // Helper function to handle -of, -od, etc.
@@ -300,6 +348,34 @@ static const char *tryGetExplicitConfFile(int argc, char **argv) {
   return nullptr;
 }
 
+static llvm::Triple tryGetExplicitTriple(int argc, char **argv) {
+  // most combinations of flags are illegal, this mimicks command line
+  //  behaviour for legal ones only
+  llvm::Triple triple(llvm::sys::getDefaultTargetTriple());
+  const char* mtriple = nullptr;
+  const char* march = nullptr;
+  for (int i = 1; i < argc; ++i) {
+    if (sizeof(void *) != 4 && strcmp(argv[i], "-m32") == 0) {
+      triple = triple.get32BitArchVariant();
+      if (triple.getArch() == llvm::Triple::ArchType::x86)
+        triple.setArchName("i686"); // instead of i386
+      return triple;
+    } else if (sizeof(void *) != 8 && strcmp(argv[i], "-m64") == 0)
+      return triple.get64BitArchVariant();
+    else if (strncmp(argv[i], "-mtriple=", 9) == 0)
+      mtriple = argv[i] + 9;
+    else if (strncmp(argv[i], "-march=", 7) == 0)
+      march = argv[i] + 7;
+  }
+  if (mtriple)
+      triple = llvm::Triple(llvm::Triple::normalize(mtriple));
+  if (march) {
+      std::string errorMsg; // ignore error, will show up later anyway
+      lookupTarget(march, triple, errorMsg); // modifies triple
+  }
+  return triple;
+}
+
 /// Parses switches from the command line, any response files and the global
 /// config file and sets up global.params accordingly.
 ///
@@ -326,8 +402,9 @@ static void parseCommandLine(int argc, char **argv, Strings &sourceFiles,
 
   ConfigFile cfg_file;
   const char *explicitConfFile = tryGetExplicitConfFile(argc, argv);
+  std::string cfg_triple = tryGetExplicitTriple(argc, argv).getTriple();
   // just ignore errors for now, they are still printed
-  cfg_file.read(explicitConfFile);
+  cfg_file.read(explicitConfFile, cfg_triple.c_str());
   final_args.insert(final_args.end(), cfg_file.switches_begin(),
                     cfg_file.switches_end());
 
@@ -388,6 +465,8 @@ static void parseCommandLine(int argc, char **argv, Strings &sourceFiles,
                   DebugCondition::addGlobalIdent);
   processVersions(versions, "version", VersionCondition::setGlobalLevel,
                   VersionCondition::addGlobalIdent);
+
+  processTransitions(transitions);
 
   global.params.output_o =
       (opts::output_o == cl::BOU_UNSET &&
@@ -518,7 +597,11 @@ static void parseCommandLine(int argc, char **argv, Strings &sourceFiles,
     error(Loc(), "-lib and -shared switches cannot be used together");
   }
 
+#if LDC_LLVM_VER >= 309
+  if (createSharedLib && !mRelocModel.getNumOccurrences()) {
+#else
   if (createSharedLib && mRelocModel == llvm::Reloc::Default) {
+#endif
     mRelocModel = llvm::Reloc::PIC_;
   }
 
@@ -979,7 +1062,7 @@ int cppmain(int argc, char **argv) {
   }
 
   gTargetMachine = createTargetMachine(
-      mTargetTriple, mArch, mCPU, mAttrs, bitness, mFloatABI, mRelocModel,
+      mTargetTriple, mArch, mCPU, mAttrs, bitness, mFloatABI, getRelocModel(),
       mCodeModel, codeGenOptLevel(), disableFpElim, disableLinkerStripDead);
 
 #if LDC_LLVM_VER >= 308
@@ -1000,6 +1083,9 @@ int cppmain(int argc, char **argv) {
     global.params.isLP64 = gDataLayout->getPointerSizeInBits() == 64;
     global.params.is64bit = triple->isArch64Bit();
     global.params.hasObjectiveC = objc_isSupported(*triple);
+    // mscoff enables slightly different handling of interface functions 
+    // in the front end
+    global.params.mscoff = triple->isKnownWindowsMSVCEnvironment();
   }
 
   // allocate the target abi
@@ -1156,7 +1242,7 @@ int cppmain(int argc, char **argv) {
       name = p;
     }
 
-    id = Identifier::idPool(name);
+    id = Identifier::idPool(name, strlen(name));
     auto m = Module::create(files.data[i], id, global.params.doDocComments,
                             global.params.doHdrGeneration);
     modules.push(m);

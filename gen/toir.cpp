@@ -332,7 +332,7 @@ public:
     result = DtoDeclarationExp(e->declaration);
 
     if (auto vd = e->declaration->isVarDeclaration()) {
-      if (!vd->isDataseg() && vd->edtor && !vd->noscope) {
+      if (!vd->isDataseg() && vd->needsScopeDtor()) {
         pushVarDtorCleanup(p, vd);
       }
     }
@@ -351,6 +351,10 @@ public:
       LLValue *V = e->cachedLvalue;
       result = new DVarValue(e->type, V);
       return;
+    }
+
+    if (auto fd = e->var->isFuncLiteralDeclaration()) {
+      genFuncLiteral(fd, nullptr);
     }
 
     result = DtoSymbolAddress(e->loc, e->type, e->var);
@@ -505,7 +509,7 @@ public:
     // Can't just override ConstructExp::toElem because not all TOKconstruct
     // operations are actually instances of ConstructExp... Long live the DMD
     // coding style!
-    if (e->memset & MemorySet_referenceInit) {
+    if (e->memset & referenceInit) {
       assert(e->op == TOKconstruct || e->op == TOKblit);
       assert(e->e1->op == TOKvar);
 
@@ -903,7 +907,7 @@ public:
         if (ce->e1->op == TOKdeclaration && ce->e2->op == TOKvar) {
           VarExp *ve = static_cast<VarExp *>(ce->e2);
           if (VarDeclaration *vd = ve->var->isVarDeclaration()) {
-            if (vd->edtor && !vd->noscope) {
+            if (vd->needsScopeDtor()) {
               Logger::println("Delaying edtor");
               delayedDtorVar = vd;
               delayedDtorExp = vd->edtor;
@@ -1219,36 +1223,29 @@ public:
     // special cases: `this(int) { this(); }` and `this(int) { super(); }`
     if (!e->var) {
       Logger::println("this exp without var declaration");
-      LLValue *v = p->func()->thisArg;
-      result = new DVarValue(e->type, v);
+      result = new DVarValue(e->type, p->func()->thisArg);
       return;
     }
-    // regular this expr
-    if (VarDeclaration *vd = e->var->isVarDeclaration()) {
-      LLValue *v;
-      Dsymbol *vdparent = vd->toParent2();
-      Identifier *ident = p->func()->decl->ident;
-      // In D1, contracts are treated as normal nested methods, 'this' is
-      // just passed in the context struct along with any used parameters.
-      if (ident == Id::ensure || ident == Id::require) {
-        Logger::println("contract this exp");
-        v = p->func()->nestArg;
-        v = DtoBitCast(v, DtoType(e->type)->getPointerTo());
-      } else if (vdparent != p->func()->decl) {
-        Logger::println("nested this exp");
-        result = DtoNestedVariable(e->loc, e->type, vd, e->type->ty == Tstruct);
-        return;
-      } else {
-        Logger::println("normal this exp");
-        v = p->func()->thisArg;
-      }
-      assert(!isSpecialRefVar(vd) && "Code not expected to handle special ref "
-                                     "vars, although it can easily be made "
-                                     "to.");
-      result = new DVarValue(e->type, v);
+
+    const auto vd = e->var->isVarDeclaration();
+    assert(vd);
+    assert(!isSpecialRefVar(vd) && "Code not expected to handle special ref "
+                                   "vars, although it can easily be made to.");
+
+    LLValue *v;
+    const auto ident = p->func()->decl->ident;
+    if (ident == Id::ensure || ident == Id::require) {
+      Logger::println("contract this exp");
+      v = DtoBitCast(p->func()->nestArg, DtoType(e->type)->getPointerTo());
+    } else if (vd->toParent2() != p->func()->decl) {
+      Logger::println("nested this exp");
+      result = DtoNestedVariable(e->loc, e->type, vd, e->type->ty == Tstruct);
+      return;
     } else {
-      llvm_unreachable("No VarDeclaration in ThisExp.");
+      Logger::println("normal this exp");
+      v = p->func()->thisArg;
     }
+    result = new DVarValue(e->type, v);
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -2366,16 +2363,9 @@ public:
 
   //////////////////////////////////////////////////////////////////////////////
 
-  void visit(FuncExp *e) override {
-    IF_LOG Logger::print("FuncExp::toElem: %s @ %s\n", e->toChars(),
-                         e->type->toChars());
-    LOG_SCOPE;
-
-    FuncLiteralDeclaration *fd = e->fd;
-    assert(fd);
-
+  void genFuncLiteral(FuncLiteralDeclaration *fd, FuncExp *e) {
     if ((fd->tok == TOKreserved || fd->tok == TOKdelegate) &&
-        e->type->ty == Tpointer) {
+        (e && e->type->ty == Tpointer)) {
       // This is a lambda that was inferred to be a function literal instead
       // of a delegate, so set tok here in order to get correct types/mangling.
       // Horrible hack, but DMD does the same thing.
@@ -2398,6 +2388,19 @@ public:
       assert(!fd->isNested());
     }
     assert(getIrFunc(fd)->func);
+  }
+
+  //////////////////////////////////////////////////////////////////////////////
+
+  void visit(FuncExp *e) override {
+    IF_LOG Logger::print("FuncExp::toElem: %s @ %s\n", e->toChars(),
+                         e->type->toChars());
+    LOG_SCOPE;
+
+    FuncLiteralDeclaration *fd = e->fd;
+    assert(fd);
+
+    genFuncLiteral(fd, e);
 
     if (fd->isNested()) {
       LLType *dgty = DtoType(e->type);
@@ -2500,17 +2503,10 @@ public:
                          e->type->toChars());
     LOG_SCOPE;
 
-    if (e->sinit) {
-      // Copied from VarExp::toElem, need to clean this mess up.
-      Type *sdecltype = e->sinit->type->toBasetype();
-      IF_LOG Logger::print("Sym: type = %s\n", sdecltype->toChars());
-      assert(sdecltype->ty == Tstruct);
-      TypeStruct *ts = static_cast<TypeStruct *>(sdecltype);
-      assert(ts->sym);
-      DtoResolveStruct(ts->sym);
-
-      LLValue *initsym = getIrAggr(ts->sym)->getInitSymbol();
-      initsym = DtoBitCast(initsym, DtoType(ts->pointerTo()));
+    if (e->useStaticInit) {
+      DtoResolveStruct(e->sd);
+      LLValue *initsym = getIrAggr(e->sd)->getInitSymbol();
+      initsym = DtoBitCast(initsym, DtoType(e->type->pointerTo()));
       result = new DVarValue(e->type, initsym);
       return;
     }

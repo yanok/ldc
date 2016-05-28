@@ -34,7 +34,7 @@ addons:
     - llvm-3.9-dev
 install:
   - if [ "${TRAVIS_OS_NAME}" = "linux" ]; then export CC="gcc-4.9"; export CXX="g++-4.9"; fi
-  - if [ "${TRAVIS_OS_NAME}" = "osx" ]; then brew update; brew install llvm37; brew install libconfig; fi;
+  - if [ "${TRAVIS_OS_NAME}" = "osx" ]; then brew update; brew install llvm38; brew install libconfig; fi;
   - eval "${DC} --version"
   - pip install --user lit
   - python -c "import lit; lit.main();" --version | head -n 1
@@ -51,20 +51,21 @@ matrix:
       d: ldc
       env: LLVM_CONFIG="llvm-config-3.7" OPTS="-DMULTILIB=ON"
     - os: linux
-      d: ldc
+      d: ldc-0.17.1
       env: LLVM_CONFIG="llvm-config-3.6" OPTS="-DBUILD_SHARED_LIBS=ON"
     - os: linux
       d: dmd
       env: LLVM_CONFIG="llvm-config-3.5" OPTS="-DTEST_COVERAGE=ON"
     - os: osx
       d: ldc
-      env: LLVM_CONFIG="llvm-config-3.7" TEST_CONFIG="Debug"
+      env: LLVM_CONFIG="llvm-config-3.8" TEST_CONFIG="Debug"
     - os: osx
       d: dmd
-      env: LLVM_CONFIG="llvm-config-3.7" TEST_CONFIG="Release"
+      env: LLVM_CONFIG="llvm-config-3.8" TEST_CONFIG="Release"
   allow_failures:
     - env: LLVM_CONFIG="llvm-config-3.9"
 script:
+  - cmake --version
   - cmake -DLLVM_CONFIG=$(which ${LLVM_CONFIG}) $OPTS .
   - make -j3
   # Outputs some environment info, plus makes sure we only run the test suite

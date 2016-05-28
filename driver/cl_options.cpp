@@ -235,6 +235,11 @@ cl::list<std::string> versions(
     cl::desc("Compile in version code >= <level> or identified by <idents>"),
     cl::value_desc("level/idents"), cl::CommaSeparated);
 
+cl::list<std::string> transitions(
+    "transition",
+    cl::desc("help with language change identified by <idents>, use ? for list"),
+    cl::value_desc("idents"), cl::CommaSeparated);
+
 static StringsAdapter linkSwitchStore("L", global.params.linkswitches);
 static cl::list<std::string, StringsAdapter>
     linkerSwitches("L", cl::desc("Pass <linkerflag> to the linker"),
@@ -274,10 +279,14 @@ cl::opt<std::string>
 
 cl::opt<llvm::Reloc::Model> mRelocModel(
     "relocation-model", cl::desc("Relocation model"),
+#if LDC_LLVM_VER < 309
     cl::init(llvm::Reloc::Default),
+#endif
     cl::values(
+#if LDC_LLVM_VER < 309
         clEnumValN(llvm::Reloc::Default, "default",
                    "Target default relocation model"),
+#endif
         clEnumValN(llvm::Reloc::Static, "static", "Non-relocatable code"),
         clEnumValN(llvm::Reloc::PIC_, "pic",
                    "Fully relocatable, position independent code"),
@@ -367,7 +376,7 @@ cl::opt<bool, true>
               cl::location(global.params.singleObj));
 
 cl::opt<uint32_t, true> hashThreshold(
-    "hashthres",
+    "hash-threshold",
     cl::desc("hash symbol names longer than this threshold (experimental)"),
     cl::location(global.params.hashThreshold), cl::init(0));
 

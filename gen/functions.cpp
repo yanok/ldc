@@ -407,11 +407,26 @@ void DtoResolveFunction(FuncDeclaration *fdecl) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+namespace {
+
 void applyParamAttrsToLLFunc(TypeFunction *f, IrFuncTy &irFty,
                              llvm::Function *func) {
   AttrSet newAttrs = AttrSet::extractFunctionAndReturnAttributes(func);
   newAttrs.merge(irFty.getParamAttrs(gABI->passThisBeforeSret(f)));
   func->setAttributes(newAttrs);
+}
+
+void applyDefaultMathAttributes(IrFunction *irFunc) {
+  // TODO: implement commandline switches to change the default values.
+
+  // "unsafe-fp-math" is not properly reset in LLVM between function definitions,
+  // i.e. if a function does not define a value for "unsafe-fp-math" it will be
+  // compiled using the value of the previous function. Therefore, each function
+  // must explicitly define the value (clang does the same).
+  // See https://llvm.org/bugs/show_bug.cgi?id=23172
+  irFunc->func->addFnAttr("unsafe-fp-math", "false");
+}
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -496,7 +511,10 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
     }
   }
 
-  applyFuncDeclUDAs(fdecl, func);
+  // Set default math function attributes here, such that they can be overridden
+  // by UDAs.
+  applyDefaultMathAttributes(irFunc);
+  applyFuncDeclUDAs(fdecl, irFunc);
 
   // main
   if (fdecl->isMain()) {
@@ -587,13 +605,10 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
       continue;
     }
 
-    Dsymbol *const argsym = (*fdecl->parameters)[arg->parametersIdx];
-    VarDeclaration *argvd = argsym->isVarDeclaration();
-    assert(argvd);
+    auto *const vd = (*fdecl->parameters)[arg->parametersIdx];
+    iarg->setName(vd->ident->toChars() + llvm::Twine("_arg"));
 
-    iarg->setName(argvd->ident->toChars() + llvm::Twine("_arg"));
-
-    IrParameter *irParam = getIrParameter(argvd, true);
+    IrParameter *irParam = getIrParameter(vd, true);
     irParam->arg = arg;
     irParam->value = &(*iarg);
   }
@@ -621,6 +636,28 @@ static LinkageWithCOMDAT lowerFuncLinkage(FuncDeclaration *fdecl) {
   }
 
   return DtoLinkage(fdecl);
+}
+
+// LDC has the same problem with destructors of struct arguments in closures
+// as DMD, so we copy the failure detection
+void verifyScopedDestructionInClosure(FuncDeclaration* fd) {
+  for (size_t i = 0; i < fd->closureVars.dim; i++) {
+    VarDeclaration *v = fd->closureVars[i];
+  
+    // Hack for the case fail_compilation/fail10666.d, until
+    // proper issue https://issues.dlang.org/show_bug.cgi?id=5730 fix will come.
+    bool isScopeDtorParam = v->edtor && (v->storage_class & STCparameter);
+    if (v->needsScopeDtor() || isScopeDtorParam) {
+      // Because the value needs to survive the end of the scope!
+      v->error("has scoped destruction, cannot build closure");
+    }
+    if (v->isargptr) {
+      // See https://issues.dlang.org/show_bug.cgi?id=2479
+      // This is actually a bug, but better to produce a nice
+      // message at compile time rather than memory corruption at runtime
+      v->error("cannot reference variadic arguments from closure");
+    }
+  }
 }
 
 void DtoDefineFunction(FuncDeclaration *fd) {
@@ -713,6 +750,9 @@ void DtoDefineFunction(FuncDeclaration *fd) {
     }
   }
 
+  if (fd->needsClosure())
+      verifyScopedDestructionInClosure(fd);
+
   assert(fd->ident != Id::empty);
 
   if (fd->semanticRun != PASSsemantic3done) {
@@ -797,6 +837,13 @@ void DtoDefineFunction(FuncDeclaration *fd) {
   // assert(gIR->scopes.empty());
   gIR->scopes.push_back(IRScope(beginbb));
 
+  // Set the FastMath options for this function scope.
+#if LDC_LLVM_VER >= 308
+  gIR->scopes.back().builder.setFastMathFlags(irFunc->FMF);
+#else
+  gIR->scopes.back().builder.SetFastMathFlags(irFunc->FMF);
+#endif
+
   // create alloca point
   // this gets erased when the function is complete, so alignment etc does not
   // matter at all
@@ -828,7 +875,15 @@ void DtoDefineFunction(FuncDeclaration *fd) {
 
     LLValue *thismem = thisvar;
     if (!irFty.arg_this->byref) {
-      thismem = DtoAllocaDump(thisvar, 0, "this");
+      if (fd->interfaceVirtual) {
+        // Adjust the 'this' pointer instead of using a thunk
+        LLType *targetThisType = thismem->getType();
+        thismem = DtoBitCast(thismem, getVoidPtrType());
+        auto off = DtoConstInt(-fd->interfaceVirtual->offset);
+        thismem = DtoGEP1(thismem, off, true);
+        thismem = DtoBitCast(thismem, targetThisType);
+      }
+      thismem = DtoAllocaDump(thismem, 0, "this");
       irFunc->thisArg = thismem;
     }
 
@@ -850,10 +905,7 @@ void DtoDefineFunction(FuncDeclaration *fd) {
     // index in the IrFuncTy args array separately.
     size_t llArgIdx = 0;
     for (size_t i = 0; i < fd->parameters->dim; ++i) {
-      Dsymbol *const argsym = (*fd->parameters)[i];
-      VarDeclaration *const vd = argsym->isVarDeclaration();
-      assert(vd);
-      const bool refout = vd->storage_class & (STCref | STCout);
+      auto *const vd = (*fd->parameters)[i];
 
       IrParameter *irparam = getIrParameter(vd);
       Type *debugInfoType = vd->type;
@@ -864,9 +916,7 @@ void DtoDefineFunction(FuncDeclaration *fd) {
         irparam = getIrParameter(vd, true);
         irparam->value = DtoAlloca(vd, vd->ident->toChars());
       } else {
-        const bool lazy = vd->storage_class & STClazy;
-        const bool firstClassVal = !refout && (!irparam->arg->byref || lazy);
-        if (firstClassVal) {
+        if (!irparam->arg->byref) {
           // alloca a stack slot for this first class value arg
           LLValue *mem = DtoAlloca(irparam->arg->type, vd->ident->toChars());
 
@@ -881,11 +931,8 @@ void DtoDefineFunction(FuncDeclaration *fd) {
         ++llArgIdx;
       }
 
-      if (global.params.symdebug &&
-          !(isaArgument(irparam->value) &&
-            isaArgument(irparam->value)->hasByValAttr())) {
+      if (global.params.symdebug)
         gIR->DBuilder.EmitLocalVariable(irparam->value, vd, debugInfoType);
-      }
     }
   }
 

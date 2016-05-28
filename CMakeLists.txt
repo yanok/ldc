@@ -12,6 +12,11 @@ include(CheckIncludeFile)
 include(CheckLibraryExists)
 include(CheckCXXCompilerFlag)
 
+# The script currently only supports the DMD-style commandline interface
+if (NOT D_COMPILER_DMD_COMPAT)
+    message(FATAL_ERROR "We currently only support building using a D compiler with a DMD-compatible commandline interface. (try 'ldmd2' or 'gdmd')")
+endif()
+
 #
 # Locate LLVM.
 #
@@ -52,8 +57,8 @@ endfunction()
 set(LDC_VERSION "1.0.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   70)
-set(DMDFE_FIX_LEVEL       2) # Comment out if not used
+set(DMDFE_PATCH_VERSION   71)
+set(DMDFE_FIX_LEVEL       0) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -109,13 +114,17 @@ endif()
 # Setup D compiler flags and linker flags for phobos (system linker) etc. We use
 # DMD syntax for all the flags so we can work with both DMD and LDMD.
 set(DDMD_DFLAGS "-wi")
-if(CMAKE_BUILD_TYPE MATCHES "Debug")
-    append("-g -link-debuglib" DDMD_FLAGS)
-elseif(CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
-    append("-g -O -inline -release" DDMD_DFLAGS)
-else()
-    # Default to a Release build type
-    append("-O -inline -release" DDMD_DFLAGS)
+set(DDMD_LFLAGS "")
+if(NOT MSVC_IDE)
+    # for multi-config builds, these options have to be added later to the custom command
+    if(CMAKE_BUILD_TYPE MATCHES "Debug")
+        append("-g -link-debuglib" DDMD_FLAGS)
+    elseif(CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
+        append("-g -O -inline -release" DDMD_DFLAGS)
+    else()
+        # Default to a Release build type
+        append("-O -inline -release" DDMD_DFLAGS)
+    endif()
 endif()
 
 if(MSVC)
@@ -138,14 +147,14 @@ if(MSVC)
     # Host DMD/LDMD will default to linking against the static MSVC runtime.
     # So disable some default libs based on CMAKE_C_FLAGS_RELEASE.
     if(CMAKE_C_FLAGS_RELEASE MATCHES "(^| )[/-]MD( |$)")
-        append("-L/DEFAULTLIB:msvcrt -L/NODEFAULTLIB:libcmt" DDMD_DFLAGS)
+        append("-L/NODEFAULTLIB:libcmt" DDMD_LFLAGS)
         if(MSVC_VERSION GREATER 1800) # VS 2015+
-            append("-L/NODEFAULTLIB:libvcruntime" DDMD_DFLAGS)
+            append("-L/NODEFAULTLIB:libvcruntime" DDMD_LFLAGS)
         endif()
     else()
-        append("-L/DEFAULTLIB:libcmt -L/NODEFAULTLIB:msvcrt" DDMD_DFLAGS)
+        append("-L/NODEFAULTLIB:msvcrt" DDMD_LFLAGS)
         if(MSVC_VERSION GREATER 1800) # VS 2015+
-            append("-L/NODEFAULTLIB:vcruntime" DDMD_DFLAGS)
+            append("-L/NODEFAULTLIB:vcruntime" DDMD_LFLAGS)
         endif()
     endif()
 endif()
@@ -226,14 +235,22 @@ string(REPLACE "-Werror " "" LLVM_CXXFLAGS ${LLVM_CXXFLAGS})
 if (UNIX AND NOT "${LLVM_LDFLAGS}" STREQUAL "")
     # LLVM_LDFLAGS may contain -l-lld which is a wrong library reference (AIX)
     string(REPLACE "-l-lld " "-lld " LLVM_LDFLAGS ${LLVM_LDFLAGS})
-    # LLVM_LDFLAGS may have a space at the end
-    string(REGEX REPLACE " $" "" LLVM_LDFLAGS ${LLVM_LDFLAGS})
+endif()
+if(MSVC)
+    separate_arguments(LLVM_LDFLAGS WINDOWS_COMMAND "${LLVM_LDFLAGS}")
+else()
+    separate_arguments(LLVM_LDFLAGS UNIX_COMMAND "${LLVM_LDFLAGS}")
 endif()
 # LLVM_CXXFLAGS may contain -Wcovered-switch-default and -fcolor-diagnostics
 # which are clang-only options
 if(CMAKE_COMPILER_IS_GNUCXX)
     string(REPLACE "-Wcovered-switch-default " "" LLVM_CXXFLAGS ${LLVM_CXXFLAGS})
     string(REPLACE "-fcolor-diagnostics " "" LLVM_CXXFLAGS ${LLVM_CXXFLAGS})
+endif()
+# LLVM_CXXFLAGS may contain -Wno-maybe-uninitialized
+# which is gcc-only options
+if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")
+    string(REPLACE "-Wno-maybe-uninitialized " "" LLVM_CXXFLAGS ${LLVM_CXXFLAGS})
 endif()
 
 
@@ -449,7 +466,7 @@ append("-DIN_WEKA" CMAKE_CXX_FLAGS)     # Define to enable the Weka modification
 append("-version=IN_LLVM" DDMD_DFLAGS)
 append("-DIN_LLVM" CMAKE_CXX_FLAGS)
 append("-DOPAQUE_VTBLS" CMAKE_CXX_FLAGS)
-append("-DLDC_INSTALL_PREFIX=\\\"${CMAKE_INSTALL_PREFIX}\\\"" CMAKE_CXX_FLAGS)
+append("-DLDC_INSTALL_PREFIX=\"${CMAKE_INSTALL_PREFIX}\"" CMAKE_CXX_FLAGS)
 append("-DLDC_LLVM_VER=${LDC_LLVM_VER}" CMAKE_CXX_FLAGS)
 
 if(GENERATE_OFFTI)
@@ -464,19 +481,6 @@ if(LLVM_ENABLE_ASSERTIONS)
     string(REGEX REPLACE "(^| )[/-]D *NDEBUG( |$)" "\\1-UNDEBUG\\2" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
     string(REGEX REPLACE "(^| )[/-]D *NDEBUG( |$)" "\\1-UNDEBUG\\2" CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL}")
     string(REGEX REPLACE "(^| )[/-]D *NDEBUG( |$)" "\\1-UNDEBUG\\2" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
-endif()
-
-#
-# Check endianess.
-# There is no realiable way to delegate the work to the compiler.
-# E.g. gcc up to version 4.6 defines __LITTLE_ENDIAN, but not 4.7
-#
-include(TestBigEndian)
-test_big_endian(BIGENDIAN)
-if(${BIGENDIAN})
-    append("-D__BIG_ENDIAN__" CMAKE_CXX_FLAGS)
-else()
-    append("-D__LITTLE_ENDIAN__" CMAKE_CXX_FLAGS)
 endif()
 
 #
@@ -515,7 +519,7 @@ set(TEST_COVERAGE OFF CACHE BOOL "instrument compiler for code coverage analysis
 if(TEST_COVERAGE)
     if(CMAKE_COMPILER_IS_GNUCXX OR (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang"))
         append("-O0 -g -fprofile-arcs -ftest-coverage" EXTRA_CXXFLAGS)
-        append("-lgcov" LLVM_LDFLAGS)
+        list(APPEND LLVM_LDFLAGS "-lgcov")
     else()
         message(WARNING "Coverage testing is not available.")
     endif()
@@ -544,54 +548,69 @@ set_target_properties(
     LINK_FLAGS "${SANITIZE_LDFLAGS}"
 )
 # LDFLAGS should actually be in target property LINK_FLAGS, but this works, and gets around linking problems
-target_link_libraries(${LDC_LIB} ${LLVM_LIBRARIES} ${PTHREAD_LIBS} ${TERMINFO_LIBS} "${LLVM_LDFLAGS}")
+target_link_libraries(${LDC_LIB} ${LLVM_LIBRARIES} ${PTHREAD_LIBS} ${TERMINFO_LIBS} ${LLVM_LDFLAGS})
 if(WIN32)
     target_link_libraries(${LDC_LIB} imagehlp psapi)
 elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
     target_link_libraries(${LDC_LIB} dl)
 endif()
 
-if(WIN32)
-    set(EXECUTABLE_EXTENSION ".exe")
-endif()
-set(LDC_EXE_FULL ${PROJECT_BINARY_DIR}/bin/${LDC_EXE_NAME}${EXECUTABLE_EXTENSION})
-set(LDMD_EXE_FULL ${PROJECT_BINARY_DIR}/bin/${LDMD_EXE_NAME}${EXECUTABLE_EXTENSION})
+set(LDC_EXE_FULL ${PROJECT_BINARY_DIR}/bin/${LDC_EXE_NAME}${CMAKE_EXECUTABLE_SUFFIX})
+set(LDMD_EXE_FULL ${PROJECT_BINARY_DIR}/bin/${LDMD_EXE_NAME}${CMAKE_EXECUTABLE_SUFFIX})
 add_custom_target(${LDC_EXE} ALL DEPENDS ${LDC_EXE_FULL})
 add_custom_target(${LDMD_EXE} ALL DEPENDS ${LDMD_EXE_FULL})
-string (REPLACE ";" " " LDC_LINKERFLAG_LIST "${SANITIZE_LDFLAGS} ${WINDOWS_STACK_SIZE} ${LIBCONFIG_LIBRARY} ${LLVM_LIBRARIES} ${LLVM_LDFLAGS}")
-string (REPLACE "-Wl," "" LDC_LINKERFLAG_LIST ${LDC_LINKERFLAG_LIST})
-separate_arguments(LDC_LINKERFLAG_LIST WINDOWS_COMMAND ${LDC_LINKERFLAG_LIST})
+set(LDC_LINKERFLAG_LIST "${SANITIZE_LDFLAGS};${WINDOWS_STACK_SIZE};${LIBCONFIG_LIBRARY};${LLVM_LIBRARIES};${LLVM_LDFLAGS}")
 set(tempVar "")
-FOREACH(f ${LDC_LINKERFLAG_LIST})
-      append("-L${f}" tempVar)
-ENDFOREACH(f)
+foreach(f ${LDC_LINKERFLAG_LIST})
+    string (REPLACE "-Wl," "" f ${f})
+    string (REPLACE "-LIBPATH:" "/LIBPATH:" f ${f})
+    append("-L\"${f}\"" tempVar)
+endforeach(f)
 if(MSVC)
     # Issue 1297
     # The default system-allocated stack size is 8MB on Linux and Mac, but only 1MB on Windows
     # Set LDC's stack to 8MB also on Windows:
     append("-L/STACK:8388608" tempVar)
 else()
-    if (${CMAKE_EXE_LINKER_FLAGS} MATCHES ".*stdlib=libc\\+\\+.*")
-        message(STATUS "Linking with libc++")
-        append("-L-lc++" tempVar)
+    if(${D_COMPILER_ID} STREQUAL "LDC" OR ${D_COMPILER_ID} STREQUAL "LDMD")
+        # Translate flags from CMAKE_EXE_LINKER_FLAGS
+        if(NOT "${CMAKE_EXE_LINKER_FLAGS}" STREQUAL "")
+            separate_arguments(flags UNIX_COMMAND "${CMAKE_EXE_LINKER_FLAGS}")
+            foreach(f ${flags})
+                append("-L${f}" tempVar)
+            endforeach()
+        endif()
+        # Use the C++ compiler for linking - only for ldc or ldmd.
+        append("-gcc=${CMAKE_CXX_COMPILER}" tempVar)
     else()
+        # Link against libstdc++
         append("-L-lstdc++" tempVar)
     endif()
 endif()
 
-separate_arguments(LDC_FLAG_LIST WINDOWS_COMMAND "${tempVar} ${D_COMPILER_FLAGS} ${DDMD_DFLAGS}")
-add_custom_command(
-    OUTPUT ${LDC_EXE_FULL}
-    COMMAND ${D_COMPILER} -L$<TARGET_LINKER_FILE:${LDC_LIB}> ${LDC_FLAG_LIST} -I${PROJECT_SOURCE_DIR}/${DDMDFE_PATH} -of${LDC_EXE_FULL} ${LDC_D_SOURCE_FILES}
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    DEPENDS ${LDC_D_SOURCE_FILES} ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.d ${LDC_LIB}
-)
-
+# CONFIG generator expressions need to be repeated due to https://cmake.org/Bug/view.php?id=14353
+separate_arguments(LDC_FLAG_LIST WINDOWS_COMMAND "${tempVar} ${D_COMPILER_FLAGS} ${DDMD_DFLAGS} ${DDMD_LFLAGS}")
+if(MSVC_IDE)
+    add_custom_command(
+        OUTPUT ${LDC_EXE_FULL}
+        COMMAND ${D_COMPILER} -L$<TARGET_LINKER_FILE:${LDC_LIB}> ${LDC_FLAG_LIST} -I${PROJECT_SOURCE_DIR}/${DDMDFE_PATH} -of${LDC_EXE_FULL} ${LDC_D_SOURCE_FILES} $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-g> $<$<NOT:$<CONFIG:Debug>>:-O> $<$<NOT:$<CONFIG:Debug>>:-inline> $<$<NOT:$<CONFIG:Debug>>:-release>
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        DEPENDS ${LDC_D_SOURCE_FILES} ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.d ${LDC_LIB}
+    )
+else()
+    add_custom_command(
+        OUTPUT ${LDC_EXE_FULL}
+        COMMAND ${D_COMPILER} -L$<TARGET_LINKER_FILE:${LDC_LIB}> ${LDC_FLAG_LIST} -I${PROJECT_SOURCE_DIR}/${DDMDFE_PATH} -of${LDC_EXE_FULL} ${LDC_D_SOURCE_FILES}
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        DEPENDS ${LDC_D_SOURCE_FILES} ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.d ${LDC_LIB}
+    )
+endif()
 
 if(MSVC_IDE)
     # the IDE generator is a multi-config one
     # so copy the config file into the correct bin subfolder
-    add_custom_command(TARGET ${LDC_EXE} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/bin/${LDC_EXE}.conf $<TARGET_FILE_DIR:${LDC_EXE}> COMMENT "Copy config file ${LDC_EXE}.conf")
+    # (different outputs no longer feasible for custom commands, so disabled)
+    #    add_custom_command(TARGET ${LDC_EXE} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/bin/${LDC_EXE}.conf $<TARGET_FILE_DIR:${LDC_EXE}> COMMENT "Copy config file ${LDC_EXE}.conf")
 endif()
 
 
@@ -609,7 +628,7 @@ else()
     string(REGEX REPLACE "/llvm(/IR)?$" "" LLVM_INTRINSIC_TD_PATH ${LLVM_INTRINSIC_TD_PATH})
     message(STATUS "Using path for Intrinsics.td: ${LLVM_INTRINSIC_TD_PATH}")
 endif()
-append("-DLLVM_INTRINSIC_TD_PATH=\\\"${LLVM_INTRINSIC_TD_PATH}\\\"" CMAKE_CXX_FLAGS)
+append("-DLLVM_INTRINSIC_TD_PATH=\"${LLVM_INTRINSIC_TD_PATH}\"" CMAKE_CXX_FLAGS )
 
 add_executable(gen_gccbuiltins utils/gen_gccbuiltins.cpp)
 
@@ -619,7 +638,7 @@ set_target_properties(
     COMPILE_FLAGS "${LLVM_CXXFLAGS} ${LDC_CXXFLAGS}"
     LINK_FLAGS "${SANITIZE_LDFLAGS}"
 )
-target_link_libraries(gen_gccbuiltins ${LLVM_TABLEGEN_LIBRARY} ${LLVM_LIBRARIES} ${PTHREAD_LIBS} ${TERMINFO_LIBS} ${CMAKE_DL_LIBS} "${LLVM_LDFLAGS}")
+target_link_libraries(gen_gccbuiltins ${LLVM_TABLEGEN_LIBRARY} ${LLVM_LIBRARIES} ${PTHREAD_LIBS} ${TERMINFO_LIBS} ${CMAKE_DL_LIBS} ${LLVM_LDFLAGS})
 if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
     target_link_libraries(gen_gccbuiltins dl)
 endif()
@@ -635,7 +654,7 @@ if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${FILECHECK_SRC})
         COMPILE_FLAGS "${LLVM_CXXFLAGS} ${LDC_CXXFLAGS}"
         LINK_FLAGS "${SANITIZE_LDFLAGS}"
     )
-    target_link_libraries(FileCheck  ${LLVM_LIBRARIES} ${TERMINFO_LIBS} ${CMAKE_DL_LIBS} "${LLVM_LDFLAGS}")
+    target_link_libraries(FileCheck  ${LLVM_LIBRARIES} ${TERMINFO_LIBS} ${CMAKE_DL_LIBS} ${LLVM_LDFLAGS})
 else()
     message(STATUS "Skip building FileCheck, assuming it can be found in LLVM bin directory")
 endif()
@@ -648,7 +667,7 @@ set_target_properties(
     COMPILE_FLAGS "${LLVM_CXXFLAGS} ${LDC_CXXFLAGS}"
     LINK_FLAGS "${SANITIZE_LDFLAGS}"
 )
-target_link_libraries(not  ${LLVM_LIBRARIES} ${TERMINFO_LIBS} ${CMAKE_DL_LIBS} "${LLVM_LDFLAGS}")
+target_link_libraries(not  ${LLVM_LIBRARIES} ${TERMINFO_LIBS} ${CMAKE_DL_LIBS} ${LLVM_LDFLAGS})
 
 #
 # LDMD
