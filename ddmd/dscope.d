@@ -152,6 +152,9 @@ struct Scope
     // linkage for external functions
     LINK linkage = LINKd;
 
+    // mangle type
+    CPPMANGLE cppmangle = CPPMANGLE.def;
+
     // inlining strategy for functions
     PINLINE inlining = PINLINEdefault;
 
@@ -166,6 +169,11 @@ struct Scope
 
     // user defined attributes
     UserAttributeDeclaration userAttribDecl;
+
+version(IN_LLVM)
+{
+    bool emitInstrumentation = true;   // whether to emit instrumentation with -fprofile-instr-generate
+}
 
     DocComment* lastdc;        // documentation comment for last symbol at this scope
     uint[void*] anchorCounts;  // lookup duplicate anchor name count
@@ -737,6 +745,7 @@ else
         this.func = sc.func;
         this.slabel = sc.slabel;
         this.linkage = sc.linkage;
+        this.cppmangle = sc.cppmangle;
         this.inlining = sc.inlining;
         this.protection = sc.protection;
         this.explicitProtection = sc.explicitProtection;

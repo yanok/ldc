@@ -19,11 +19,16 @@
 #include "gen/optimizer.h"
 #include "gen/programs.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Linker/Linker.h"
+#include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/SourceMgr.h"
 #if _WIN32
 #include "llvm/Support/SystemUtils.h"
+#include "llvm/Support/ConvertUTF.h"
 #include <Windows.h>
 #endif
 
@@ -103,6 +108,48 @@ static std::string getOutputName(bool const sharedLib) {
 
 //////////////////////////////////////////////////////////////////////////////
 
+namespace {
+
+#if LDC_LLVM_VER >= 306
+/// Insert an LLVM bitcode file into the module
+void insertBitcodeIntoModule(const char *bcFile, llvm::Module &M,
+                             llvm::LLVMContext &Context) {
+  Logger::println("*** Linking-in bitcode file %s ***", bcFile);
+
+  llvm::SMDiagnostic Err;
+  std::unique_ptr<llvm::Module> loadedModule(
+      getLazyIRFileModule(bcFile, Err, Context));
+  if (!loadedModule) {
+    error(Loc(), "Error when loading LLVM bitcode file: %s", bcFile);
+    fatal();
+  }
+#if LDC_LLVM_VER >= 308
+  llvm::Linker(M).linkInModule(std::move(loadedModule));
+#else
+  llvm::Linker(&M).linkInModule(loadedModule.release());
+#endif
+}
+#endif
+}
+
+/// Insert LLVM bitcode files into the module
+void insertBitcodeFiles(llvm::Module &M, llvm::LLVMContext &Ctx,
+                        Array<const char *> &bitcodeFiles) {
+#if LDC_LLVM_VER >= 306
+  for (const char *fname : bitcodeFiles) {
+    insertBitcodeIntoModule(fname, M, Ctx);
+  }
+#else
+  if (!bitcodeFiles.empty()) {
+    error(Loc(),
+          "Passing LLVM bitcode files to LDC is not supported for LLVM < 3.6");
+    fatal();
+  }
+#endif
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 static std::string gExePath;
 
 static int linkObjToBinaryGcc(bool sharedLib, bool fullyStatic) {
@@ -118,6 +165,21 @@ static int linkObjToBinaryGcc(bool sharedLib, bool fullyStatic) {
   for (unsigned i = 0; i < global.params.objfiles->dim; i++) {
     const char *p = static_cast<const char *>(global.params.objfiles->data[i]);
     args.push_back(p);
+  }
+
+  // Link with profile-rt library when generating an instrumented binary.
+  // profile-rt uses Phobos (MD5 hashing) and therefore must be passed on the
+  // commandline before Phobos.
+  if (global.params.genInstrProf) {
+#if LDC_LLVM_VER >= 308
+    if (global.params.targetTriple->isOSLinux()) {
+      // For Linux, explicitly define __llvm_profile_runtime as undefined
+      // symbol, so that the initialization part of profile-rt is linked in.
+      args.push_back(
+          ("-Wl,-u," + llvm::getInstrProfRuntimeHookVarName()).str());
+    }
+#endif
+    args.push_back("-lldc-profile-rt");
   }
 
   // user libs
@@ -182,13 +244,17 @@ static int linkObjToBinaryGcc(bool sharedLib, bool fullyStatic) {
   switch (global.params.targetTriple->getOS()) {
   case llvm::Triple::Linux:
     addSoname = true;
-    if (!opts::disableLinkerStripDead) {
+    // Make sure we don't do --gc-sections when generating a profile-
+    // instrumented binary. The runtime relies on magic sections, which
+    // would be stripped by gc-section on older version of ld, see bug:
+    // https://sourceware.org/bugzilla/show_bug.cgi?id=19161
+    if (!opts::disableLinkerStripDead && !global.params.genInstrProf) {
       args.push_back("-Wl,--gc-sections");
     }
     if (global.params.targetTriple->getEnvironment() == llvm::Triple::Android) {
-        args.push_back("-ldl");
-        args.push_back("-lm");
-        break;
+      args.push_back("-ldl");
+      args.push_back("-lm");
+      break;
     }
     args.push_back("-lrt");
   // fallthrough
@@ -266,8 +332,7 @@ static int linkObjToBinaryGcc(bool sharedLib, bool fullyStatic) {
       default:
         if (global.params.is64bit) {
           args.push_back("-m64");
-        }
-        else {
+        } else {
           args.push_back("-m32");
         }
       }
@@ -362,9 +427,17 @@ int executeAndWait(const char *commandLine) {
 
   DWORD exitCode;
 
+#if UNICODE
+  std::wstring wcommandLine;
+  if (!llvm::ConvertUTF8toWide(commandLine, wcommandLine))
+    return -3;
+  auto cmdline = const_cast<wchar_t *>(wcommandLine.data());
+#else
+  auto cmdline = const_cast<char *>(commandLine);
+#endif
   // according to MSDN, only CreateProcessW (unicode) may modify the passed
   // command line
-  if (!CreateProcess(NULL, const_cast<char *>(commandLine), NULL, NULL, TRUE, 0,
+  if (!CreateProcess(NULL, cmdline, NULL, NULL, TRUE, 0,
                      NULL, NULL, &si, &pi)) {
     exitCode = -1;
   } else {
@@ -399,7 +472,8 @@ int executeMsvcToolAndWait(const std::string &tool,
 
     auto comspecEnv = getenv("ComSpec");
     if (!comspecEnv) {
-      warning(Loc(), "'ComSpec' environment variable is not set, assuming 'cmd.exe'.");
+      warning(Loc(),
+              "'ComSpec' environment variable is not set, assuming 'cmd.exe'.");
       comspecEnv = "cmd.exe";
     }
     std::string cmdExecutable = comspecEnv;
@@ -540,6 +614,14 @@ static int linkObjToBinaryWin(bool sharedLib) {
   for (unsigned i = 0; i < global.params.objfiles->dim; i++) {
     const char *p = static_cast<const char *>(global.params.objfiles->data[i]);
     args.push_back(p);
+  }
+
+  // Link with profile-rt library when generating an instrumented binary
+  // profile-rt depends on Phobos (MD5 hashing).
+  if (global.params.genInstrProf) {
+    args.push_back("ldc-profile-rt.lib");
+    // profile-rt depends on ws2_32 for symbol `gethostname`
+    args.push_back("ws2_32.lib");
   }
 
   // user libs

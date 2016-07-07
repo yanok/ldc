@@ -187,6 +187,10 @@ static cl::opt<bool, true> unittest("unittest",
                                     cl::desc("Compile in unit tests"),
                                     cl::location(global.params.useUnitTests));
 
+cl::opt<std::string>
+    ir2objCacheDir("ir2obj-cache", cl::desc("Use <cache dir> to cache object files for whole IR modules (experimental)"),
+            cl::value_desc("cache dir"), cl::Prefix);
+
 static StringsAdapter strImpPathStore("J", global.params.fileImppath);
 static cl::list<std::string, StringsAdapter>
     stringImportPaths("J", cl::desc("Where to look for string imports"),
@@ -423,6 +427,19 @@ cl::opt<unsigned char, true, CoverageParser> coverageAnalysis(
     "cov", cl::desc("Compile-in code coverage analysis\n(use -cov=n for n% "
                     "minimum required coverage)"),
     cl::location(global.params.covPercent), cl::ValueOptional, cl::init(127));
+
+#if LDC_WITH_PGO
+cl::opt<std::string>
+    genfileInstrProf("fprofile-instr-generate", cl::value_desc("filename"),
+                     cl::desc("Generate instrumented code to collect "
+                              "execution counts (e.g. for PGO)"),
+                     cl::ValueOptional);
+
+cl::opt<std::string> usefileInstrProf(
+    "fprofile-instr-use", cl::value_desc("filename"),
+    cl::desc("Use instrumentation data for profile-guided optimization"),
+    cl::ValueRequired);
+#endif
 
 static cl::extrahelp footer(
     "\n"

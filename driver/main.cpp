@@ -392,6 +392,7 @@ static void parseCommandLine(int argc, char **argv, Strings &sourceFiles,
   global.params.libfiles = new Strings();
   global.params.objfiles = new Strings();
   global.params.ddocfiles = new Strings();
+  global.params.bitcodeFiles = new Strings();
 
   global.params.moduleDeps = nullptr;
   global.params.moduleDepsFile = nullptr;
@@ -460,6 +461,26 @@ static void parseCommandLine(int argc, char **argv, Strings &sourceFiles,
   if (global.params.moduleDepsFile != nullptr) {
     global.params.moduleDeps = new OutBuffer;
   }
+
+// PGO options
+#if LDC_WITH_PGO
+  if (genfileInstrProf.getNumOccurrences() > 0) {
+    global.params.genInstrProf = true;
+    if (genfileInstrProf.empty()) {
+      global.params.datafileInstrProf = "default.profraw";
+    } else {
+      initFromString(global.params.datafileInstrProf, genfileInstrProf);
+    }
+  } else {
+    global.params.genInstrProf = false;
+    // If we don't have to generate instrumentation, we could be given a
+    // profdata file:
+    initFromString(global.params.datafileInstrProf, usefileInstrProf);
+  }
+#else
+  global.params.datafileInstrProf = nullptr;
+  global.params.genInstrProf = false;
+#endif
 
   processVersions(debugArgs, "debug", DebugCondition::setGlobalLevel,
                   DebugCondition::addGlobalIdent);
@@ -907,6 +928,10 @@ static void registerPredefinedVersions() {
     VersionCondition::addPredefinedGlobalIdent("D_Ddoc");
   }
 
+  if (global.params.cov) {
+    VersionCondition::addPredefinedGlobalIdent("D_Coverage");
+  }
+
   if (global.params.useUnitTests) {
     VersionCondition::addPredefinedGlobalIdent("unittest");
   }
@@ -1008,7 +1033,11 @@ static void emitJson(Modules &modules) {
 }
 
 int cppmain(int argc, char **argv) {
+#if LDC_LLVM_VER >= 309
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+#else
   llvm::sys::PrintStackTraceOnErrorSignal();
+#endif
 
   exe_path::initialize(argv[0], reinterpret_cast<void *>(main));
 
@@ -1163,14 +1192,24 @@ int cppmain(int argc, char **argv) {
     ext = FileName::ext(p);
     if (ext) {
 #if LDC_POSIX
-      if (strcmp(ext, global.obj_ext) == 0 || strcmp(ext, global.bc_ext) == 0)
+      if (strcmp(ext, global.obj_ext) == 0)
 #else
       if (Port::stricmp(ext, global.obj_ext) == 0 ||
-          Port::stricmp(ext, global.obj_ext_alt) == 0 ||
-          Port::stricmp(ext, global.bc_ext) == 0)
+          Port::stricmp(ext, global.obj_ext_alt) == 0)
 #endif
       {
         global.params.objfiles->push(static_cast<const char *>(files.data[i]));
+        continue;
+      }
+
+      // Detect LLVM bitcode files on commandline
+#if LDC_POSIX
+      if (strcmp(ext, global.bc_ext) == 0)
+#else
+      if (Port::stricmp(ext, global.bc_ext) == 0)
+#endif
+      {
+        global.params.bitcodeFiles->push(static_cast<const char *>(files.data[i]));
         continue;
       }
 
@@ -1360,7 +1399,15 @@ int cppmain(int argc, char **argv) {
   if (global.params.obj && !modules.empty()) {
     ldc::CodeGenerator cg(getGlobalContext(), singleObj);
 
-    for (unsigned i = 0; i < modules.dim; i++) {
+    // When inlining is enabled, we are calling semantic3 on function
+    // declarations, which may _add_ members to the first module in the modules
+    // array. These added functions must be codegenned, because these functions
+    // may be "alwaysinline" and linker problems arise otherwise with templates
+    // that have __FILE__ as parameters (which must be `pragma(inline, true);`)
+    // Therefore, codegen is done in reverse order with members[0] last, to make
+    // sure these functions (added to members[0] by members[x>0]) are
+    // codegenned.
+    for (d_size_t i = modules.dim; i-- > 0;) {
       Module *const m = modules[i];
       if (global.params.verbose) {
         fprintf(global.stdmsg, "code      %s\n", m->toChars());

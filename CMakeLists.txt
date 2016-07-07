@@ -58,7 +58,7 @@ set(LDC_VERSION "1.0.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
 set(DMDFE_PATCH_VERSION   71)
-set(DMDFE_FIX_LEVEL       0) # Comment out if not used
+set(DMDFE_FIX_LEVEL       1) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -91,6 +91,7 @@ elseif(D_VERSION EQUAL 2)
     set(DDMDFE_PATH ddmd)
     set(LDC_EXE ldc2)
     set(LDMD_EXE ldmd2)
+    set(LDCPROFDATA_EXE ldc-profdata)
     set(RUNTIME druntime)
     append("-DDMDV2" CMAKE_CXX_FLAGS)
 else()
@@ -99,6 +100,7 @@ endif()
 
 set(LDC_EXE_NAME ${PROGRAM_PREFIX}${LDC_EXE}${PROGRAM_SUFFIX})
 set(LDMD_EXE_NAME ${PROGRAM_PREFIX}${LDMD_EXE}${PROGRAM_SUFFIX})
+set(LDCPROFDATA_EXE_NAME ${PROGRAM_PREFIX}${LDCPROFDATA_EXE}${PROGRAM_SUFFIX})
 
 file(MAKE_DIRECTORY
     ${PROJECT_BINARY_DIR}
@@ -384,6 +386,7 @@ set(DRV_SRC
     driver/codegenerator.cpp
     driver/configfile.cpp
     driver/exe_path.cpp
+    driver/ir2obj_cache.cpp
     driver/targetmachine.cpp
     driver/toobj.cpp
     driver/tool.cpp
@@ -397,6 +400,7 @@ set(DRV_HDR
     driver/codegenerator.h
     driver/configfile.h
     driver/exe_path.h
+    driver/ir2obj_cache.h
     driver/ldc-version.h
     driver/targetmachine.h
     driver/toobj.h
@@ -434,6 +438,18 @@ source_group("Header Files\\gen" FILES ${GEN_HDR})
 source_group("Source Files\\ir" FILES ${IR_SRC})
 source_group("Header Files\\ir" FILES ${IR_HDR})
 source_group("Generated Files" REGULAR_EXPRESSION "(id\\.[cdh]|impcnvtab\\.c)$")
+
+
+#
+# Enable PGO if supported for this platform and LLVM version.
+# LLVM >= 3.7 is required for PGO.
+#
+set(LDC_WITH_PGO False)  # must be a valid Python boolean constant (case sensitive)
+if (NOT (LDC_LLVM_VER LESS 307))
+    message(STATUS "Building LDC with PGO support")
+    add_definitions(-DLDC_WITH_PGO)
+    set(LDC_WITH_PGO True)
+endif()
 
 #
 # Includes, defines.
@@ -671,6 +687,22 @@ set_target_properties(
     LINK_FLAGS "${SANITIZE_LDFLAGS}"
 )
 target_link_libraries(not  ${LLVM_LIBRARIES} ${TERMINFO_LIBS} ${CMAKE_DL_LIBS} ${LLVM_LDFLAGS})
+
+# Build ldc-profdata for converting profile data formats (source version depends on LLVM version)
+set(LDCPROFDATA_SRC utils/llvm-profdata-${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.cpp)
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${LDCPROFDATA_SRC})
+    add_executable(ldc-profdata ${LDCPROFDATA_SRC})
+    set_target_properties(
+        ldc-profdata PROPERTIES
+        OUTPUT_NAME "${LDCPROFDATA_EXE_NAME}"
+        RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin
+        COMPILE_FLAGS "${LLVM_CXXFLAGS} ${LDC_CXXFLAGS}"
+        LINK_FLAGS "${SANITIZE_LDFLAGS}"
+    )
+    target_link_libraries(ldc-profdata  ${LLVM_LIBRARIES} ${TERMINFO_LIBS} ${CMAKE_DL_LIBS} ${LLVM_LDFLAGS})
+    install(TARGETS ${LDCPROFDATA_EXE} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+endif()
+
 
 #
 # LDMD

@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "gen/optimizer.h"
-#include "mars.h" // error()
+#include "errors.h"
 #include "gen/cl_helpers.h"
 #include "gen/logger.h"
 #include "gen/passes/Passes.h"
@@ -42,17 +42,17 @@ using namespace llvm;
 
 static cl::opt<signed char> optimizeLevel(
     cl::desc("Setting the optimization level:"), cl::ZeroOrMore,
-    cl::values(
-        clEnumValN(3, "O", "Equivalent to -O3"),
-        clEnumValN(0, "O0", "No optimizations (default)"),
-        clEnumValN(1, "O1", "Simple optimizations"),
-        clEnumValN(2, "O2", "Good optimizations"),
-        clEnumValN(3, "O3", "Aggressive optimizations"),
-        clEnumValN(4, "O4", "Equivalent to -O3"), // Not implemented yet.
-        clEnumValN(5, "O5", "Equivalent to -O3"), // Not implemented yet.
-        clEnumValN(-1, "Os", "Like -O2 with extra optimizations for size"),
-        clEnumValN(-2, "Oz", "Like -Os but reduces code size further"),
-        clEnumValEnd),
+    cl::values(clEnumValN(3, "O", "Equivalent to -O3"),
+               clEnumValN(0, "O0", "No optimizations (default)"),
+               clEnumValN(1, "O1", "Simple optimizations"),
+               clEnumValN(2, "O2", "Good optimizations"),
+               clEnumValN(3, "O3", "Aggressive optimizations"),
+               clEnumValN(4, "O4", "Equivalent to -O3"), // Not implemented yet.
+               clEnumValN(5, "O5", "Equivalent to -O3"), // Not implemented yet.
+               clEnumValN(-1, "Os",
+                          "Like -O2 with extra optimizations for size"),
+               clEnumValN(-2, "Oz", "Like -Os but reduces code size further"),
+               clEnumValEnd),
     cl::init(0));
 
 static cl::opt<bool> noVerify("disable-verify",
@@ -89,6 +89,14 @@ static cl::opt<cl::boolOrDefault, false, opts::FlagParser<cl::boolOrDefault>>
         "inlining",
         cl::desc("Enable function inlining (default in -O2 and higher)"),
         cl::ZeroOrMore);
+
+static llvm::cl::opt<llvm::cl::boolOrDefault, false,
+                     opts::FlagParser<llvm::cl::boolOrDefault>>
+enableCrossModuleInlining(
+    "cross-module-inlining",
+    llvm::cl::desc("Enable cross-module function inlining (default enabled "
+                   "with inlining) (LLVM >= 3.7)"),
+    llvm::cl::ZeroOrMore, llvm::cl::Hidden);
 
 static cl::opt<bool> unitAtATime("unit-at-a-time", cl::desc("Enable basic IPO"),
                                  cl::init(true));
@@ -129,6 +137,19 @@ static unsigned sizeLevel() { return optimizeLevel < 0 ? -optimizeLevel : 0; }
 bool willInline() {
   return enableInlining == cl::BOU_TRUE ||
          (enableInlining == cl::BOU_UNSET && optLevel() > 1);
+}
+
+bool willCrossModuleInline() {
+#if LDC_LLVM_VER >= 307
+  return enableCrossModuleInlining == llvm::cl::BOU_TRUE ||
+         (enableCrossModuleInlining == llvm::cl::BOU_UNSET && willInline());
+#else
+// Cross-module inlining is disabled for <3.7 because we don't emit symbols in
+// COMDAT any groups pre-LLVM3.7. With cross-module inlining enabled, without
+// COMDAT any there are multiple-def linker errors when linking druntime.
+// See supportsCOMDAT().
+  return false;
+#endif
 }
 
 bool isOptimizationEnabled() { return optimizeLevel != 0; }
@@ -202,6 +223,21 @@ static void addThreadSanitizerPass(const PassManagerBuilder &Builder,
   PM.add(createThreadSanitizerPass());
 }
 
+static void addInstrProfilingPass(legacy::PassManagerBase &mpm) {
+#if LDC_WITH_PGO
+  if (global.params.genInstrProf) {
+    InstrProfOptions options;
+    options.NoRedZone = global.params.disableRedZone;
+    options.InstrProfileOutput = global.params.datafileInstrProf;
+#if LDC_LLVM_VER >= 309
+    mpm.add(createInstrProfilingLegacyPass(options));
+#else
+    mpm.add(createInstrProfilingPass(options));
+#endif
+  }
+#endif
+}
+
 /**
  * Adds a set of optimization passes to the given module/function pass
  * managers based on the given optimization and size reduction levels.
@@ -217,7 +253,9 @@ static void addOptimizationPasses(PassManagerBase &mpm,
                                   FunctionPassManager &fpm,
 #endif
                                   unsigned optLevel, unsigned sizeLevel) {
-  fpm.add(createVerifierPass()); // Verify that input is correct
+  if (!noVerify) {
+    fpm.add(createVerifierPass());
+  }
 
   PassManagerBuilder builder;
   builder.OptLevel = optLevel;
@@ -292,6 +330,8 @@ static void addOptimizationPasses(PassManagerBase &mpm,
   // EP_OptimizerLast does not exist in LLVM 3.0, add it manually below.
   builder.addExtension(PassManagerBuilder::EP_OptimizerLast,
                        addStripExternalsPass);
+
+  addInstrProfilingPass(mpm);
 
   builder.populateFunctionPassManager(fpm);
   builder.populateModulePassManager(mpm);
@@ -391,7 +431,9 @@ bool ldc_optimize_module(llvm::Module *M) {
   mpm.run(*M);
 
   // Verify the resulting module.
-  verifyModule(M);
+  if (!noVerify) {
+    verifyModule(M);
+  }
 
   // Report that we run some passes.
   return true;
@@ -399,16 +441,13 @@ bool ldc_optimize_module(llvm::Module *M) {
 
 // Verifies the module.
 void verifyModule(llvm::Module *m) {
-  if (!noVerify) {
-    Logger::println("Verifying module...");
-    LOG_SCOPE;
-    std::string ErrorStr;
-    raw_string_ostream OS(ErrorStr);
-    if (llvm::verifyModule(*m, &OS)) {
-      error(Loc(), "%s", ErrorStr.c_str());
-      fatal();
-    } else {
-      Logger::println("Verification passed!");
-    }
+  Logger::println("Verifying module...");
+  LOG_SCOPE;
+  std::string ErrorStr;
+  raw_string_ostream OS(ErrorStr);
+  if (llvm::verifyModule(*m, &OS)) {
+    error(Loc(), "%s", ErrorStr.c_str());
+    fatal();
   }
+  Logger::println("Verification passed!");
 }

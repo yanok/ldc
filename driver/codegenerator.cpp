@@ -13,6 +13,7 @@
 #include "mars.h"
 #include "module.h"
 #include "scope.h"
+#include "driver/linker.h"
 #include "driver/toobj.h"
 #include "gen/logger.h"
 #include "gen/runtime.h"
@@ -24,6 +25,56 @@ extern Module *g_entrypointModule;
 
 /// The module that contains the actual D main() (_Dmain) definition.
 extern Module *g_dMainModule;
+
+namespace {
+
+/// Add the linker options metadata flag.
+/// If the flag is already present, merge it with the new data.
+void emitLinkerOptions(IRState &irs, llvm::Module &M, llvm::LLVMContext &ctx) {
+  if (!M.getModuleFlag("Linker Options")) {
+    M.addModuleFlag(llvm::Module::AppendUnique, "Linker Options",
+                    llvm::MDNode::get(ctx, irs.LinkerMetadataArgs));
+  } else {
+    // Merge the Linker Options with the pre-existing one
+    // (this can happen when passing a .bc file on the commandline)
+
+#if LDC_LLVM_VER < 306
+    // Passing a bitcode file on the commandline is not supported for LLVM 3.5.
+    llvm_unreachable(
+        "Merging of Linker Options is not implemented for LLVM 3.5");
+#else
+    auto *moduleFlags = M.getModuleFlagsMetadata();
+    for (unsigned i = 0, e = moduleFlags->getNumOperands(); i < e; ++i) {
+      auto *flag = moduleFlags->getOperand(i);
+      if (flag->getNumOperands() < 3)
+        continue;
+      auto optionsMDString =
+          llvm::dyn_cast_or_null<llvm::MDString>(flag->getOperand(1));
+      if (!optionsMDString || optionsMDString->getString() != "Linker Options")
+        continue;
+
+      // If we reach here, we found the Linker Options flag.
+
+      // Add the old Linker Options to our LinkerMetadataArgs list.
+      auto *oldLinkerOptions = llvm::cast<llvm::MDNode>(flag->getOperand(2));
+      for (const auto &Option : oldLinkerOptions->operands()) {
+        irs.LinkerMetadataArgs.push_back(Option);
+      }
+
+      // Replace Linker Options with a newly created list.
+      llvm::Metadata *Ops[3] = {
+          llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+              llvm::Type::getInt32Ty(ctx), llvm::Module::AppendUnique)),
+          llvm::MDString::get(ctx, "Linker Options"),
+          llvm::MDNode::get(ctx, irs.LinkerMetadataArgs)};
+      moduleFlags->setOperand(i, llvm::MDNode::get(ctx, Ops));
+
+      break;
+    }
+#endif
+  }
+}
+}
 
 namespace ldc {
 CodeGenerator::CodeGenerator(llvm::LLVMContext &context, bool singleObj)
@@ -51,6 +102,11 @@ CodeGenerator::~CodeGenerator() {
     } else {
       filename = firstModuleObjfileName_;
     }
+
+    // If there are bitcode files passed on the cmdline, add them after all
+    // other source files have been added to the (singleobj) module.
+    insertBitcodeFiles(ir_->module, ir_->context(),
+                       *global.params.bitcodeFiles);
 
     writeAndFreeLLModule(filename);
   }
@@ -91,6 +147,13 @@ void CodeGenerator::finishLLModule(Module *m) {
     return;
   }
 
+  // Add bitcode files passed on the cmdline to
+  // the first module only, to avoid duplications.
+  if (moduleCount_ == 1) {
+    insertBitcodeFiles(ir_->module, ir_->context(),
+                       *global.params.bitcodeFiles);
+  }
+
   m->deleteObjFile();
   writeAndFreeLLModule(m->objfile->name->str);
 }
@@ -98,10 +161,7 @@ void CodeGenerator::finishLLModule(Module *m) {
 void CodeGenerator::writeAndFreeLLModule(const char *filename) {
   ir_->DBuilder.Finalize();
 
-  // Add the linker options metadata flag.
-  ir_->module.addModuleFlag(
-      llvm::Module::AppendUnique, "Linker Options",
-      llvm::MDNode::get(ir_->context(), ir_->LinkerMetadataArgs));
+  emitLinkerOptions(*ir_, ir_->module, ir_->context());
 
   // Emit ldc version as llvm.ident metadata.
   llvm::NamedMDNode *IdentMetadata =
@@ -120,6 +180,23 @@ void CodeGenerator::writeAndFreeLLModule(const char *filename) {
   global.params.objfiles->push(const_cast<char *>(filename));
   delete ir_;
   ir_ = nullptr;
+}
+
+namespace {
+/// Emits a declaration for the given symbol, which is assumed to be of type
+/// i8*, and defines a second globally visible i8* that contains the address
+/// of the first symbol.
+void emitSymbolAddrGlobal(llvm::Module &lm, const char *symbolName,
+                          const char *addrName) {
+  llvm::Type *voidPtr =
+      llvm::PointerType::get(llvm::Type::getInt8Ty(lm.getContext()), 0);
+  auto targetSymbol = new llvm::GlobalVariable(
+      lm, voidPtr, false, llvm::GlobalValue::ExternalWeakLinkage, nullptr,
+      symbolName);
+  new llvm::GlobalVariable(
+      lm, voidPtr, false, llvm::GlobalValue::ExternalLinkage,
+      llvm::ConstantExpr::getBitCast(targetSymbol, voidPtr), addrName);
+}
 }
 
 void CodeGenerator::emit(Module *m) {
@@ -152,22 +229,27 @@ void CodeGenerator::emit(Module *m) {
   if (m == g_dMainModule) {
     codegenModule(ir_, g_entrypointModule, emitFullModuleInfo);
 
-    // On Android, bracket TLS data with the symbols _tlsstart and _tlsend, as
-    // done with dmd
     if (global.params.targetTriple->getEnvironment() == llvm::Triple::Android) {
+      // On Android, bracket TLS data with the symbols _tlsstart and _tlsend, as
+      // done with dmd
       auto startSymbol = new llvm::GlobalVariable(
           ir_->module, llvm::Type::getInt32Ty(ir_->module.getContext()), false,
           llvm::GlobalValue::ExternalLinkage,
-          llvm::ConstantInt::get(ir_->module.getContext(), APInt(32,0)),
+          llvm::ConstantInt::get(ir_->module.getContext(), APInt(32, 0)),
           "_tlsstart", &*(ir_->module.global_begin()));
       startSymbol->setSection(".tdata");
 
       auto endSymbol = new llvm::GlobalVariable(
           ir_->module, llvm::Type::getInt32Ty(ir_->module.getContext()), false,
           llvm::GlobalValue::ExternalLinkage,
-          llvm::ConstantInt::get(ir_->module.getContext(), APInt(32,0)),
+          llvm::ConstantInt::get(ir_->module.getContext(), APInt(32, 0)),
           "_tlsend");
       endSymbol->setSection(".tcommon");
+    } else if (global.params.targetTriple->isOSLinux()) {
+      // On Linux, strongly define the excecutabe BSS bracketing symbols in
+      // the main module for druntime use (see rt.sections_elf_shared).
+      emitSymbolAddrGlobal(ir_->module, "__bss_start", "_d_execBssBegAddr");
+      emitSymbolAddrGlobal(ir_->module, "_end", "_d_execBssEndAddr");
     }
   }
 

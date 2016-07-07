@@ -22,6 +22,7 @@
 #include "gen/arrays.h"
 #include "gen/classes.h"
 #include "gen/dvalue.h"
+#include "gen/function-inlining.h"
 #include "gen/inlineir.h"
 #include "gen/irstate.h"
 #include "gen/linkage.h"
@@ -31,6 +32,7 @@
 #include "gen/mangling.h"
 #include "gen/nested.h"
 #include "gen/optimizer.h"
+#include "gen/pgo.h"
 #include "gen/pragma.h"
 #include "gen/runtime.h"
 #include "gen/tollvm.h"
@@ -111,9 +113,9 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
   }
 
   if (hasSel) {
-      // TODO: make arg_objcselector to match dmd type
-      newIrFty.arg_objcSelector = new IrFuncTyArg(Type::tvoidptr, false);
-      ++nextLLArgIdx;
+    // TODO: make arg_objcselector to match dmd type
+    newIrFty.arg_objcSelector = new IrFuncTyArg(Type::tvoidptr, false);
+    ++nextLLArgIdx;
   }
 
   // vararg functions are special too
@@ -419,14 +421,14 @@ void applyParamAttrsToLLFunc(TypeFunction *f, IrFuncTy &irFty,
 void applyDefaultMathAttributes(IrFunction *irFunc) {
   // TODO: implement commandline switches to change the default values.
 
-  // "unsafe-fp-math" is not properly reset in LLVM between function definitions,
-  // i.e. if a function does not define a value for "unsafe-fp-math" it will be
-  // compiled using the value of the previous function. Therefore, each function
-  // must explicitly define the value (clang does the same).
+  // "unsafe-fp-math" is not properly reset in LLVM between function
+  // definitions, i.e. if a function does not define a value for
+  // "unsafe-fp-math" it will be compiled using the value of the previous
+  // function. Therefore, each function must explicitly define the value (clang
+  // does the same).
   // See https://llvm.org/bugs/show_bug.cgi?id=23172
   irFunc->func->addFnAttr("unsafe-fp-math", "false");
 }
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -454,6 +456,15 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
   if (DtoIsIntrinsic(fdecl) && fdecl->fbody) {
     error(fdecl->loc, "intrinsics cannot have function bodies");
     fatal();
+  }
+
+  // Check if fdecl should be defined too for cross-module inlining.
+  // If true, semantic is fully done for fdecl which is needed for some code
+  // below (e.g. code that uses fdecl->vthis).
+  const bool defineAtEnd = defineAsExternallyAvailable(*fdecl);
+  if (defineAtEnd) {
+    IF_LOG Logger::println(
+        "Function is an externally_available inline candidate.");
   }
 
   // get TypeFunction*
@@ -526,8 +537,15 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
     gIR->mainFunc = func;
   }
 
+  // Set inlining attribute
   if (fdecl->neverInline) {
     irFunc->setNeverInline();
+  } else {
+    if (fdecl->inlining == PINLINEalways) {
+      irFunc->setAlwaysInline();
+    } else if (fdecl->inlining == PINLINEnever) {
+      irFunc->setNeverInline();
+    }
   }
 
   if (fdecl->llvmInternal == LLVMglobal_crt_ctor ||
@@ -546,7 +564,7 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
 
   if (irFty.arg_sret && !passThisBeforeSret) {
     iarg->setName(".sret_arg");
-    irFunc->retArg = &(*iarg);
+    irFunc->sretArg = &(*iarg);
     ++iarg;
   }
 
@@ -584,7 +602,7 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
 
   if (passThisBeforeSret) {
     iarg->setName(".sret_arg");
-    irFunc->retArg = &(*iarg);
+    irFunc->sretArg = &(*iarg);
     ++iarg;
   }
 
@@ -611,6 +629,13 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
     IrParameter *irParam = getIrParameter(vd, true);
     irParam->arg = arg;
     irParam->value = &(*iarg);
+  }
+
+  // Now that this function is declared, also define it if needed.
+  if (defineAtEnd) {
+    IF_LOG Logger::println(
+        "Function is an externally_available inline candidate: define it now.");
+    DtoDefineFunction(fdecl, true);
   }
 }
 
@@ -640,10 +665,10 @@ static LinkageWithCOMDAT lowerFuncLinkage(FuncDeclaration *fdecl) {
 
 // LDC has the same problem with destructors of struct arguments in closures
 // as DMD, so we copy the failure detection
-void verifyScopedDestructionInClosure(FuncDeclaration* fd) {
+void verifyScopedDestructionInClosure(FuncDeclaration *fd) {
   for (size_t i = 0; i < fd->closureVars.dim; i++) {
     VarDeclaration *v = fd->closureVars[i];
-  
+
     // Hack for the case fail_compilation/fail10666.d, until
     // proper issue https://issues.dlang.org/show_bug.cgi?id=5730 fix will come.
     bool isScopeDtorParam = v->edtor && (v->storage_class & STCparameter);
@@ -711,12 +736,22 @@ void defineParameters(IrFuncTy &irFty, VarDeclarations &parameters) {
 
 } // anonymous namespace
 
-void DtoDefineFunction(FuncDeclaration *fd) {
+void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   IF_LOG Logger::println("DtoDefineFunction(%s): %s", fd->toPrettyChars(),
                          fd->loc.toChars());
   LOG_SCOPE;
+  if (linkageAvailableExternally) {
+    IF_LOG Logger::println("linkageAvailableExternally = true");
+  }
 
   if (fd->ir->isDefined()) {
+    if (!linkageAvailableExternally &&
+        (getIrFunc(fd)->func->getLinkage() ==
+         llvm::GlobalValue::AvailableExternallyLinkage)) {
+      // Fix linkage
+      const auto lwc = lowerFuncLinkage(fd);
+      setLinkage(lwc, getIrFunc(fd)->func);
+    }
     return;
   }
 
@@ -759,21 +794,10 @@ void DtoDefineFunction(FuncDeclaration *fd) {
     return;
   }
 
-  // Check whether the frontend knows that the function is already defined
-  // in some other module (see DMD's FuncDeclaration::toObjFile).
-  for (FuncDeclaration *f = fd; f;) {
-    if (!f->isInstantiated() && f->inNonRoot()) {
-      IF_LOG Logger::println("Skipping '%s'.", fd->toPrettyChars());
-      // TODO: Emit as available_externally for inlining purposes instead
-      // (see #673).
-      fd->ir->setDefined();
-      return;
-    }
-    if (f->isNested()) {
-      f = f->toParent2()->isFuncDeclaration();
-    } else {
-      break;
-    }
+  if (!linkageAvailableExternally && !alreadyOrWillBeDefined(*fd)) {
+    IF_LOG Logger::println("Skipping '%s'.", fd->toPrettyChars());
+    fd->ir->setDefined();
+    return;
   }
 
   DtoDeclareFunction(fd);
@@ -802,7 +826,7 @@ void DtoDefineFunction(FuncDeclaration *fd) {
   }
 
   if (fd->needsClosure())
-      verifyScopedDestructionInClosure(fd);
+    verifyScopedDestructionInClosure(fd);
 
   assert(fd->ident != Id::empty);
 
@@ -859,7 +883,15 @@ void DtoDefineFunction(FuncDeclaration *fd) {
   gIR->functions.push_back(irFunc);
 
   const auto lwc = lowerFuncLinkage(fd);
-  setLinkage(lwc, func);
+  if (linkageAvailableExternally) {
+    func->setLinkage(llvm::GlobalValue::AvailableExternallyLinkage);
+    // Assert that we are not overriding a linkage type that disallows inlining
+    assert(lwc.first != llvm::GlobalValue::WeakAnyLinkage &&
+           lwc.first != llvm::GlobalValue::ExternalWeakLinkage &&
+           lwc.first != llvm::GlobalValue::LinkOnceAnyLinkage);
+  } else {
+    setLinkage(lwc, func);
+  }
 
   // On x86_64, always set 'uwtable' for System V ABI compatibility.
   // TODO: Find a better place for this.
@@ -888,7 +920,7 @@ void DtoDefineFunction(FuncDeclaration *fd) {
   // assert(gIR->scopes.empty());
   gIR->scopes.push_back(IRScope(beginbb));
 
-  // Set the FastMath options for this function scope.
+// Set the FastMath options for this function scope.
 #if LDC_LLVM_VER >= 308
   gIR->scopes.back().builder.setFastMathFlags(irFunc->FMF);
 #else
@@ -953,6 +985,9 @@ void DtoDefineFunction(FuncDeclaration *fd) {
   if (fd->parameters)
     defineParameters(irFty, *fd->parameters);
 
+  // Initialize PGO state for this function
+  irFunc->pgo.assignRegionCounters(fd, irFunc->func);
+
   {
     ScopeStack scopeStack(gIR);
     irFunc->scopes = &scopeStack;
@@ -967,18 +1002,23 @@ void DtoDefineFunction(FuncDeclaration *fd) {
     // D varargs: prepare _argptr and _arguments
     if (f->linkage == LINKd && f->varargs == 1) {
       // allocate _argptr (of type core.stdc.stdarg.va_list)
-      LLValue *argptrmem = DtoAlloca(Type::tvalist->semantic(fd->loc, fd->_scope), "_argptr_mem");
-      irFunc->_argptr = argptrmem;
+      Type *const argptrType = Type::tvalist->semantic(fd->loc, fd->_scope);
+      LLValue *argptrMem = DtoAlloca(argptrType, "_argptr_mem");
+      irFunc->_argptr = argptrMem;
 
       // initialize _argptr with a call to the va_start intrinsic
-      LLValue *vaStartArg = gABI->prepareVaStart(argptrmem);
-      llvm::CallInst::Create(GET_INTRINSIC_DECL(vastart), vaStartArg, "",
+      DLValue argptrVal(argptrType, argptrMem);
+      LLValue *llAp = gABI->prepareVaStart(&argptrVal);
+      llvm::CallInst::Create(GET_INTRINSIC_DECL(vastart), llAp, "",
                              gIR->scopebb());
 
       // copy _arguments to a memory location
       irFunc->_arguments =
           DtoAllocaDump(irFunc->_arguments, 0, "_arguments_mem");
     }
+
+    irFunc->pgo.emitCounterIncrement(fd->fbody);
+    irFunc->pgo.setCurrentStmt(fd->fbody);
 
     // output function body
     Statement_toIR(fd->fbody, gIR);
@@ -1037,8 +1077,8 @@ DValue *DtoArgument(Parameter *fnarg, Expression *argexp) {
   if (fnarg && (fnarg->storageClass & (STCref | STCout))) {
     Loc loc;
     DValue *arg = toElem(argexp, true);
-    return new DImValue(argexp->type,
-                        arg->isLVal() ? arg->getLVal() : makeLValue(loc, arg));
+    return new DLValue(argexp->type,
+                       arg->isLVal() ? DtoLVal(arg) : makeLValue(loc, arg));
   }
 
   DValue *arg = toElem(argexp);
@@ -1053,7 +1093,7 @@ DValue *DtoArgument(Parameter *fnarg, Expression *argexp) {
   // byval arg, but expr has no storage yet
   if (DtoIsInMemoryOnly(argexp->type) && (arg->isSlice() || arg->isNull())) {
     LLValue *alloc = DtoAlloca(argexp->type, ".tmp_arg");
-    auto vv = new DVarValue(argexp->type, alloc);
+    auto vv = new DLValue(argexp->type, alloc);
     DtoAssign(argexp->loc, vv, arg);
     arg = vv;
   }

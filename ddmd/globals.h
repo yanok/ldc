@@ -188,6 +188,8 @@ struct Param
     const char *mapfile;
 
 #if IN_LLVM
+    Array<const char *> *bitcodeFiles; // LLVM bitcode files passed on cmdline
+
     uint32_t nestedTmpl; // maximum nested template instantiations
 
     // Whether to keep all function bodies in .di file generation or to strip
@@ -203,6 +205,10 @@ struct Param
     bool useInlineAsm;
     bool verbose_cg;
     bool hasObjectiveC;
+
+    // Profile-guided optimization:
+    bool genInstrProf;             // Whether to generate PGO instrumented code
+    const char *datafileInstrProf; // Either the input or output file for PGO data
 
     const llvm::Triple *targetTriple;
 
@@ -236,6 +242,8 @@ struct Global
     const char *s_ext;
     const char *ldc_version;
     const char *llvm_version;
+
+    bool gaggedForInlining; // Set for functionSemantic3 for external inlining candidates
 #endif
     const char *lib_ext;
     const char *dll_ext;
@@ -365,6 +373,13 @@ enum LINK
     LINKwindows,
     LINKpascal,
     LINKobjc,
+};
+
+enum CPPMANGLE
+{
+    def,
+    asStruct,
+    asClass,
 };
 
 enum DYNCAST

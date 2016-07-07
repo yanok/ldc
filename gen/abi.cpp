@@ -38,16 +38,8 @@ llvm::Value *ABIRewrite::getRVal(Type *dty, LLValue *v) {
 //////////////////////////////////////////////////////////////////////////////
 
 LLValue *ABIRewrite::getAddressOf(DValue *v) {
-  Type *dty = v->getType();
-  if (DtoIsInMemoryOnly(dty)) {
-    // v is lowered to a LL pointer to the struct/static array
-    return v->getRVal();
-  }
-
-  if (v->isLVal()) {
-    return v->getLVal();
-  }
-
+  if (v->isLVal())
+    return DtoLVal(v);
   return DtoAllocaDump(v, ".getAddressOf_dump");
 }
 
@@ -249,23 +241,27 @@ void TargetABI::rewriteVarargs(IrFuncTy &fty,
 
 //////////////////////////////////////////////////////////////////////////////
 
-LLValue *TargetABI::prepareVaStart(LLValue *pAp) {
-  // pass a void* pointer to ap to LLVM's va_start intrinsic
-  return DtoBitCast(pAp, getVoidPtrType());
+LLValue *TargetABI::prepareVaStart(DLValue *ap) {
+  // pass a i8* pointer to ap to LLVM's va_start intrinsic
+  return DtoBitCast(DtoLVal(ap), getVoidPtrType());
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
-void TargetABI::vaCopy(LLValue *pDest, LLValue *src) {
-  // simply bitcopy src over dest
-  DtoStore(src, pDest);
+void TargetABI::vaCopy(DLValue *dest, DValue *src) {
+  LLValue *llDest = DtoLVal(dest);
+  if (src->isLVal()) {
+    DtoMemCpy(llDest, DtoLVal(src));
+  } else {
+    DtoStore(DtoRVal(src), llDest);
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
-LLValue *TargetABI::prepareVaArg(LLValue *pAp) {
-  // pass a void* pointer to ap to LLVM's va_arg intrinsic
-  return DtoBitCast(pAp, getVoidPtrType());
+LLValue *TargetABI::prepareVaArg(DLValue *ap) {
+  // pass a i8* pointer to ap to LLVM's va_arg intrinsic
+  return DtoBitCast(DtoLVal(ap), getVoidPtrType());
 }
 
 //////////////////////////////////////////////////////////////////////////////

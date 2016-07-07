@@ -16,7 +16,7 @@
 #include "gen/logger.h"
 #include "gen/structs.h"
 #include "gen/tollvm.h"
-#include "gen/typeinf.h"
+#include "gen/typinf.h"
 #include "ir/irfunction.h"
 #include "ir/irtypeclass.h"
 #include "ir/irtypestruct.h"
@@ -179,7 +179,11 @@ public:
           llvm::GlobalValue::PrivateLinkage;
       gvar = new llvm::GlobalVariable(gIR->module, _init->getType(), true,
                                       _linkage, _init, ".str");
+#if LDC_LLVM_VER >= 309
+      gvar->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+#else
       gvar->setUnnamedAddr(true);
+#endif
       (*stringLiteralCache)[key] = gvar;
     }
 
@@ -543,7 +547,11 @@ public:
     auto gvar = new llvm::GlobalVariable(
         gIR->module, initval->getType(), canBeConst,
         llvm::GlobalValue::InternalLinkage, initval, ".dynarrayStorage");
+#if LDC_LLVM_VER >= 309
+    gvar->setUnnamedAddr(canBeConst ? llvm::GlobalValue::UnnamedAddr::Global : llvm::GlobalValue::UnnamedAddr::None);
+#else
     gvar->setUnnamedAddr(canBeConst);
+#endif
     llvm::Constant *store = DtoBitCast(gvar, getPtrToType(arrtype));
 
     if (bt->ty == Tpointer) {
@@ -720,7 +728,13 @@ public:
     }
 
     TypeInfoDeclaration *tid = getOrCreateTypeInfoDeclaration(t, nullptr);
-    TypeInfoDeclaration_codegen(tid, p);
+    if ((t->ty == Tclass) &&
+        !static_cast<TypeClass *>(t)->sym->isInterfaceDeclaration()) {
+      // For classes, delegate to special function:
+      TypeInfoClassDeclaration_codegen(tid, p);
+    } else {
+      TypeInfoDeclaration_codegen(tid, p);
+    }
     result = llvm::cast<llvm::GlobalVariable>(getIrGlobal(tid)->value);
   }
 

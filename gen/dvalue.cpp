@@ -16,7 +16,7 @@
 #include "gen/tollvm.h"
 
 namespace {
-bool isDefinedInFuncEntryBB(llvm::Value *v) {
+bool isDefinedInFuncEntryBB(LLValue *v) {
   auto instr = llvm::dyn_cast<llvm::Instruction>(v);
   if (!instr) {
     // Global, constant, ...
@@ -36,7 +36,53 @@ bool isDefinedInFuncEntryBB(llvm::Value *v) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-bool DImValue::definedInFuncEntryBB() { return isDefinedInFuncEntryBB(val); }
+LLValue *DtoLVal(DValue *v) {
+  auto lval = v->isLVal();
+  assert(lval);
+  return lval->getLVal()->val;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+DValue::DValue(Type *t, LLValue *v) : type(t), val(v) {
+  assert(type);
+  assert(val);
+}
+
+bool DValue::definedInFuncEntryBB() { return isDefinedInFuncEntryBB(val); }
+
+////////////////////////////////////////////////////////////////////////////////
+
+DRValue::DRValue(Type *t, LLValue *v) : DValue(t, v) {
+  assert(!DtoIsInMemoryOnly(t) &&
+         "Cannot represent memory-only type as DRValue");
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+DConstValue::DConstValue(Type *t, LLConstant *con) : DRValue(t, con) {}
+
+////////////////////////////////////////////////////////////////////////////////
+
+DSliceValue::DSliceValue(Type *t, LLValue *length, LLValue *ptr)
+    : DRValue(t, DtoAggrPair(length, ptr)) {}
+
+LLValue *DSliceValue::getLength() { return DtoExtractValue(val, 0, ".len"); }
+
+LLValue *DSliceValue::getPtr() { return DtoExtractValue(val, 1, ".ptr"); }
+
+////////////////////////////////////////////////////////////////////////////////
+
+DFuncValue::DFuncValue(Type *t, FuncDeclaration *fd, LLValue *v, LLValue *vt)
+    : DRValue(t, v), func(fd), vthis(vt) {}
+
+DFuncValue::DFuncValue(FuncDeclaration *fd, LLValue *v, LLValue *vt)
+    : DRValue(fd->type, v), func(fd), vthis(vt) {}
+
+bool DFuncValue::definedInFuncEntryBB() {
+  return isDefinedInFuncEntryBB(val) &&
+         (!vthis || isDefinedInFuncEntryBB(vthis));
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -63,85 +109,33 @@ static bool checkVarValueType(LLType *t, bool extraDeref) {
   return true;
 }
 
-DVarValue::DVarValue(Type *t, LLValue *llvmValue, bool isSpecialRefVar)
-    : DValue(t), val(llvmValue), isSpecialRefVar(isSpecialRefVar) {
-  assert(llvmValue && "Unexpected null llvm::Value.");
-  assert(checkVarValueType(llvmValue->getType(), isSpecialRefVar));
+DLValue::DLValue(Type *t, LLValue *v) : DValue(t, v) {
+  assert(checkVarValueType(v->getType(), false));
 }
 
-LLValue *DVarValue::getLVal() { return isSpecialRefVar ? DtoLoad(val) : val; }
-
-LLValue *DVarValue::getRVal() {
-  assert(val);
-
-  llvm::Value *storage = val;
-  if (isSpecialRefVar) {
-    storage = DtoLoad(storage);
+DRValue *DLValue::getRVal() {
+  if (DtoIsInMemoryOnly(type)) {
+    llvm_unreachable("getRVal() for memory-only type");
+    return nullptr;
   }
 
-  if (DtoIsInMemoryOnly(type->toBasetype())) {
-    return storage;
-  }
-
-  llvm::Value *rawValue = DtoLoad(storage);
-
+  LLValue *rval = DtoLoad(val);
   if (type->toBasetype()->ty == Tbool) {
-    assert(rawValue->getType() == llvm::Type::getInt8Ty(gIR->context()));
-    return gIR->ir->CreateTrunc(rawValue,
-                                llvm::Type::getInt1Ty(gIR->context()));
+    assert(rval->getType() == llvm::Type::getInt8Ty(gIR->context()));
+    rval = gIR->ir->CreateTrunc(rval, llvm::Type::getInt1Ty(gIR->context()));
   }
 
-  return rawValue;
-}
-
-LLValue *DVarValue::getRefStorage() {
-  assert(isSpecialRefVar);
-  return val;
-}
-
-bool DVarValue::definedInFuncEntryBB() { return isDefinedInFuncEntryBB(val); }
-
-////////////////////////////////////////////////////////////////////////////////
-
-LLValue *DSliceValue::getRVal() {
-  assert(len);
-  assert(ptr);
-  return DtoAggrPair(len, ptr);
-}
-
-bool DSliceValue::definedInFuncEntryBB() {
-  return isDefinedInFuncEntryBB(len) && isDefinedInFuncEntryBB(ptr);
+  return new DImValue(type, rval);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-DFuncValue::DFuncValue(Type *t, FuncDeclaration *fd, llvm::Value *v,
-                       llvm::Value *vt)
-    : DValue(t), func(fd), val(v), vthis(vt) {}
-
-DFuncValue::DFuncValue(FuncDeclaration *fd, LLValue *v, LLValue *vt)
-    : DValue(fd->type), func(fd), val(v), vthis(vt) {}
-
-LLValue *DFuncValue::getRVal() {
-  assert(val);
-  return val;
+DSpecialRefValue::DSpecialRefValue(Type *t, LLValue *v) : DLValue(v, t) {
+  assert(checkVarValueType(v->getType(), true));
 }
 
-bool DFuncValue::definedInFuncEntryBB() {
-  if (!isDefinedInFuncEntryBB(val)) {
-    return false;
-  }
-
-  if (vthis && !isDefinedInFuncEntryBB(vthis)) {
-    return false;
-  }
-
-  return true;
+DRValue *DSpecialRefValue::getRVal() {
+  return DLValue(type, DtoLoad(val)).getRVal();
 }
 
-////////////////////////////////////////////////////////////////////////////////
-
-LLValue *DConstValue::getRVal() {
-  assert(c);
-  return c;
-}
+DLValue *DSpecialRefValue::getLVal() { return new DLValue(type, DtoLoad(val)); }

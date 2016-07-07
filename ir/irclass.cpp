@@ -353,7 +353,11 @@ llvm::GlobalVariable *IrAggr::getInterfaceVtbl(BaseClass *b, bool new_instance,
 
       // Thunks themselves don't have an identity, only the target
       // function has.
+#if LDC_LLVM_VER >= 309
+      thunk->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+#else
       thunk->setUnnamedAddr(true);
+#endif
 
 #if LDC_LLVM_VER >= 307
       // thunks don't need exception handling themselves
@@ -397,10 +401,11 @@ llvm::GlobalVariable *IrAggr::getInterfaceVtbl(BaseClass *b, bool new_instance,
       }
 
       // cast 'this' to Object
-      LLValue *&thisArg = args[(!irFunc->irFty.arg_sret ||
-                                gABI->passThisBeforeSret(irFunc->type))
-                                   ? 0
-                                   : 1];
+      const int thisArgIndex =
+          (!irFunc->irFty.arg_sret || gABI->passThisBeforeSret(irFunc->type))
+              ? 0
+              : 1;
+      LLValue *&thisArg = args[thisArgIndex];
       LLType *targetThisType = thisArg->getType();
       thisArg = DtoBitCast(thisArg, getVoidPtrType());
       thisArg = DtoGEP1(thisArg, DtoConstInt(-thunkOffset), true);

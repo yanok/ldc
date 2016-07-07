@@ -20,6 +20,8 @@
 // Copyright (c) 2007 by Tomas Lindquist Olsen
 // tomas at famolsen dk
 
+#include "gen/typinf.h"
+
 #include "aggregate.h"
 #include "attrib.h"
 #include "declaration.h"
@@ -271,29 +273,15 @@ public:
     b.push_string(sd->toPrettyChars());
 
     // void[] init
-    // emit void[] with the default initialier, the array is null if the default
-    // initializer is zero
+    // the array is null if the default initializer is zero
     if (!sd->members || decl->tinfo->isZeroInit(decl->loc)) {
       b.push_null_void_array();
     }
     // otherwise emit a void[] with the default initializer
     else {
-      Type *memtype = sd->memtype;
-      LLType *memty = DtoType(memtype);
-      LLConstant *C;
       Expression *defaultval = sd->getDefaultValue(decl->loc);
-      if (memtype->isintegral()) {
-        C = LLConstantInt::get(memty, defaultval->toInteger(),
-                               !isLLVMUnsigned(memtype));
-      } else if (memtype->isString()) {
-        C = DtoConstString(defaultval->toStringExp()->toStringz());
-      } else if (memtype->isfloating()) {
-        C = LLConstantFP::get(memty, defaultval->toReal());
-      } else {
-        llvm_unreachable("Unsupported type");
-      }
-
-      b.push_void_array(C, memtype, sd);
+      LLConstant *c = toConstElem(defaultval, gIR);
+      b.push_void_array(c, sd->memtype, sd);
     }
 
     // finish
@@ -696,7 +684,7 @@ public:
 /* ========================================================================= */
 
 void TypeInfoDeclaration_codegen(TypeInfoDeclaration *decl, IRState *p) {
-  IF_LOG Logger::println("TypeInfoDeclaration::codegen(%s)",
+  IF_LOG Logger::println("TypeInfoDeclaration_codegen(%s)",
                          decl->toPrettyChars());
   LOG_SCOPE;
 
@@ -749,6 +737,10 @@ void TypeInfoDeclaration_codegen(TypeInfoDeclaration *decl, IRState *p) {
 /* ========================================================================= */
 
 void TypeInfoClassDeclaration_codegen(TypeInfoDeclaration *decl, IRState *p) {
+  IF_LOG Logger::println("TypeInfoClassDeclaration_codegen(%s)",
+                         decl->toPrettyChars());
+  LOG_SCOPE;
+
   // For classes, the TypeInfo is in fact a ClassInfo instance and emitted
   // as a __ClassZ symbol. For interfaces, the __InterfaceZ symbol is
   // referenced as "info" member in a (normal) TypeInfo_Interface instance.

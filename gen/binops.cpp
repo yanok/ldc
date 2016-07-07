@@ -18,11 +18,10 @@
 
 //////////////////////////////////////////////////////////////////////////////
 
-DValue *DtoBinAdd(DValue *lhs, DValue *rhs) {
-  Type *t = lhs->getType();
-  LLValue *l, *r;
-  l = lhs->getRVal();
-  r = rhs->getRVal();
+DImValue *DtoBinAdd(DRValue *lhs, DRValue *rhs) {
+  Type *t = lhs->type;
+  LLValue *l = DtoRVal(lhs);
+  LLValue *r = DtoRVal(rhs);
 
   LLValue *res;
   if (t->isfloating()) {
@@ -36,11 +35,10 @@ DValue *DtoBinAdd(DValue *lhs, DValue *rhs) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-DValue *DtoBinSub(DValue *lhs, DValue *rhs) {
-  Type *t = lhs->getType();
-  LLValue *l, *r;
-  l = lhs->getRVal();
-  r = rhs->getRVal();
+DImValue *DtoBinSub(DRValue *lhs, DRValue *rhs) {
+  Type *t = lhs->type;
+  LLValue *l = DtoRVal(lhs);
+  LLValue *r = DtoRVal(rhs);
 
   LLValue *res;
   if (t->isfloating()) {
@@ -54,11 +52,10 @@ DValue *DtoBinSub(DValue *lhs, DValue *rhs) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-DValue *DtoBinMul(Type *targettype, DValue *lhs, DValue *rhs) {
-  Type *t = lhs->getType();
-  LLValue *l, *r;
-  l = lhs->getRVal();
-  r = rhs->getRVal();
+DImValue *DtoBinMul(Type *targettype, DRValue *lhs, DRValue *rhs) {
+  Type *t = lhs->type;
+  LLValue *l = DtoRVal(lhs);
+  LLValue *r = DtoRVal(rhs);
 
   LLValue *res;
   if (t->isfloating()) {
@@ -66,16 +63,16 @@ DValue *DtoBinMul(Type *targettype, DValue *lhs, DValue *rhs) {
   } else {
     res = gIR->ir->CreateMul(l, r);
   }
+
   return new DImValue(targettype, res);
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
-DValue *DtoBinDiv(Type *targettype, DValue *lhs, DValue *rhs) {
-  Type *t = lhs->getType();
-  LLValue *l, *r;
-  l = lhs->getRVal();
-  r = rhs->getRVal();
+DImValue *DtoBinDiv(Type *targettype, DRValue *lhs, DRValue *rhs) {
+  Type *t = lhs->type;
+  LLValue *l = DtoRVal(lhs);
+  LLValue *r = DtoRVal(rhs);
 
   LLValue *res;
   if (t->isfloating()) {
@@ -85,16 +82,17 @@ DValue *DtoBinDiv(Type *targettype, DValue *lhs, DValue *rhs) {
   } else {
     res = gIR->ir->CreateUDiv(l, r);
   }
+
   return new DImValue(targettype, res);
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
-DValue *DtoBinRem(Type *targettype, DValue *lhs, DValue *rhs) {
-  Type *t = lhs->getType();
-  LLValue *l, *r;
-  l = lhs->getRVal();
-  r = rhs->getRVal();
+DImValue *DtoBinRem(Type *targettype, DRValue *lhs, DRValue *rhs) {
+  Type *t = lhs->type;
+  LLValue *l = DtoRVal(lhs);
+  LLValue *r = DtoRVal(rhs);
+
   LLValue *res;
   if (t->isfloating()) {
     res = gIR->ir->CreateFRem(l, r);
@@ -103,6 +101,7 @@ DValue *DtoBinRem(Type *targettype, DValue *lhs, DValue *rhs) {
   } else {
     res = gIR->ir->CreateURem(l, r);
   }
+
   return new DImValue(targettype, res);
 }
 
@@ -111,7 +110,7 @@ DValue *DtoBinRem(Type *targettype, DValue *lhs, DValue *rhs) {
 LLValue *DtoBinNumericEquals(Loc &loc, DValue *lhs, DValue *rhs, TOK op) {
   assert(op == TOKequal || op == TOKnotequal || op == TOKidentity ||
          op == TOKnotidentity);
-  Type *t = lhs->getType()->toBasetype();
+  Type *t = lhs->type->toBasetype();
   assert(t->isfloating());
   Logger::println("numeric equality");
 
@@ -133,9 +132,9 @@ LLValue *DtoBinNumericEquals(Loc &loc, DValue *lhs, DValue *rhs, TOK op) {
 LLValue *DtoBinFloatsEquals(Loc &loc, DValue *lhs, DValue *rhs, TOK op) {
   LLValue *res = nullptr;
   if (op == TOKequal) {
-    res = gIR->ir->CreateFCmpOEQ(lhs->getRVal(), rhs->getRVal());
+    res = gIR->ir->CreateFCmpOEQ(DtoRVal(lhs), DtoRVal(rhs));
   } else if (op == TOKnotequal) {
-    res = gIR->ir->CreateFCmpUNE(lhs->getRVal(), rhs->getRVal());
+    res = gIR->ir->CreateFCmpUNE(DtoRVal(lhs), DtoRVal(rhs));
   } else {
     llvm::ICmpInst::Predicate cmpop;
     if (op == TOKidentity) {
@@ -144,7 +143,7 @@ LLValue *DtoBinFloatsEquals(Loc &loc, DValue *lhs, DValue *rhs, TOK op) {
       cmpop = llvm::ICmpInst::ICMP_NE;
     }
 
-    LLValue *sz = DtoConstSize_t(getTypeStoreSize(DtoType(lhs->getType())));
+    LLValue *sz = DtoConstSize_t(getTypeStoreSize(DtoType(lhs->type)));
     LLValue *val = DtoMemCmp(makeLValue(loc, lhs), makeLValue(loc, rhs), sz);
     res = gIR->ir->CreateICmp(cmpop, val,
                               LLConstantInt::get(val->getType(), 0, false));
