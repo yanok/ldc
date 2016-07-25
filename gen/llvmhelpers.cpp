@@ -74,7 +74,7 @@ bool isTargetWindowsMSVC() {
 ******************************************************************************/
 static llvm::ManagedStatic<llvm::LLVMContext> GlobalContext;
 
-llvm::LLVMContext& getGlobalContext() { return *GlobalContext; }
+llvm::LLVMContext &getGlobalContext() { return *GlobalContext; }
 
 /******************************************************************************
  * DYNAMIC MEMORY HELPERS
@@ -523,8 +523,7 @@ DValue *DtoCastFloat(Loc &loc, DValue *val, Type *to) {
     } else if (fromsz < tosz) {
       rval = new llvm::FPExtInst(DtoRVal(val), tolltype, "", gIR->scopebb());
     } else if (fromsz > tosz) {
-      rval =
-          new llvm::FPTruncInst(DtoRVal(val), tolltype, "", gIR->scopebb());
+      rval = new llvm::FPTruncInst(DtoRVal(val), tolltype, "", gIR->scopebb());
     } else {
       error(loc, "invalid cast from '%s' to '%s'", val->type->toChars(),
             to->toChars());
@@ -550,8 +549,8 @@ DValue *DtoCastDelegate(Loc &loc, DValue *val, Type *to) {
     return DtoPaintType(loc, val, to);
   }
   if (to->toBasetype()->ty == Tbool) {
-    return new DImValue(
-        to, DtoDelegateEquals(TOKnotequal, DtoRVal(val), nullptr));
+    return new DImValue(to,
+                        DtoDelegateEquals(TOKnotequal, DtoRVal(val), nullptr));
   }
   error(loc, "invalid cast from '%s' to '%s'", val->type->toChars(),
         to->toChars());
@@ -1327,30 +1326,16 @@ Type *stripModifiers(Type *type, bool transitive) {
 ////////////////////////////////////////////////////////////////////////////////
 
 LLValue *makeLValue(Loc &loc, DValue *value) {
-  Type *valueType = value->type;
-  bool needsMemory;
-  LLValue *valuePointer;
-  if (value->isIm()) {
-    valuePointer = DtoRVal(value);
-    needsMemory = !DtoIsInMemoryOnly(valueType);
-  } else if (value->isLVal()) {
-    valuePointer = DtoLVal(value);
-    needsMemory = false;
-  } else if (value->isConst()) {
-    valuePointer = DtoRVal(value);
-    needsMemory = true;
-  } else {
-    valuePointer = DtoAlloca(valueType, ".makelvaluetmp");
-    DLValue var(valueType, valuePointer);
-    DtoAssign(loc, &var, value);
-    needsMemory = false;
-  }
+  if (value->isLVal())
+    return DtoLVal(value);
 
-  if (needsMemory) {
-    valuePointer = DtoAllocaDump(value, ".makelvaluetmp");
-  }
+  if (value->isIm() || value->isConst())
+    return DtoAllocaDump(value, ".makelvaluetmp");
 
-  return valuePointer;
+  LLValue *mem = DtoAlloca(value->type, ".makelvaluetmp");
+  DLValue var(value->type, mem);
+  DtoAssign(loc, &var, value);
+  return mem;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1564,6 +1549,17 @@ DValue *DtoSymbolAddress(Loc &loc, Type *type, Declaration *decl) {
 
       return makeVarDValue(type, vd);
     }
+  }
+
+  if (FuncLiteralDeclaration *flitdecl = decl->isFuncLiteralDeclaration()) {
+    Logger::println("FuncLiteralDeclaration");
+
+    // We need to codegen the function here, because literals are not added
+    // to the module member list.
+    DtoDefineFunction(flitdecl);
+    assert(getIrFunc(flitdecl)->func);
+
+    return new DFuncValue(flitdecl, getIrFunc(flitdecl)->func);
   }
 
   if (FuncDeclaration *fdecl = decl->isFuncDeclaration()) {
