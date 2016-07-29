@@ -1058,7 +1058,7 @@ int cppmain(int argc, char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal();
 #endif
 
-  exe_path::initialize(argv[0], reinterpret_cast<void *>(main));
+  exe_path::initialize(argv[0]);
 
   global._init();
   global.version = ldc::dmd_version;

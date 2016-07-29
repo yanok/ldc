@@ -291,7 +291,7 @@ llvm::FunctionType *DtoFunctionType(FuncDeclaration *fdecl) {
   if (fdecl->linkage == LINKobjc && dthis) {
     if (fdecl->objc.selector) {
       hasSel = true;
-    } else if (ClassDeclaration *cd = fdecl->parent->isClassDeclaration()) {
+    } else if (fdecl->parent->isClassDeclaration()) {
       fdecl->error("Objective-C @selector is missing");
     }
   }
@@ -1227,7 +1227,7 @@ int isDruntimeArrayOp(FuncDeclaration *fd) {
       "_arraySliceSliceMulass_s",         "_arraySliceSliceMulass_t",
       "_arraySliceSliceMulass_u",         "_arraySliceSliceMulass_w",
   };
-  char *name = fd->ident->toChars();
+  const char *name = fd->ident->toChars();
   int i =
       binary(name, libArrayopFuncs, sizeof(libArrayopFuncs) / sizeof(char *));
   if (i != -1) {
@@ -1235,8 +1235,8 @@ int isDruntimeArrayOp(FuncDeclaration *fd) {
   }
 
 #ifdef DEBUG // Make sure our array is alphabetized
-  for (i = 0; i < sizeof(libArrayopFuncs) / sizeof(char *); i++) {
-    if (strcmp(name, libArrayopFuncs[i]) == 0)
+  for (size_t j = 0; j < sizeof(libArrayopFuncs) / sizeof(char *); j++) {
+    if (strcmp(name, libArrayopFuncs[j]) == 0)
       assert(0);
   }
 #endif
