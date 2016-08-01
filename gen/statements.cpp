@@ -171,8 +171,6 @@ public:
 
           // store the return value unless NRVO already used the sret pointer
           if (!e->isLVal() || DtoLVal(e) != sretPointer) {
-            DtoAssign(stmt->loc, &returnValue, e, TOKblit);
-
             // call postblit if the expression is a D lvalue
             // exceptions: NRVO and special __result variable (out contracts)
             bool doPostblit = !(fd->nrvo_can && fd->nrvo_var);
@@ -181,6 +179,8 @@ public:
               if (ve->var->isResult())
                 doPostblit = false;
             }
+
+            DtoAssign(stmt->loc, &returnValue, e, TOKblit);
             if (doPostblit)
               callPostblit(stmt->loc, stmt->exp, sretPointer);
           }
@@ -1125,6 +1125,16 @@ public:
 
     llvm::BasicBlock *oldbb = irs->scopebb();
 
+    // Codegen state variables stored in the AST must be reset (see end of
+    // function)
+    for (CaseStatement *cs : *stmt->cases) {
+      assert(cs->bodyBB == nullptr);
+      assert(cs->llvmIdx == nullptr);
+    }
+    if (stmt->sdefault) {
+      assert(stmt->sdefault->bodyBB == nullptr);
+    }
+
     // If one of the case expressions is non-constant, we can't use
     // 'switch' instruction (that can happen because D2 allows to
     // initialize a global variable in a static constructor).
@@ -1357,6 +1367,17 @@ public:
     }
 
     irs->scope() = IRScope(endbb);
+
+    // Reset backend variables to original state (to allow multiple codegen
+    // passes of same ast nodes)
+    // TODO: move the codegen state variables out of the AST.
+    for (CaseStatement *cs : *stmt->cases) {
+      cs->bodyBB = nullptr;
+      cs->llvmIdx = nullptr;
+    }
+    if (stmt->sdefault) {
+      stmt->sdefault->bodyBB = nullptr;
+    }
   }
 
   //////////////////////////////////////////////////////////////////////////
@@ -1619,7 +1640,7 @@ public:
       // Copy value to local variable, and use it as the value variable.
       DLValue dst(stmt->value->type, valvar);
       DLValue src(stmt->value->type, gep);
-      DtoAssign(stmt->loc, &dst, &src);
+      DtoAssign(stmt->loc, &dst, &src, TOKassign);
       getIrLocal(stmt->value)->value = valvar;
     } else {
       // Use the GEP as the address of the value variable.
