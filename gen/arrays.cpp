@@ -16,6 +16,7 @@
 #include "module.h"
 #include "mtype.h"
 #include "gen/dvalue.h"
+#include "gen/funcgenstate.h"
 #include "gen/irstate.h"
 #include "gen/llvm.h"
 #include "gen/llvmhelpers.h"
@@ -133,12 +134,9 @@ static void DtoArrayInit(Loc &loc, LLValue *ptr, LLValue *length,
   }
 
   // create blocks
-  llvm::BasicBlock *condbb = llvm::BasicBlock::Create(
-      gIR->context(), "arrayinit.cond", gIR->topfunc());
-  llvm::BasicBlock *bodybb = llvm::BasicBlock::Create(
-      gIR->context(), "arrayinit.body", gIR->topfunc());
-  llvm::BasicBlock *endbb =
-      llvm::BasicBlock::Create(gIR->context(), "arrayinit.end", gIR->topfunc());
+  llvm::BasicBlock *condbb = gIR->insertBB("arrayinit.cond");
+  llvm::BasicBlock *bodybb = gIR->insertBBAfter(condbb, "arrayinit.body");
+  llvm::BasicBlock *endbb = gIR->insertBBAfter(bodybb, "arrayinit.end");
 
   // initialize iterator
   LLValue *itr = DtoAllocaDump(DtoConstSize_t(0), 0, "arrayinit.itr");
@@ -863,9 +861,8 @@ DSliceValue *DtoCatArrays(Loc &loc, Type *arrayType, Expression *exp1,
     args.push_back(val);
   }
 
-  LLValue *newArray = gIR->func()
-                          ->scopes->callOrInvoke(fn, args, ".appendedArray")
-                          .getInstruction();
+  auto newArray =
+      gIR->funcGen().callOrInvoke(fn, args, ".appendedArray").getInstruction();
   return getSlice(arrayType, newArray);
 }
 
@@ -937,7 +934,7 @@ static LLValue *DtoArrayEqCmp_impl(Loc &loc, const char *func, DValue *l,
     args.push_back(DtoBitCast(tival, fn->getFunctionType()->getParamType(2)));
   }
 
-  return gIR->func()->scopes->callOrInvoke(fn, args).getInstruction();
+  return gIR->funcGen().callOrInvoke(fn, args).getInstruction();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -994,9 +991,9 @@ LLValue *DtoArrayCastLength(Loc &loc, LLValue *len, LLType *elemty,
   }
 
   LLFunction *fn = getRuntimeFunction(loc, gIR->module, "_d_array_cast_len");
-  return gIR->CreateCallOrInvoke(fn, len,
-                                 LLConstantInt::get(DtoSize_t(), esz, false),
-                                 LLConstantInt::get(DtoSize_t(), nsz, false))
+  return gIR
+      ->CreateCallOrInvoke(fn, len, LLConstantInt::get(DtoSize_t(), esz, false),
+                           LLConstantInt::get(DtoSize_t(), nsz, false))
       .getInstruction();
 }
 
@@ -1091,7 +1088,9 @@ DValue *DtoCastArray(Loc &loc, DValue *u, Type *to) {
       ptr = gIR->ir->CreateBitCast(ptr, tolltype);
     }
     return new DImValue(to, ptr);
-  } else if (totype->ty == Tarray) {
+  }
+
+  if (totype->ty == Tarray) {
     IF_LOG Logger::cout() << "to array" << '\n';
 
     LLValue *length = nullptr;
@@ -1123,7 +1122,9 @@ DValue *DtoCastArray(Loc &loc, DValue *u, Type *to) {
       length = DtoArrayCastLength(loc, length, ety, ptrty->getContainedType(0));
 
     return new DSliceValue(to, length, DtoBitCast(ptr, ptrty));
-  } else if (totype->ty == Tsarray) {
+  }
+
+  if (totype->ty == Tsarray) {
     IF_LOG Logger::cout() << "to sarray" << '\n';
 
     LLValue *ptr = nullptr;
@@ -1139,18 +1140,17 @@ DValue *DtoCastArray(Loc &loc, DValue *u, Type *to) {
     }
 
     return new DLValue(to, DtoBitCast(ptr, getPtrToType(tolltype)));
-  } else if (totype->ty == Tbool) {
+  }
+
+  if (totype->ty == Tbool) {
     // return (arr.ptr !is null)
     LLValue *ptr = DtoArrayPtr(u);
     LLConstant *nul = getNullPtr(ptr->getType());
     return new DImValue(to, gIR->ir->CreateICmpNE(ptr, nul));
-  } else {
-    LLValue *ptr = DtoArrayPtr(u);
-    ptr = DtoBitCast(ptr, getPtrToType(tolltype));
-    return new DLValue(to, ptr);
   }
 
-  llvm_unreachable("Unexpected array cast");
+  const auto castedPtr = DtoBitCast(DtoArrayPtr(u), getPtrToType(tolltype));
+  return new DLValue(to, castedPtr);
 }
 
 void DtoIndexBoundsCheck(Loc &loc, DValue *arr, DValue *index) {
@@ -1173,15 +1173,12 @@ void DtoIndexBoundsCheck(Loc &loc, DValue *arr, DValue *index) {
   llvm::Value *cond = gIR->ir->CreateICmp(cmpop, DtoRVal(index),
                                           DtoArrayLen(arr), "bounds.cmp");
 
-  llvm::BasicBlock *failbb =
-      llvm::BasicBlock::Create(gIR->context(), "bounds.fail", gIR->topfunc());
-  llvm::BasicBlock *okbb =
-      llvm::BasicBlock::Create(gIR->context(), "bounds.ok", gIR->topfunc());
+  llvm::BasicBlock *okbb = gIR->insertBB("bounds.ok");
+  llvm::BasicBlock *failbb = gIR->insertBBAfter(okbb, "bounds.fail");
   gIR->ir->CreateCondBr(cond, okbb, failbb);
 
   // set up failbb to call the array bounds error runtime function
   gIR->scope() = IRScope(failbb);
-
   DtoBoundsCheckFailCall(gIR, loc);
 
   // if ok, proceed in okbb

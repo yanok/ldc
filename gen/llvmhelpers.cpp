@@ -15,6 +15,7 @@
 #include "gen/classes.h"
 #include "gen/complex.h"
 #include "gen/dvalue.h"
+#include "gen/funcgenstate.h"
 #include "gen/functions.h"
 #include "gen/irstate.h"
 #include "gen/llvm.h"
@@ -262,7 +263,7 @@ void DtoAssert(Module *M, Loc &loc, DValue *msg) {
   args.push_back(DtoConstUint(loc.linnum));
 
   // call
-  gIR->func()->scopes->callOrInvoke(fn, args);
+  gIR->funcGen().callOrInvoke(fn, args);
 
   // after assert is always unreachable
   gIR->ir->CreateUnreachable();
@@ -290,7 +291,7 @@ void DtoGoto(Loc &loc, LabelDsymbol *target) {
     fatal();
   }
 
-  gIR->func()->scopes->jumpToLabel(loc, target->ident);
+  gIR->funcGen().jumpTargets.jumpToLabel(loc, target->ident);
 }
 
 /******************************************************************************
@@ -1538,16 +1539,15 @@ DValue *DtoSymbolAddress(Loc &loc, Type *type, Declaration *decl) {
                                      "ref vars, although it can easily be "
                                      "made to.");
       return new DLValue(type, DtoBitCast(getIrValue(vd), DtoPtrToType(type)));
-    } else {
-      Logger::println("a normal variable");
-
-      // take care of forward references of global variables
-      if (vd->isDataseg() || (vd->storage_class & STCextern)) {
-        DtoResolveVariable(vd);
-      }
-
-      return makeVarDValue(type, vd);
     }
+    Logger::println("a normal variable");
+
+    // take care of forward references of global variables
+    if (vd->isDataseg() || (vd->storage_class & STCextern)) {
+      DtoResolveVariable(vd);
+    }
+
+    return makeVarDValue(type, vd);
   }
 
   if (FuncLiteralDeclaration *flitdecl = decl->isFuncLiteralDeclaration()) {
@@ -1671,7 +1671,7 @@ llvm::Constant *buildStringLiteralConstant(StringExp *se, bool zeroTerm) {
   return LLConstantArray::get(at, vals);
 }
 
-llvm::GlobalVariable *getOrCreateGlobal(Loc &loc, llvm::Module &module,
+llvm::GlobalVariable *getOrCreateGlobal(const Loc &loc, llvm::Module &module,
                                         llvm::Type *type, bool isConstant,
                                         llvm::GlobalValue::LinkageTypes linkage,
                                         llvm::Constant *init,

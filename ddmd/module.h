@@ -148,9 +148,9 @@ public:
     Module *parse();       // syntactic parse
 #endif
     void importAll(Scope *sc);
-    void semantic();    // semantic analysis
-    void semantic2();   // pass 2 semantic analysis
-    void semantic3();   // pass 3 semantic analysis
+    void semantic(Scope *);    // semantic analysis
+    void semantic2(Scope *);   // pass 2 semantic analysis
+    void semantic3(Scope *);   // pass 3 semantic analysis
     int needModuleInfo();
     Dsymbol *search(Loc loc, Identifier *ident, int flags = SearchLocalsOnly);
     Dsymbol *symtabInsert(Dsymbol *s);
@@ -206,10 +206,6 @@ public:
     Module *isModule() { return this; }
     void accept(Visitor *v) { v->visit(this); }
 };
-
-#if IN_LLVM
-    void buildTargetFiles(Module *m, bool singleObj, bool library);
-#endif
 
 struct ModuleDeclaration
 {

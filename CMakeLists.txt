@@ -58,7 +58,7 @@ set(LDC_VERSION "1.0.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
 set(DMDFE_PATCH_VERSION   71)
-set(DMDFE_FIX_LEVEL       1) # Comment out if not used
+set(DMDFE_FIX_LEVEL       2-b2) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -569,7 +569,7 @@ else()
     endif()
 endif()
 
-function(build_d_executable output_exe compiler_args linker_args dependencies)
+function(build_d_executable output_exe compiler_args linker_args compile_deps link_deps)
     if(LDC_LINK_MANUALLY)
         set(object_file ${output_exe}${CMAKE_CXX_OUTPUT_EXTENSION})
         separate_arguments(dmd_flags UNIX_COMMAND "${D_COMPILER_FLAGS} ${DDMD_DFLAGS}")
@@ -577,12 +577,12 @@ function(build_d_executable output_exe compiler_args linker_args dependencies)
             OUTPUT ${object_file}
             COMMAND ${D_COMPILER} -c ${dmd_flags} -I${PROJECT_SOURCE_DIR}/${DDMDFE_PATH} -of${object_file} ${compiler_args}
             WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-            DEPENDS ${dependencies}
+            DEPENDS ${compile_deps}
         )
         add_custom_command(
             OUTPUT ${output_exe}
             COMMAND ${CMAKE_CXX_COMPILER} -o ${output_exe} ${object_file} ${linker_args} ${LDC_LINKERFLAG_LIST}
-            DEPENDS ${object_file}
+            DEPENDS ${object_file} ${link_deps}
         )
     else()
         set(dflags "${D_COMPILER_FLAGS} ${DDMD_DFLAGS} ${DDMD_LFLAGS}")
@@ -601,7 +601,7 @@ function(build_d_executable output_exe compiler_args linker_args dependencies)
             OUTPUT ${output_exe}
             COMMAND ${D_COMPILER} ${dflags} ${lflags} -I${PROJECT_SOURCE_DIR}/${DDMDFE_PATH} -of${output_exe} ${compiler_args} ${linker_args}
             WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-            DEPENDS ${dependencies}
+            DEPENDS ${compile_deps} ${link_deps}
         )
     endif()
 endfunction()
@@ -620,7 +620,8 @@ else()
         "${LDC_EXE_FULL}"
         "${LDC_D_SOURCE_FILES}"
         "$<TARGET_LINKER_FILE:${LDC_LIB}>"
-        "${LDC_D_SOURCE_FILES};${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.d;${LDC_LIB}"
+        "${LDC_D_SOURCE_FILES};${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.d"
+        "${LDC_LIB}"
     )
 endif()
 
@@ -654,10 +655,12 @@ set_target_properties(
     ARCHIVE_OUTPUT_NAME ldmd
     LIBRARY_OUTPUT_NAME ldmd
 )
+set(LDMD_D_SOURCE_FILES ${DDMDFE_PATH}/root/man.d driver/ldmd.d)
 build_d_executable(
     "${LDMD_EXE_FULL}"
-    "${DDMDFE_PATH}/root/man.d;driver/ldmd.d"
+    "${LDMD_D_SOURCE_FILES}"
     "$<TARGET_LINKER_FILE:LDMD_CXX_LIB>"
+    "${LDMD_D_SOURCE_FILES}"
     "LDMD_CXX_LIB;${LDC_LIB}"
 )
 

@@ -241,7 +241,6 @@ struct Global
     const(char)* obj_ext;
     version(IN_LLVM)
     {
-        const(char)* obj_ext_alt;
         const(char)* ll_ext;
         const(char)* bc_ext;
         const(char)* s_ext;
@@ -325,7 +324,6 @@ version(IN_LLVM)
         bc_ext  = "bc";
         s_ext   = "s";
         obj_ext = "o";
-        obj_ext_alt = "obj";
 }
 else
 {

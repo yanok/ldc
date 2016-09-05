@@ -228,7 +228,8 @@ static void addInstrProfilingPass(legacy::PassManagerBase &mpm) {
   if (global.params.genInstrProf) {
     InstrProfOptions options;
     options.NoRedZone = global.params.disableRedZone;
-    options.InstrProfileOutput = global.params.datafileInstrProf;
+    if (global.params.datafileInstrProf)
+      options.InstrProfileOutput = global.params.datafileInstrProf;
 #if LDC_LLVM_VER >= 309
     mpm.add(createInstrProfilingLegacyPass(options));
 #else
@@ -273,7 +274,11 @@ static void addOptimizationPasses(PassManagerBase &mpm,
     }
     builder.Inliner = createFunctionInliningPass(threshold);
   } else {
+#if LDC_LLVM_VER >= 400
+    builder.Inliner = createAlwaysInlinerLegacyPass();
+#else
     builder.Inliner = createAlwaysInlinerPass();
+#endif
   }
   builder.DisableUnitAtATime = !unitAtATime;
   builder.DisableUnrollLoops = optLevel == 0;

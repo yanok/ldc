@@ -24,10 +24,10 @@ namespace opts {
  */
 struct CoverageParser : public cl::parser<unsigned char> {
 #if LDC_LLVM_VER >= 307
-  CoverageParser(cl::Option &O) : cl::parser<unsigned char>(O) {}
+  explicit CoverageParser(cl::Option &O) : cl::parser<unsigned char>(O) {}
 #endif
 
-  bool parse(cl::Option &O, llvm::StringRef ArgName, llvm::StringRef Arg,
+  bool parse(cl::Option &O, llvm::StringRef /*ArgName*/, llvm::StringRef Arg,
              unsigned char &Val) {
     if (Arg == "") {
       Val = 0;
@@ -251,8 +251,9 @@ static cl::list<std::string, StringsAdapter>
                    cl::Prefix);
 
 cl::opt<std::string>
-    moduleDepsFile("deps", cl::desc("Write module dependencies to filename"),
-                   cl::value_desc("filename"));
+    moduleDeps("deps",
+               cl::desc("Write module dependencies to filename (only imports)"),
+               cl::value_desc("filename"), cl::ValueOptional);
 
 cl::opt<std::string> mArch("march",
                            cl::desc("Architecture to generate code for:"));

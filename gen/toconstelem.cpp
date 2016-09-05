@@ -311,11 +311,9 @@ public:
 #endif
       }
       result = DtoBitCast(value, DtoType(tb));
-    } else if (tb->ty == Tclass && e->e1->type->ty == Tclass) {
-      assert(e->e1->op == TOKclassreference);
-      ClassDeclaration *cd =
-          static_cast<ClassReferenceExp *>(e->e1)->originalClass();
-
+    } else if (tb->ty == Tclass && e->e1->type->ty == Tclass &&
+               e->e1->op == TOKclassreference) {
+      auto cd = static_cast<ClassReferenceExp *>(e->e1)->originalClass();
       llvm::Constant *instance = toConstElem(e->e1);
       if (InterfaceDeclaration *it =
               static_cast<TypeClass *>(tb)->sym->isInterfaceDeclaration()) {
@@ -372,7 +370,7 @@ public:
         // We can turn this into a "nice" GEP.
         result = llvm::ConstantExpr::getGetElementPtr(
 #if LDC_LLVM_VER >= 307
-            NULL,
+            nullptr,
 #endif
             base, DtoConstSize_t(e->offset / elemSize));
       } else {
@@ -380,7 +378,7 @@ public:
         // apply the byte offset.
         result = llvm::ConstantExpr::getGetElementPtr(
 #if LDC_LLVM_VER >= 307
-            NULL,
+            nullptr,
 #endif
             DtoBitCast(base, getVoidPtrType()), DtoConstSize_t(e->offset));
       }
