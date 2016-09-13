@@ -1004,15 +1004,6 @@ std::string locateBinary(std::string exeName) {
   return "";
 }
 
-/**
- * Makes sure the given directory (absolute or relative) exists on disk.
- */
-static void createOutputDir(const char *dir) {
-  if (ls::fs::create_directories(dir)) {
-    error("Could not create output directory '%s'.", dir);
-  }
-}
-
 static size_t addStrlen(size_t acc, const char *str) {
   if (!str) {
     return acc;
@@ -1050,20 +1041,6 @@ int cppmain(int argc, char **argv) {
   }
 
   args.push_back(nullptr);
-
-  // On Linux, DMD creates output directores that don't already exist, while
-  // LDC does not (and neither does GDC). Do this here for rdmd compatibility.
-  if (p.objName) {
-    llvm::SmallString<256> outputPath(p.objName);
-    ls::path::remove_filename(outputPath);
-    if (!outputPath.empty()) {
-      createOutputDir(outputPath.c_str());
-    }
-  }
-
-  if (p.objDir) {
-    createOutputDir(p.objDir);
-  }
 
   // Check if we need to write out a response file.
   size_t totalLen = std::accumulate(args.begin(), args.end(), 0, addStrlen);
