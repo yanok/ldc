@@ -22,7 +22,7 @@ endif()
 #
 
 find_package(LLVM 3.5 REQUIRED
-    all-targets analysis asmparser asmprinter bitreader bitwriter codegen core debuginfocodeview debuginfodwarf debuginfopdb globalisel instcombine ipa ipo instrumentation irreader linker lto mc mcdisassembler mcparser objcarcopts object option profiledata scalaropts selectiondag support tablegen target transformutils vectorize ${EXTRA_LLVM_MODULES})
+    all-targets analysis asmparser asmprinter bitreader bitwriter codegen core debuginfocodeview debuginfodwarf debuginfomsf debuginfopdb globalisel instcombine ipa ipo instrumentation irreader linker lto mc mcdisassembler mcparser objcarcopts object option profiledata scalaropts selectiondag support tablegen target transformutils vectorize ${EXTRA_LLVM_MODULES})
 math(EXPR LDC_LLVM_VER ${LLVM_VERSION_MAJOR}*100+${LLVM_VERSION_MINOR})
 # Remove LLVMTableGen library from list of libraries
 string(REGEX MATCH "^-.*LLVMTableGen[^;]*;|;-.*LLVMTableGen[^;]*" LLVM_TABLEGEN_LIBRARY "${LLVM_LIBRARIES}")
@@ -58,7 +58,7 @@ set(LDC_VERSION "1.0.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
 set(DMDFE_PATCH_VERSION   71)
-set(DMDFE_FIX_LEVEL       2-b2) # Comment out if not used
+set(DMDFE_FIX_LEVEL       2) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -346,6 +346,7 @@ set(DRV_HDR
     driver/configfile.h
     driver/exe_path.h
     driver/ir2obj_cache.h
+    driver/ir2obj_cache_pruning.h
     driver/ldc-version.h
     driver/targetmachine.h
     driver/toobj.h
@@ -666,9 +667,14 @@ build_d_executable(
 
 
 #
-# Auxiliary tools.
+# Auxiliary build and test utils.
 #
 add_subdirectory(utils)
+
+#
+# Auxiliary tools.
+#
+add_subdirectory(tools)
 
 #
 # Test and runtime targets. Note that enable_testing() is order-sensitive!
