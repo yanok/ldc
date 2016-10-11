@@ -705,7 +705,6 @@ void defineParameters(IrFuncTy &irFty, VarDeclarations &parameters) {
     // E.g., for a lazy parameter of type T, vd->type is T (with lazy storage
     // class) while irparam->arg->type is the delegate type.
     Type *const paramType = (irparam ? irparam->arg->type : vd->type);
-    bool rewrittenToLocal = false;
 
     if (!irparam) {
       // This is a parameter that is not passed on the LLVM level.
@@ -722,10 +721,8 @@ void defineParameters(IrFuncTy &irFty, VarDeclarations &parameters) {
         assert(irparam->value->getType() == DtoPtrToType(paramType));
       } else {
         // Let the ABI transform the parameter back to an lvalue.
-        auto Lvalue =
+        irparam->value =
             irFty.getParamLVal(paramType, llArgIdx, irparam->value);
-        rewrittenToLocal = Lvalue != irparam->value;
-        irparam->value = Lvalue;
       }
 
       irparam->value->setName(vd->ident->toChars());
@@ -734,7 +731,7 @@ void defineParameters(IrFuncTy &irFty, VarDeclarations &parameters) {
     }
 
     if (global.params.symdebug)
-      gIR->DBuilder.EmitLocalVariable(irparam->value, vd, paramType, false, rewrittenToLocal);
+      gIR->DBuilder.EmitLocalVariable(irparam->value, vd, paramType);
   }
 }
 
@@ -1011,6 +1008,17 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
     // copy _arguments to a memory location
     irFunc->_arguments =
         DtoAllocaDump(irFunc->_arguments, 0, "_arguments_mem");
+
+    // Push cleanup block that calls va_end to match the va_start call.
+    {
+      auto *vaendBB =
+          llvm::BasicBlock::Create(gIR->context(), "vaend", gIR->topfunc());
+      IRScope saveScope = gIR->scope();
+      gIR->scope() = IRScope(vaendBB);
+      gIR->ir->CreateCall(GET_INTRINSIC_DECL(vaend), llAp);
+      funcGen.scopes.pushCleanup(vaendBB, gIR->scopebb());
+      gIR->scope() = saveScope;
+    }
   }
 
   funcGen.pgo.emitCounterIncrement(fd->fbody);
@@ -1018,6 +1026,17 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
 
   // output function body
   Statement_toIR(fd->fbody, gIR);
+
+  // D varargs: emit the cleanup block that calls va_end.
+  if (f->linkage == LINKd && f->varargs == 1) {
+    if (!gIR->scopereturned()) {
+      if (!funcGen.retBlock)
+        funcGen.retBlock = gIR->insertBB("return");
+      funcGen.scopes.runCleanups(0, funcGen.retBlock);
+      gIR->scope() = IRScope(funcGen.retBlock);
+    }
+    funcGen.scopes.popCleanups(0);
+  }
 
   llvm::BasicBlock *bb = gIR->scopebb();
   if (pred_begin(bb) == pred_end(bb) &&
