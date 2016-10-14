@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "gen/llvmhelpers.h"
+#include "gen/cl_helpers.h"
 #include "declaration.h"
 #include "expression.h"
 #include "gen/abi.h"
@@ -44,19 +45,23 @@
 
 #include "llvm/Support/CommandLine.h"
 
+#if LDC_LLVM_VER >= 400
+// trick clEnumValN() into prepending the llvm namesspace 
+namespace cl { using OptionEnumValue = llvm::cl::OptionEnumValue; }
+#endif
+
 llvm::cl::opt<llvm::GlobalVariable::ThreadLocalMode> clThreadModel(
     "fthread-model", llvm::cl::desc("Thread model"),
     llvm::cl::init(llvm::GlobalVariable::GeneralDynamicTLSModel),
-    llvm::cl::values(clEnumValN(llvm::GlobalVariable::GeneralDynamicTLSModel,
-                                "global-dynamic",
-                                "Global dynamic TLS model (default)"),
-                     clEnumValN(llvm::GlobalVariable::LocalDynamicTLSModel,
-                                "local-dynamic", "Local dynamic TLS model"),
-                     clEnumValN(llvm::GlobalVariable::InitialExecTLSModel,
-                                "initial-exec", "Initial exec TLS model"),
-                     clEnumValN(llvm::GlobalVariable::LocalExecTLSModel,
-                                "local-exec", "Local exec TLS model"),
-                     clEnumValEnd));
+    clEnumValues(clEnumValN(llvm::GlobalVariable::GeneralDynamicTLSModel,
+                            "global-dynamic",
+                            "Global dynamic TLS model (default)"),
+                 clEnumValN(llvm::GlobalVariable::LocalDynamicTLSModel,
+                            "local-dynamic", "Local dynamic TLS model"),
+                 clEnumValN(llvm::GlobalVariable::InitialExecTLSModel,
+                            "initial-exec", "Initial exec TLS model"),
+                 clEnumValN(llvm::GlobalVariable::LocalExecTLSModel,
+                            "local-exec", "Local exec TLS model")));
 
 /******************************************************************************
  * Simple Triple helpers for DFE
@@ -846,10 +851,10 @@ void DtoResolveVariable(VarDeclaration *vd) {
                           linkage, nullptr, llName, vd->isThreadlocal());
     getIrGlobal(vd)->value = gvar;
 
-    // Set the alignment and use the target pointer size as lower bound.
-    unsigned alignment =
-        std::max(DtoAlignment(vd), gDataLayout->getPointerSize());
-    gvar->setAlignment(alignment);
+    // Set the alignment (it is important not to use type->alignsize because
+    // VarDeclarations can have an align() attribute independent of the type
+    // as well).
+    gvar->setAlignment(DtoAlignment(vd));
 
     applyVarDeclUDAs(vd, gvar);
 
