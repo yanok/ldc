@@ -21,6 +21,7 @@
 #include "ir/irfunction.h"
 #include "ir/irtype.h"
 #include "ir/irtypefunction.h"
+#include "driver/cl_options.h"
 #include "ldcbindings.h"
 #include "mars.h"
 #include "module.h"
@@ -127,22 +128,24 @@ llvm::Function *getRuntimeFunction(const Loc &loc, llvm::Module &target,
                                    const char *name) {
   checkForImplicitGCCall(loc, name);
 
-  if (!M) {
+  if (!M)
     initRuntime();
-  }
 
-  LLFunction *fn = target.getFunction(name);
-  if (fn) {
-    return fn;
-  }
-
-  fn = M->getFunction(name);
+  LLFunction *fn = M->getFunction(name);
   if (!fn) {
     error(loc, "Runtime function '%s' was not found", name);
     fatal();
   }
-
   LLFunctionType *fnty = fn->getFunctionType();
+
+  if (LLFunction *existing = target.getFunction(name)) {
+    if (existing->getFunctionType() != fnty) {
+      error(Loc(), "Incompatible declaration of runtime function '%s'", name);
+      fatal();
+    }
+    return existing;
+  }
+
   LLFunction *resfn =
       llvm::cast<llvm::Function>(target.getOrInsertFunction(name, fnty));
   resfn->setAttributes(fn->getAttributes());
@@ -322,6 +325,16 @@ static void buildRuntimeModule() {
       Attr_1_2_NoCapture(Attr_1_NoCapture, 2, llvm::Attribute::NoCapture),
       Attr_1_3_NoCapture(Attr_1_NoCapture, 3, llvm::Attribute::NoCapture),
       Attr_1_4_NoCapture(Attr_1_NoCapture, 4, llvm::Attribute::NoCapture);
+
+  //////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
+
+  // void __cyg_profile_func_enter(void *callee, void *caller)
+  // void __cyg_profile_func_exit(void *callee, void *caller)
+  createFwdDecl(LINKc, voidTy,
+                {"__cyg_profile_func_exit", "__cyg_profile_func_enter"},
+                {voidPtrTy, voidPtrTy}, {}, Attr_NoUnwind);
 
   //////////////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////////////
@@ -610,7 +623,8 @@ static void buildRuntimeModule() {
   //////////////////////////////////////////////////////////////////////////////
 
   // void _d_throw_exception(Object e)
-  createFwdDecl(LINKc, voidTy, {"_d_throw_exception"}, {objectTy});
+  createFwdDecl(LINKc, voidTy, {"_d_throw_exception"}, {objectTy}, {},
+                Attr_Cold_NoReturn);
 
   //////////////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////////////
@@ -735,4 +749,29 @@ static void buildRuntimeModule() {
       break;
     }
   }
+}
+
+static void emitInstrumentationFn(const char *name) {
+  LLFunction *fn = getRuntimeFunction(Loc(), gIR->module, name);
+
+  // Grab the address of the calling function
+  auto *caller =
+      gIR->ir->CreateCall(GET_INTRINSIC_DECL(returnaddress), DtoConstInt(1));
+  auto callee = DtoBitCast(gIR->topfunc(), getVoidPtrType());
+
+#if LDC_LLVM_VER >= 307
+  gIR->ir->CreateCall(fn, {callee, caller});
+#else
+  gIR->ir->CreateCall2(fn, callee, caller);
+#endif
+}
+
+void emitInstrumentationFnEnter(FuncDeclaration *decl) {
+  if (opts::instrumentFunctions && decl->emitInstrumentation)
+    emitInstrumentationFn("__cyg_profile_func_enter");
+}
+
+void emitInstrumentationFnLeave(FuncDeclaration *decl) {
+  if (opts::instrumentFunctions && decl->emitInstrumentation)
+    emitInstrumentationFn("__cyg_profile_func_exit");
 }

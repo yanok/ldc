@@ -451,17 +451,6 @@ void applyTargetMachineAttributes(llvm::Function &func,
   func.addFnAttr("no-nans-fp-math", TO.NoNaNsFPMath ? "true" : "false");
 #if LDC_LLVM_VER < 307
   func.addFnAttr("use-soft-float", TO.UseSoftFloat ? "true" : "false");
-#else
-  switch (TO.FloatABIType) {
-  case llvm::FloatABI::Default:
-    break;
-  case llvm::FloatABI::Soft:
-    func.addFnAttr("use-soft-float", "true");
-    break;
-  case llvm::FloatABI::Hard:
-    func.addFnAttr("use-soft-float", "false");
-    break;
-  }
 #endif
 
   // Frame pointer elimination
@@ -973,6 +962,8 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   // debug info - after all allocas, but before any llvm.dbg.declare etc
   gIR->DBuilder.EmitFuncStart(fd);
 
+  emitInstrumentationFnEnter(fd);
+
   // this hack makes sure the frame pointer elimination optimization is
   // disabled.
   // this this eliminates a bunch of inline asm related issues.
@@ -1087,6 +1078,8 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   } else if (!gIR->scopereturned()) {
     // llvm requires all basic blocks to end with a TerminatorInst but DMD does
     // not put a return statement in automatically, so we do it here.
+
+    emitInstrumentationFnLeave(fd);
 
     // pass the previous block into this block
     gIR->DBuilder.EmitStopPoint(fd->endloc);
