@@ -438,6 +438,11 @@ cl::opt<bool, true>
              cl::desc("implement http://wiki.dlang.org/DIP25 (experimental)"),
              cl::location(global.params.useDIP25));
 
+cl::opt<bool, true> betterC(
+    "betterC",
+    cl::desc("omit generating some runtime information and helper functions"),
+    cl::location(global.params.betterC));
+
 cl::opt<unsigned char, true, CoverageParser> coverageAnalysis(
     "cov", cl::desc("Compile-in code coverage analysis\n(use -cov=n for n% "
                     "minimum required coverage)"),
@@ -446,8 +451,9 @@ cl::opt<unsigned char, true, CoverageParser> coverageAnalysis(
 #if LDC_WITH_PGO
 cl::opt<std::string>
     genfileInstrProf("fprofile-instr-generate", cl::value_desc("filename"),
-                     cl::desc("Generate instrumented code to collect "
-                              "execution counts (e.g. for PGO)"),
+                     cl::desc("Generate instrumented code to collect a runtime "
+                              "profile into default.profraw (overriden by "
+                              "'=<filename>' or LLVM_PROFILE_FILE env var)"),
                      cl::ValueOptional);
 
 cl::opt<std::string> usefileInstrProf(

@@ -80,6 +80,9 @@ set(PROGRAM_PREFIX "" CACHE STRING "Prepended to ldc/ldmd binary names")
 set(PROGRAM_SUFFIX "" CACHE STRING "Appended to ldc/ldmd binary names")
 set(CONF_INST_DIR ${SYSCONF_INSTALL_DIR} CACHE PATH "Directory ldc.conf is installed to")
 
+# Note: LIB_SUFFIX should perhaps be renamed to LDC_LIBDIR_SUFFIX.
+set(LIB_SUFFIX "" CACHE STRING "Appended to the library installation directory. Set to '64' to install libraries into ${PREFIX}/lib64.")
+
 # The following flags are currently not well tested, expect the build to fail.
 option(GENERATE_OFFTI "generate complete ClassInfo.offTi arrays")
 mark_as_advanced(GENERATE_OFFTI)
@@ -309,7 +312,15 @@ if(NOT TAG MATCHES "NOTFOUND")
 else()
     get_git_head_revision(REFSPEC HASH)
     if(NOT HASH STREQUAL "GITDIR-NOTFOUND")
-        string(SUBSTRING "${HASH}" 0 6 LDC_VERSION)
+        # Append git hash to LDC_VERSION
+        string(SUBSTRING "${HASH}" 0 7 LDC_VERSION_HASH)
+        set(LDC_VERSION "${LDC_VERSION}git-${LDC_VERSION_HASH}")
+
+        # Append "-dirty" when the working copy is dirty
+        git_describe(GIT_DIRTY --dirty)
+        if (GIT_DIRTY MATCHES ".*-dirty")
+            set(LDC_VERSION "${LDC_VERSION}-dirty")
+        endif()
     endif()
 endif()
 message(STATUS "LDC version identifier: ${LDC_VERSION}")
@@ -433,6 +444,7 @@ append("-DIN_LLVM" CMAKE_CXX_FLAGS)
 append("-DOPAQUE_VTBLS" CMAKE_CXX_FLAGS)
 append("-DLDC_INSTALL_PREFIX=\"${CMAKE_INSTALL_PREFIX}\"" CMAKE_CXX_FLAGS)
 append("-DLDC_LLVM_VER=${LDC_LLVM_VER}" CMAKE_CXX_FLAGS)
+append("-DLDC_LIBDIR_SUFFIX=\"\\\"${LIB_SUFFIX}\\\"\"" CMAKE_CXX_FLAGS)
 
 if(GENERATE_OFFTI)
     append("-DGENERATE_OFFTI" CMAKE_CXX_FLAGS)
@@ -504,8 +516,8 @@ add_library(${LDC_LIB} ${LDC_LIB_TYPE} ${LDC_CXX_SOURCE_FILES} ${DRV_SRC} ${DRV_
 set_target_properties(
     ${LDC_LIB} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin
-    LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib
-    ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib
+    LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}
+    ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}
     ARCHIVE_OUTPUT_NAME ldc
     LIBRARY_OUTPUT_NAME ldc
     RUNTIME_OUTPUT_NAME ldc
@@ -651,8 +663,8 @@ set_source_files_properties(driver/exe_path.cpp driver/ldmd.cpp driver/response.
 add_library(LDMD_CXX_LIB ${LDC_LIB_TYPE} driver/exe_path.cpp driver/ldmd.cpp driver/response.cpp driver/exe_path.h)
 set_target_properties(
     LDMD_CXX_LIB PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib
-    ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib
+    LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}
+    ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}
     ARCHIVE_OUTPUT_NAME ldmd
     LIBRARY_OUTPUT_NAME ldmd
 )
@@ -665,6 +677,29 @@ build_d_executable(
     "LDMD_CXX_LIB;${LDC_LIB}"
 )
 
+#
+# Locate LLVM's LTO binary and use it (LLVM >= 3.9)
+#
+if(APPLE)
+    set(LDC_INSTALL_LTOPLUGIN_DEFAULT ON)
+else()
+    set(LDC_INSTALL_LTOPLUGIN_DEFAULT OFF)
+endif()
+set(LDC_INSTALL_LTOPLUGIN ${LDC_INSTALL_LTOPLUGIN_DEFAULT} CACHE BOOL "Copy/install the LTO plugin from the LLVM package when available (LLVM >= 3.9).")
+if (NOT (LDC_LLVM_VER LESS 309) AND LDC_INSTALL_LTOPLUGIN)
+    if(APPLE)
+        set(LLVM_LTO_BINARY ${LLVM_LIBRARY_DIRS}/libLTO.dylib)
+        set(LDC_LTO_BINARY_NAME libLTO-ldc.dylib)
+    elseif(UNIX)
+        set(LLVM_LTO_BINARY ${LLVM_LIBRARY_DIRS}/LLVMgold.so)
+        set(LDC_LTO_BINARY_NAME LLVMgold-ldc.so)
+    endif()
+    if(EXISTS ${LLVM_LTO_BINARY})
+        message(STATUS "Also installing LTO binary: ${LLVM_LTO_BINARY}")
+        file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX})
+        configure_file(${LLVM_LTO_BINARY} ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}/${LDC_LTO_BINARY_NAME} COPYONLY)
+    endif()
+endif()
 
 #
 # Auxiliary build and test utils.
@@ -696,7 +731,7 @@ if(${BUILD_SHARED})
     # For now, only install libldc if explicitly building the shared library.
     # While it might theoretically be possible to use LDC as a static library
     # as well, for the time being this just bloats the normal packages.
-    install(TARGETS ${LDC_LIB} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
+    install(TARGETS ${LDC_LIB} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
 endif()
 install(FILES ${PROJECT_BINARY_DIR}/bin/${LDC_EXE}_install.conf DESTINATION ${CONF_INST_DIR} RENAME ${LDC_EXE}.conf)
 
@@ -721,16 +756,8 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 endif()
 
 # Also install LLVM's LTO binary if available
-if(APPLE)
-    set(LLVM_LTO_BINARY ${LLVM_LIBRARY_DIRS}/libLTO.dylib)
-elseif(UNIX)
-    set(LLVM_LTO_BINARY ${LLVM_LIBRARY_DIRS}/LLVMgold.so)
-endif()
 if(EXISTS ${LLVM_LTO_BINARY})
-    message(STATUS "Also installing LTO binary: ${LLVM_LTO_BINARY}")
-    install(PROGRAMS ${LLVM_LTO_BINARY} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
-    file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
-    configure_file(${LLVM_LTO_BINARY} ${PROJECT_BINARY_DIR}/lib COPYONLY)
+    install(PROGRAMS ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}/${LDC_LTO_BINARY_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
 endif()
 
 #
