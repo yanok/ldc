@@ -68,7 +68,7 @@ static cl::opt<ubyte, true> useDeprecated(
 
 cl::opt<bool, true>
     enforcePropertySyntax("property", cl::desc("Enforce property syntax"),
-                          cl::ZeroOrMore,
+                          cl::ZeroOrMore, cl::ReallyHidden,
                           cl::location(global.params.enforcePropertySyntax));
 
 cl::opt<bool> compileOnly("c", cl::desc("Do not link"), cl::ZeroOrMore);
@@ -78,10 +78,9 @@ static cl::opt<bool, true> createStaticLib("lib",
                                            cl::ZeroOrMore,
                                            cl::location(global.params.lib));
 
-static cl::opt<bool, true> createSharedLib("shared",
-                                           cl::desc("Create shared library"),
-                                           cl::ZeroOrMore,
-                                           cl::location(global.params.dll));
+static cl::opt<bool, true>
+    createSharedLib("shared", cl::desc("Create shared library (DLL)"),
+                    cl::ZeroOrMore, cl::location(global.params.dll));
 
 static cl::opt<bool, true> verbose("v", cl::desc("Verbose"), cl::ZeroOrMore,
                                    cl::location(global.params.verbose));
@@ -104,11 +103,13 @@ static cl::opt<unsigned, true> errorLimit(
     cl::desc("limit the number of error messages (0 means unlimited)"),
     cl::location(global.errorLimit));
 
-static cl::opt<ubyte, true>
-    warnings(cl::desc("Warnings:"), cl::ZeroOrMore,
-             clEnumValues(clEnumValN(1, "w", "Enable warnings"),
-                          clEnumValN(2, "wi", "Enable informational warnings")),
-             cl::location(global.params.warnings), cl::init(0));
+static cl::opt<ubyte, true> warnings(
+    cl::desc("Warnings:"), cl::ZeroOrMore,
+    clEnumValues(
+        clEnumValN(1, "w", "Enable warnings as errors (compilation will halt)"),
+        clEnumValN(2, "wi",
+                   "Enable warnings as messages (compilation will continue)")),
+    cl::location(global.params.warnings), cl::init(0));
 
 static cl::opt<bool, true> ignoreUnsupportedPragmas(
     "ignore", cl::desc("Ignore unsupported pragmas"), cl::ZeroOrMore,
@@ -116,9 +117,11 @@ static cl::opt<bool, true> ignoreUnsupportedPragmas(
 
 static cl::opt<ubyte, true> debugInfo(
     cl::desc("Generating debug information:"), cl::ZeroOrMore,
-    clEnumValues(clEnumValN(1, "g", "Generate debug information"),
-                 clEnumValN(2, "gc", "Same as -g, but pretend to be C"),
-                 clEnumValN(3, "gline-tables-only", "Generate line-tables-only")),
+    clEnumValues(
+        clEnumValN(1, "g", "Add symbolic debug info"),
+        clEnumValN(2, "gc",
+                   "Add symbolic debug info, optimize for non D debuggers"),
+        clEnumValN(3, "gline-tables-only", "Add line tables only")),
     cl::location(global.params.symdebug), cl::init(0));
 
 static cl::opt<unsigned, true>
@@ -216,7 +219,7 @@ static cl::list<std::string, StringsAdapter>
                       cl::Prefix);
 
 static cl::opt<bool, true>
-    addMain("main", cl::desc("Add empty main() (e.g. for unittesting)"),
+    addMain("main", cl::desc("Add default main() (e.g. for unittesting)"),
             cl::ZeroOrMore, cl::location(global.params.addMain));
 
 // -d-debug is a bit messy, it has 3 modes:
@@ -421,18 +424,6 @@ cl::opt<unsigned, true> nestedTemplateDepth(
         "(experimental) set maximum number of nested template instantiations"),
     cl::location(global.params.nestedTmpl), cl::init(500));
 
-#if LDC_LLVM_VER < 307
-cl::opt<bool, true, FlagParser<bool>>
-    color("color", cl::desc("Force colored console output"),
-          cl::location(global.params.color));
-#else
-void CreateColorOption() {
-  new cl::opt<bool, true, FlagParser<bool>>(
-      "color", cl::desc("Force colored console output"),
-      cl::location(global.params.color));
-}
-#endif
-
 cl::opt<bool, true>
     useDIP25("dip25",
              cl::desc("implement http://wiki.dlang.org/DIP25 (experimental)"),
@@ -486,5 +477,128 @@ static cl::extrahelp footer(
     "as acting as -d-debug=1\n\n"
     "Options marked with (*) also have a -disable-FOO variant with inverted\n"
     "meaning.\n");
+
+/// Create commandline options that may clash with LLVM's options (depending on
+/// LLVM version and on LLVM configuration), and that thus cannot be created
+/// using static construction.
+/// The clashing LLVM options are suffixed with "llvm-" and hidden from the
+/// -help output.
+void createClashingOptions() {
+#if LDC_LLVM_VER >= 307
+  llvm::StringMap<cl::Option *> &map = cl::getRegisteredOptions();
+#else
+  llvm::StringMap<cl::Option *> map;
+  cl::getRegisteredOptions(map);
+#endif
+
+  auto renameAndHide = [&map](const char *from, const char *to) {
+    auto i = map.find(from);
+    if (i != map.end()) {
+      cl::Option *opt = i->getValue();
+      map.erase(i);
+      opt->setArgStr(to);
+      opt->setHiddenFlag(cl::Hidden);
+      map[to] = opt;
+    }
+  };
+
+  // Step 1. Hide the clashing LLVM options.
+  // LLVM 3.7 introduces compiling as shared library. The result
+  // is a clash in the command line options.
+  renameAndHide("color", "llvm-color");
+
+  // Step 2. Add the LDC options.
+  new cl::opt<bool, true, FlagParser<bool>>(
+      "color", cl::desc("Force colored console output"),
+      cl::location(global.params.color));
+}
+
+/// Hides command line options exposed from within LLVM that are unlikely
+/// to be useful for end users from the -help output.
+void hideLLVMOptions() {
+#if LDC_LLVM_VER >= 307
+  llvm::StringMap<cl::Option *> &map = cl::getRegisteredOptions();
+#else
+  llvm::StringMap<cl::Option *> map;
+  cl::getRegisteredOptions(map);
+#endif
+
+  auto hide = [&map](const char *name) {
+    // Check if option exists first for resilience against LLVM changes
+    // between versions.
+    if (map.count(name)) {
+      map[name]->setHiddenFlag(cl::Hidden);
+    }
+  };
+
+  hide("bounds-checking-single-trap");
+  hide("disable-debug-info-verifier");
+  hide("disable-objc-arc-checkforcfghazards");
+  hide("disable-spill-fusing");
+  hide("cppfname");
+  hide("cppfor");
+  hide("cppgen");
+  hide("enable-correct-eh-support");
+  hide("enable-load-pre");
+  hide("enable-misched");
+  hide("enable-objc-arc-annotations");
+  hide("enable-objc-arc-opts");
+  hide("enable-scoped-noalias");
+  hide("enable-tbaa");
+  hide("exhaustive-register-search");
+  hide("fatal-assembler-warnings");
+  hide("internalize-public-api-file");
+  hide("internalize-public-api-list");
+  hide("join-liveintervals");
+  hide("limit-float-precision");
+  hide("mc-x86-disable-arith-relaxation");
+  hide("mips16-constant-islands");
+  hide("mips16-hard-float");
+  hide("mlsm");
+  hide("mno-ldc1-sdc1");
+  hide("nvptx-sched4reg");
+  hide("no-discriminators");
+  hide("objc-arc-annotation-target-identifier");
+  hide("pre-RA-sched");
+  hide("print-after-all");
+  hide("print-before-all");
+  hide("print-machineinstrs");
+  hide("profile-estimator-loop-weight");
+  hide("profile-estimator-loop-weight");
+  hide("profile-file");
+  hide("profile-info-file");
+  hide("profile-verifier-noassert");
+  hide("regalloc");
+  hide("rewrite-map-file");
+  hide("rng-seed");
+  hide("sample-profile-max-propagate-iterations");
+  hide("shrink-wrap");
+  hide("spiller");
+  hide("stackmap-version");
+  hide("stats");
+  hide("strip-debug");
+  hide("struct-path-tbaa");
+  hide("time-passes");
+  hide("unit-at-a-time");
+  hide("verify-debug-info");
+  hide("verify-dom-info");
+  hide("verify-loop-info");
+  hide("verify-regalloc");
+  hide("verify-region-info");
+  hide("verify-scev");
+  hide("x86-early-ifcvt");
+  hide("x86-use-vzeroupper");
+  hide("x86-recip-refinement-steps");
+
+  // We enable -fdata-sections/-ffunction-sections by default where it makes
+  // sense for reducing code size, so hide them to avoid confusion.
+  //
+  // We need our own switch as these two are defined by LLVM and linked to
+  // static TargetMachine members, but the default we want to use depends
+  // on the target triple (and thus we do not know it until after the command
+  // line has been parsed).
+  hide("fdata-sections");
+  hide("ffunction-sections");
+}
 
 } // namespace opts
