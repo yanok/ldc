@@ -29,6 +29,7 @@ private string stripRight(string s)
 }
 
 enum IN_GCC     = xversion!`IN_GCC`;
+enum IN_WEKA    = xversion!`IN_WEKA`;
 enum IN_LLVM    = xversion!`IN_LLVM`;
 enum IN_LLVM_MSVC = xversion!`IN_LLVM_MSVC`;
 
