@@ -29,9 +29,16 @@ private string stripRight(string s)
 }
 
 enum IN_GCC     = xversion!`IN_GCC`;
-enum IN_WEKA    = xversion!`IN_WEKA`;
 enum IN_LLVM    = xversion!`IN_LLVM`;
 enum IN_LLVM_MSVC = xversion!`IN_LLVM_MSVC`;
+version(IN_WEKA)
+{
+    bool IN_WEKA() { return global.params.enableWekaMods; }
+}
+else
+{
+    enum IN_WEKA    = false;
+}
 
 enum TARGET_LINUX   = xversion!`linux`;
 enum TARGET_OSX     = xversion!`OSX`;
@@ -215,6 +222,11 @@ struct Param
         uint dwarfVersion;
 
         uint hashThreshold; // MD5 hash symbols larger than this threshold (0 = no hashing)
+
+        version (IN_WEKA)
+        {
+            bool enableWekaMods; // Enable specific Weka mods like the template instantiation mods
+        }
     }
 }
 
