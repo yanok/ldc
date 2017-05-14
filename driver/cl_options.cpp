@@ -458,6 +458,14 @@ cl::opt<bool>
                         cl::desc("Instrument function entry and exit with "
                                  "GCC-compatible profiling calls"));
 
+#if IN_WEKA
+static cl::opt<bool, true, FlagParser<bool>> wekaMods(
+    "wekamods",
+    cl::desc(
+        "(*) Enable specific Weka mods like the template instantiation mods"),
+    cl::location(global.params.enableWekaMods), cl::init(true));
+#endif
+
 #if LDC_LLVM_VER >= 309
 cl::opt<LTOKind> ltoMode(
     "flto", cl::desc("Set LTO mode, requires linker support"),

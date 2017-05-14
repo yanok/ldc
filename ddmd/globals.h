@@ -219,6 +219,10 @@ struct Param
     uint32_t dwarfVersion;
 
     uint32_t hashThreshold; // MD5 hash symbols larger than this threshold (0 = no hashing)
+
+#if IN_WEKA
+    bool enableWekaMods; // Enable specific Weka mods like the template instantiation mods
+#endif
 #endif
 };
 

@@ -5871,9 +5871,9 @@ public:
         }
         gagged = (global.gag > 0);
 
-version(IN_WEKA) {
+//version(IN_WEKA) {
         const size_t oldDeferredDim = Module.deferred.dim;
-}
+//}
 
         semanticRun = PASSsemantic;
         static if (LOG)
@@ -6162,7 +6162,7 @@ version(IN_WEKA) {
                     }
                 }
             }
-version(IN_WEKA) {
+if (IN_WEKA) {
             if (found_deferred_ad)
                 goto Laftersemantic;
 } else {
@@ -6824,8 +6824,7 @@ version(IN_WEKA) {
 // instance pointing back to 'this', so there the symbol corresponding to 'tnext'
 // would again not be emitted. By commenting out this block, we are always
 // emitting non-speculative instantiations directly from root nodes.
-version(IN_WEKA) {}
-else
+if(!IN_WEKA)
 {
             TemplateInstance tnext = this.tnext;
             this.tnext = null;
