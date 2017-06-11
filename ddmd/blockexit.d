@@ -160,7 +160,7 @@ int blockExit(Statement s, FuncDeclaration func, bool mustNotThrow)
 
                     if (!(result & BEfallthru) && !s.comeFrom())
                     {
-                        if (blockExit(s, func, mustNotThrow) != BEhalt && s.hasCode())
+                        if (!IN_WEKA && blockExit(s, func, mustNotThrow) != BEhalt && s.hasCode())
                             s.warning("statement is not reachable");
                     }
                     else
