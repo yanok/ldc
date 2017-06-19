@@ -6124,10 +6124,6 @@ extern (C++) class TemplateInstance : ScopeDsymbol
 
         gagged = (global.gag > 0);
 
-//version(IN_WEKA) {
-        const size_t oldDeferredDim = Module.deferred.dim;
-//}
-
         semanticRun = PASSsemantic;
 
         static if (LOG)
@@ -6420,13 +6416,7 @@ extern (C++) class TemplateInstance : ScopeDsymbol
         {
             bool found_deferred_ad = false;
 
-            /* IN_WEKA Fixes a template instantiation bug ("not a constant")
-             * This breaks dmd-testsuite, runnable/aliasthis.d issue 12008.
-             * Not upstreamed yet because we couldn't get a self-contained test case
-             * supporting the need of this patch yet.
-             */
-            //for (size_t i = 0; i < Module.deferred.dim; i++)
-            for (size_t i = IN_WEKA ? oldDeferredDim : 0; i < Module.deferred.dim; i++)
+            for (size_t i = 0; i < Module.deferred.dim; i++)
             {
                 Dsymbol sd = Module.deferred[i];
                 AggregateDeclaration ad = sd.isAggregateDeclaration();
@@ -6442,13 +6432,8 @@ extern (C++) class TemplateInstance : ScopeDsymbol
                     }
                 }
             }
-if (IN_WEKA) {
-            if (found_deferred_ad)
-                goto Laftersemantic;
-} else {
             if (found_deferred_ad || Module.deferred.dim)
                 goto Laftersemantic;
-}
         }
 
         /* The problem is when to parse the initializer for a variable.
