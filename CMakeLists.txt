@@ -55,8 +55,8 @@ endfunction()
 set(LDC_VERSION "1.4.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   73)
-set(DMDFE_FIX_LEVEL       2) # Comment out if not used
+set(DMDFE_PATCH_VERSION   74)
+set(DMDFE_FIX_LEVEL       1) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -107,12 +107,6 @@ file(MAKE_DIRECTORY
     ${PROJECT_BINARY_DIR}
     ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}
 )
-
-if(UNIX)
-    ENABLE_LANGUAGE(ASM)
-elseif(MSVC)
-    ENABLE_LANGUAGE(ASM_MASM)
-endif()
 
 # Setup D compiler flags (DMD syntax, which also works with LDMD).
 set(DDMD_DFLAGS "-wi")
@@ -269,15 +263,15 @@ endmacro()
 #
 # Build idgen.
 #
-build_idgen(${DDMDFE_PATH}/idgen.d ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/idgen${CMAKE_EXECUTABLE_SUFFIX}  ${DDMD_DFLAGS} "" "")
+build_idgen(${DDMDFE_PATH}/idgen.d ${PROJECT_BINARY_DIR}/idgen${CMAKE_EXECUTABLE_SUFFIX}  ${DDMD_DFLAGS} "" "")
 # Run idgen.
 add_custom_command(
     OUTPUT
         ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.d
         ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.h
-    COMMAND ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/idgen  #provide full path to avoid clash with idgen on path
-    WORKING_DIRECTORY ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}
-    DEPENDS ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/idgen${CMAKE_EXECUTABLE_SUFFIX}
+    COMMAND ${PROJECT_BINARY_DIR}/idgen  #provide full path to avoid clash with idgen on path
+    WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
+    DEPENDS ${PROJECT_BINARY_DIR}/idgen${CMAKE_EXECUTABLE_SUFFIX}
 )
 set(LDC_CXX_GENERATED
     ${PROJECT_BINARY_DIR}/${DDMDFE_PATH}/id.h
@@ -815,12 +809,24 @@ if(D_VERSION EQUAL 2)
 endif()
 add_subdirectory(tests)
 
+# ldc-build-runtime tool
+set(LDC_BUILD_RUNTIME_EXE_FULL ${PROJECT_BINARY_DIR}/bin/ldc-build-runtime${CMAKE_EXECUTABLE_SUFFIX})
+build_d_executable(
+    "${LDC_BUILD_RUNTIME_EXE_FULL}"
+    "${PROJECT_BINARY_DIR}/ldc-build-runtime.d"
+    ""
+    "${PROJECT_SOURCE_DIR}/runtime/ldc-build-runtime.d.in"
+    ""
+)
+add_custom_target(ldc-build-runtime ALL DEPENDS ${LDC_BUILD_RUNTIME_EXE_FULL})
+
 #
 # Install target.
 #
 
 install(PROGRAMS ${LDC_EXE_FULL} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 install(PROGRAMS ${LDMD_EXE_FULL} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+install(PROGRAMS ${LDC_BUILD_RUNTIME_EXE_FULL} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 if(${BUILD_SHARED})
     # For now, only install libldc if explicitly building the shared library.
     # While it might theoretically be possible to use LDC as a static library

@@ -29,6 +29,10 @@ static llvm::cl::opt<std::string>
                               "LLVMgold.so (Unixes) or libLTO.dylib (Darwin))"),
                llvm::cl::value_desc("file"));
 
+static llvm::cl::opt<bool> linkNoCpp(
+    "link-no-cpp", llvm::cl::ZeroOrMore, llvm::cl::Hidden,
+    llvm::cl::desc("Disable automatic linking with the C++ standard library."));
+
 //////////////////////////////////////////////////////////////////////////////
 
 namespace {
@@ -45,10 +49,12 @@ public:
 private:
   virtual void addSanitizers();
   virtual void addASanLinkFlags();
+  virtual void addFuzzLinkFlags();
+  virtual void addCppStdlibLinkFlags();
 
   virtual void addUserSwitches();
   void addDefaultLibs();
-  virtual void addArch();
+  virtual void addTargetFlags();
 
 #if LDC_LLVM_VER >= 309
   void addLTOGoldPluginFlags();
@@ -260,9 +266,62 @@ void ArgsBuilder::addASanLinkFlags() {
   }
 }
 
+// Adds all required link flags for -fsanitize=fuzzer when libFuzzer library is
+// found.
+void ArgsBuilder::addFuzzLinkFlags() {
+  std::string searchPaths[] = {
+    exe_path::prependLibDir("libFuzzer.a"),
+    exe_path::prependLibDir("libLLVMFuzzer.a"),
+  };
+
+  for (const auto &filepath : searchPaths) {
+    if (llvm::sys::fs::exists(filepath)) {
+      args.push_back(filepath);
+
+      // libFuzzer requires the C++ std library, but only add the link flags
+      // when libFuzzer was found.
+      addCppStdlibLinkFlags();
+      return;
+    }
+  }
+}
+
+void ArgsBuilder::addCppStdlibLinkFlags() {
+  if (linkNoCpp)
+    return;
+
+  switch (global.params.targetTriple->getOS()) {
+  case llvm::Triple::Linux:
+    if (global.params.targetTriple->getEnvironment() == llvm::Triple::Android) {
+      args.push_back("-lc++");
+    } else {
+      args.push_back("-lstdc++");
+    }
+    break;
+  case llvm::Triple::Solaris:
+  case llvm::Triple::NetBSD:
+  case llvm::Triple::OpenBSD:
+  case llvm::Triple::DragonFly:
+    args.push_back("-lstdc++");
+    break;
+  case llvm::Triple::Darwin:
+  case llvm::Triple::MacOSX:
+  case llvm::Triple::FreeBSD:
+    args.push_back("-lc++");
+    break;
+  default:
+    // Don't know: do nothing so the user can step in
+    break;
+  }
+}
+
 void ArgsBuilder::addSanitizers() {
   if (opts::isSanitizerEnabled(opts::AddressSanitizer)) {
     addASanLinkFlags();
+  }
+
+  if (opts::isSanitizerEnabled(opts::FuzzSanitizer)) {
+    addFuzzLinkFlags();
   }
 
   // TODO: instead of this, we should link with our own sanitizer libraries
@@ -345,7 +404,7 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
 
   addDefaultLibs();
 
-  addArch();
+  addTargetFlags();
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -436,50 +495,8 @@ void ArgsBuilder::addDefaultLibs() {
 
 //////////////////////////////////////////////////////////////////////////////
 
-void ArgsBuilder::addArch() {
-  // Only specify -m32/-m64 for architectures where the two variants actually
-  // exist (as e.g. the GCC ARM toolchain doesn't recognize the switches).
-  // MIPS does not have -m32/-m64 but requires -mabi=.
-  if (global.params.targetTriple->get64BitArchVariant().getArch() !=
-          llvm::Triple::UnknownArch &&
-      global.params.targetTriple->get32BitArchVariant().getArch() !=
-          llvm::Triple::UnknownArch) {
-    if (global.params.targetTriple->get64BitArchVariant().getArch() ==
-            llvm::Triple::mips64 ||
-        global.params.targetTriple->get64BitArchVariant().getArch() ==
-            llvm::Triple::mips64el) {
-      switch (getMipsABI()) {
-      case MipsABI::EABI:
-        args.push_back("-mabi=eabi");
-        break;
-      case MipsABI::O32:
-        args.push_back("-mabi=32");
-        break;
-      case MipsABI::N32:
-        args.push_back("-mabi=n32");
-        break;
-      case MipsABI::N64:
-        args.push_back("-mabi=64");
-        break;
-      case MipsABI::Unknown:
-        break;
-      }
-    } else {
-      switch (global.params.targetTriple->getArch()) {
-      case llvm::Triple::arm:
-      case llvm::Triple::armeb:
-      case llvm::Triple::aarch64:
-      case llvm::Triple::aarch64_be:
-        break;
-      default:
-        if (global.params.is64bit) {
-          args.push_back("-m64");
-        } else {
-          args.push_back("-m32");
-        }
-      }
-    }
-  }
+void ArgsBuilder::addTargetFlags() {
+  appendTargetArgsForGcc(args);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -497,7 +514,7 @@ class LdArgsBuilder : public ArgsBuilder {
                 opts::linkerSwitches.end());
   }
 
-  void addArch() override {}
+  void addTargetFlags() override {}
 
   void addLdFlag(const llvm::Twine &flag) override {
     args.push_back(flag.str());
