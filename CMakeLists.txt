@@ -52,7 +52,7 @@ endfunction()
 #
 
 # Version information
-set(LDC_VERSION "1.4.0") # May be overridden by git hash tag
+set(LDC_VERSION "1.5.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
 set(DMDFE_PATCH_VERSION   74)
@@ -339,6 +339,7 @@ set(DRV_SRC
     driver/cache.cpp
     driver/cl_options.cpp
     driver/cl_options_sanitizers.cpp
+    driver/cl_options-llvm.cpp
     driver/codegenerator.cpp
     driver/configfile.cpp
     driver/dcomputecodegenerator.cpp
@@ -358,6 +359,7 @@ set(DRV_HDR
     driver/cache_pruning.h
     driver/cl_options.h
     driver/cl_options_sanitizers.h
+    driver/cl_options-llvm.h
     driver/codegenerator.h
     driver/configfile.h
     driver/dcomputecodegenerator.h
@@ -477,7 +479,7 @@ endif()
 #
 # Enable building with riscv-llvm, for full RISC-V support.
 #
-option(RISCV_LLVM_DEV, "full RISC-V support with riscv-llvm")
+option(RISCV_LLVM_DEV "full RISC-V support with riscv-llvm")
 mark_as_advanced(RISCV_LLVM_DEV)
 if(RISCV_LLVM_DEV)
     append("-DRISCV_LLVM_DEV" LDC_CXXFLAGS)
