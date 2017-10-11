@@ -30,12 +30,18 @@ extern Module *g_entrypointModule;
 /// The module that contains the actual D main() (_Dmain) definition.
 extern Module *g_dMainModule;
 
+#if LDC_LLVM_VER < 600
+namespace llvm {
+  using ToolOutputFile = tool_output_file;
+}
+#endif
+
 namespace {
 
-std::unique_ptr<llvm::tool_output_file>
+std::unique_ptr<llvm::ToolOutputFile>
 createAndSetDiagnosticsOutputFile(IRState &irs, llvm::LLVMContext &ctx,
                                   llvm::StringRef filename) {
-  std::unique_ptr<llvm::tool_output_file> diagnosticsOutputFile;
+  std::unique_ptr<llvm::ToolOutputFile> diagnosticsOutputFile;
 
 #if LDC_LLVM_VER >= 400
   // Set LLVM Diagnostics outputfile if requested
@@ -49,7 +55,7 @@ createAndSetDiagnosticsOutputFile(IRState &irs, llvm::LLVMContext &ctx,
     }
 
     std::error_code EC;
-    diagnosticsOutputFile = llvm::make_unique<llvm::tool_output_file>(
+    diagnosticsOutputFile = llvm::make_unique<llvm::ToolOutputFile>(
         diagnosticsFilename, EC, llvm::sys::fs::F_None);
     if (EC) {
       irs.dmodule->error("Could not create file %s: %s",
@@ -170,7 +176,7 @@ namespace ldc {
 CodeGenerator::CodeGenerator(llvm::LLVMContext &context, bool singleObj)
     : context_(context), moduleCount_(0), singleObj_(singleObj), ir_(nullptr) {
   if (!ClassDeclaration::object) {
-    error(Loc(), "declaration for class Object not found; druntime not "
+    error(Loc(), "declaration for class `Object` not found; druntime not "
                  "configured properly");
     fatal();
   }
@@ -258,7 +264,7 @@ void CodeGenerator::writeAndFreeLLModule(const char *filename) {
   llvm::Metadata *IdentNode[] = {llvm::MDString::get(ir_->context(), Version)};
   IdentMetadata->addOperand(llvm::MDNode::get(ir_->context(), IdentNode));
 
-  std::unique_ptr<llvm::tool_output_file> diagnosticsOutputFile =
+  std::unique_ptr<llvm::ToolOutputFile> diagnosticsOutputFile =
       createAndSetDiagnosticsOutputFile(*ir_, context_, filename);
 
   writeModule(&ir_->module, filename);
