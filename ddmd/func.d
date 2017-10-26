@@ -3277,6 +3277,13 @@ else
      */
     final bool setGC()
     {
+        //printf("setGC() %s\n", toChars());
+        if (flags & FUNCFLAGnogcInprocess && semanticRun < PASSsemantic3 && _scope)
+        {
+            this.semantic2(_scope);
+            this.semantic3(_scope);
+        }
+
         if (flags & FUNCFLAGnogcInprocess)
         {
             flags &= ~FUNCFLAGnogcInprocess;
