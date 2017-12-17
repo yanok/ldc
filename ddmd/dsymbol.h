@@ -91,6 +91,11 @@ typedef union tree_node Symbol;
 struct Symbol;
 #endif
 
+// in dsymbolsem.d
+void semantic(Dsymbol *dsym, Scope *sc);
+void semantic2(Dsymbol *dsym, Scope *sc);
+void semantic3(Dsymbol *dsym, Scope *sc);
+
 struct Ungag
 {
     unsigned oldgag;
@@ -213,16 +218,13 @@ public:
 
     virtual Identifier *getIdent();
     virtual const char *toPrettyChars(bool QualifyTypes = false);
-    virtual const char *kind();
+    virtual const char *kind() const;
     virtual Dsymbol *toAlias();                 // resolve real symbol
     virtual Dsymbol *toAlias2();
     virtual int apply(Dsymbol_apply_ft_t fp, void *param);
     virtual void addMember(Scope *sc, ScopeDsymbol *sds);
     virtual void setScope(Scope *sc);
     virtual void importAll(Scope *sc);
-    virtual void semantic(Scope *sc);
-    virtual void semantic2(Scope *sc);
-    virtual void semantic3(Scope *sc);
     virtual Dsymbol *search(Loc loc, Identifier *ident, int flags = IgnoreNone);
     Dsymbol *search_correct(Identifier *id);
     Dsymbol *searchX(Loc loc, Scope *sc, RootObject *id);
@@ -327,7 +329,7 @@ public:
     virtual bool isPackageAccessible(Package *p, Prot protection, int flags = 0);
     bool isforwardRef();
     static void multiplyDefined(Loc loc, Dsymbol *s1, Dsymbol *s2);
-    const char *kind();
+    const char *kind() const;
     FuncDeclaration *findGetMembers();
     virtual Dsymbol *symtabInsert(Dsymbol *s);
     virtual Dsymbol *symtabLookup(Dsymbol *s, Identifier *id);
@@ -379,7 +381,7 @@ public:
 
     void push(Dsymbol *s);
     OverloadSet *isOverloadSet() { return this; }
-    const char *kind();
+    const char *kind() const;
     void accept(Visitor *v) { v->visit(this); }
 };
 
@@ -393,7 +395,7 @@ class ForwardingScopeDsymbol : public ScopeDsymbol
     Dsymbol *symtabLookup(Dsymbol *s, Identifier *id);
     void importScope(Dsymbol *s, Prot protection);
     void semantic(Scope *sc);
-    const char *kind();
+    const char *kind() const;
 
     ForwardingScopeDsymbol *isForwardingScopeDsymbol() { return this; }
 };

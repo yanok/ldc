@@ -120,8 +120,6 @@ public:
 
     virtual Scope *newScope(Scope *sc);
     void setScope(Scope *sc);
-    void semantic2(Scope *sc);
-    void semantic3(Scope *sc);
     bool determineFields();
     bool determineSize(Loc loc);
     virtual void finalizeSize() = 0;
@@ -193,7 +191,7 @@ public:
     void semantic(Scope *sc);
     void semanticTypeInfoMembers();
     Dsymbol *search(Loc, Identifier *ident, int flags = SearchLocalsOnly);
-    const char *kind();
+    const char *kind() const;
     void finalizeSize();
     bool fit(Loc loc, Scope *sc, Expressions *elements, Type *stype);
     bool isPOD();
@@ -206,7 +204,7 @@ class UnionDeclaration : public StructDeclaration
 {
 public:
     Dsymbol *syntaxCopy(Dsymbol *s);
-    const char *kind();
+    const char *kind() const;
 
     UnionDeclaration *isUnionDeclaration() { return this; }
     void accept(Visitor *v) { v->visit(this); }
@@ -299,14 +297,13 @@ public:
     void finalizeSize();
     bool isFuncHidden(FuncDeclaration *fd);
     FuncDeclaration *findFunc(Identifier *ident, TypeFunction *tf);
-    void interfaceSemantic(Scope *sc);
     bool isCOMclass() const;
     virtual bool isCOMinterface() const;
     bool isCPPclass() const;
     virtual bool isCPPinterface() const;
     bool isAbstract();
     virtual int vtblOffset() const;
-    const char *kind();
+    const char *kind() const;
 
     void addLocalClass(ClassDeclarations *);
 
@@ -325,7 +322,7 @@ public:
     void semantic(Scope *sc);
     bool isBaseOf(ClassDeclaration *cd, int *poffset);
     bool isBaseOf(BaseClass *bc, int *poffset);
-    const char *kind();
+    const char *kind() const;
     int vtblOffset() const;
     bool isCPPinterface() const;
     bool isCOMinterface() const;

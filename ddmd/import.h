@@ -47,13 +47,12 @@ public:
     AliasDeclarations aliasdecls; // corresponding AliasDeclarations for alias=name pairs
 
     void addAlias(Identifier *name, Identifier *alias);
-    const char *kind();
+    const char *kind() const;
     Prot prot();
     Dsymbol *syntaxCopy(Dsymbol *s);    // copy only syntax trees
     void load(Scope *sc);
     void importAll(Scope *sc);
     void semantic(Scope *sc);
-    void semantic2(Scope *sc);
     Dsymbol *toAlias();
     void addMember(Scope *sc, ScopeDsymbol *sds);
     void setScope(Scope* sc);

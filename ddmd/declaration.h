@@ -133,8 +133,7 @@ public:
     int inuse;                  // used to detect cycles
     const char *mangleOverride;      // overridden symbol with pragma(mangle, "...")
 
-    void semantic(Scope *sc);
-    const char *kind();
+    const char *kind() const;
     d_uns64 size(Loc loc);
     int checkModify(Loc loc, Scope *sc, Type *t, Expression *e1, int flag);
 
@@ -147,7 +146,7 @@ public:
     virtual bool isCodeseg();
     bool isCtorinit()     { return (storage_class & STCctorinit) != 0; }
     bool isFinal()        { return (storage_class & STCfinal) != 0; }
-    bool isAbstract()     { return (storage_class & STCabstract) != 0; }
+    virtual bool isAbstract()     { return (storage_class & STCabstract) != 0; }
     bool isConst()        { return (storage_class & STCconst) != 0; }
     bool isImmutable()    { return (storage_class & STCimmutable) != 0; }
     bool isWild()         { return (storage_class & STCwild) != 0; }
@@ -183,7 +182,7 @@ public:
     TypeTuple *tupletype;       // !=NULL if this is a type tuple
 
     Dsymbol *syntaxCopy(Dsymbol *);
-    const char *kind();
+    const char *kind() const;
     Type *getType();
     Dsymbol *toAlias2();
     bool needThis();
@@ -207,10 +206,9 @@ public:
 
     static AliasDeclaration *create(Loc loc, Identifier *id, Type *type);
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
     void aliasSemantic(Scope *sc);
     bool overloadInsert(Dsymbol *s);
-    const char *kind();
+    const char *kind() const;
     Type *getType();
     Dsymbol *toAlias();
     Dsymbol *toAlias2();
@@ -229,8 +227,7 @@ public:
     Dsymbol *aliassym;
     bool hasOverloads;
 
-    const char *kind();
-    void semantic(Scope *sc);
+    const char *kind() const;
     bool equals(RootObject *o);
     bool overloadInsert(Dsymbol *s);
 
@@ -272,10 +269,8 @@ public:
     IntRange *range;            // if !NULL, the variable is known to be within the range
 
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
     void setFieldOffset(AggregateDeclaration *ad, unsigned *poffset, bool isunion);
-    void semantic2(Scope *sc);
-    const char *kind();
+    const char *kind() const;
     AggregateDeclaration *isThis();
     bool needThis();
     bool isExport();
@@ -320,7 +315,6 @@ public:
 
     static TypeInfoDeclaration *create(Type *tinfo);
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
     const char *toChars();
 
     TypeInfoDeclaration *isTypeInfoDeclaration() { return this; }
@@ -605,9 +599,6 @@ public:
 
     static FuncDeclaration *create(Loc loc, Loc endloc, Identifier *id, StorageClass storage_class, Type *type);
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
-    void semantic2(Scope *sc);
-    void semantic3(Scope *sc);
     bool functionSemantic();
     bool functionSemantic3();
     bool checkForwardRef(Loc loc);
@@ -636,6 +627,7 @@ public:
     bool isImportedSymbol();
     bool isCodeseg();
     bool isOverloadable();
+    bool isAbstract();
     PURE isPure();
     PURE isPureBypassingInference();
     bool setImpure();
@@ -659,7 +651,7 @@ public:
     virtual bool isFinalFunc();
     virtual bool addPreInvariant();
     virtual bool addPostInvariant();
-    const char *kind();
+    const char *kind() const;
     FuncDeclaration *isUnique();
     bool checkNestedReference(Scope *sc, Loc loc);
     bool needsClosure();
@@ -698,7 +690,7 @@ public:
     bool hasOverloads;
 
     FuncAliasDeclaration *isFuncAliasDeclaration() { return this; }
-    const char *kind();
+    const char *kind() const;
 
     FuncDeclaration *toAliasFunc();
     void accept(Visitor *v) { v->visit(this); }
@@ -723,7 +715,7 @@ public:
     void modifyReturns(Scope *sc, Type *tret);
 
     FuncLiteralDeclaration *isFuncLiteralDeclaration() { return this; }
-    const char *kind();
+    const char *kind() const;
     const char *toPrettyChars(bool QualifyTypes = false);
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -732,8 +724,7 @@ class CtorDeclaration : public FuncDeclaration
 {
 public:
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
-    const char *kind();
+    const char *kind() const;
     const char *toChars();
     bool isVirtual();
     bool addPreInvariant();
@@ -747,7 +738,6 @@ class PostBlitDeclaration : public FuncDeclaration
 {
 public:
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
     bool isVirtual();
     bool addPreInvariant();
     bool addPostInvariant();
@@ -761,8 +751,7 @@ class DtorDeclaration : public FuncDeclaration
 {
 public:
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
-    const char *kind();
+    const char *kind() const;
     const char *toChars();
     bool isVirtual();
     bool addPreInvariant();
@@ -777,7 +766,6 @@ class StaticCtorDeclaration : public FuncDeclaration
 {
 public:
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
     AggregateDeclaration *isThis();
     bool isVirtual();
     bool addPreInvariant();
@@ -803,7 +791,6 @@ public:
     VarDeclaration *vgate;      // 'gate' variable
 
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
     AggregateDeclaration *isThis();
     bool isVirtual();
     bool hasStaticCtorOrDtor();
@@ -827,7 +814,6 @@ class InvariantDeclaration : public FuncDeclaration
 {
 public:
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
     bool isVirtual();
     bool addPreInvariant();
     bool addPostInvariant();
@@ -845,7 +831,6 @@ public:
     FuncDeclarations deferredNested;
 
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
     AggregateDeclaration *isThis();
     bool isVirtual();
     bool addPreInvariant();
@@ -862,8 +847,7 @@ public:
     int varargs;
 
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
-    const char *kind();
+    const char *kind() const;
     bool isVirtual();
     bool addPreInvariant();
     bool addPostInvariant();
@@ -879,8 +863,7 @@ public:
     Parameters *parameters;
 
     Dsymbol *syntaxCopy(Dsymbol *);
-    void semantic(Scope *sc);
-    const char *kind();
+    const char *kind() const;
     bool isDelete();
     bool isVirtual();
     bool addPreInvariant();
