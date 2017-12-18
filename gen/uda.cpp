@@ -1,5 +1,6 @@
 #include "gen/uda.h"
 
+#include "gen/irstate.h"
 #include "gen/llvm.h"
 #include "gen/llvmhelpers.h"
 #include "aggregate.h"
@@ -342,6 +343,11 @@ void applyAttrTarget(StructLiteralExp *sle, llvm::Function *func, IrFunction *ir
   }
 }
 
+void applyAttrAssumeUsed(IRState &irs, StructLiteralExp *sle, llvm::Constant *symbol) {
+  checkStructElems(sle, {});
+  irs.usedArray.push_back(symbol);
+}
+
 } // anonymous namespace
 
 void applyVarDeclUDAs(VarDeclaration *decl, llvm::GlobalVariable *gvar) {
@@ -362,6 +368,8 @@ void applyVarDeclUDAs(VarDeclaration *decl, llvm::GlobalVariable *gvar) {
       sle->error(
           "Special attribute `ldc.attributes.%s` is only valid for functions",
           ident->toChars());
+    } else if (ident == Id::udaAssumeUsed) {
+      applyAttrAssumeUsed(*gIR, sle, gvar);
     } else if (ident == Id::udaWeak) {
       // @weak is applied elsewhere
     } else if (ident == Id::udaDynamicCompile) {
@@ -405,6 +413,8 @@ void applyFuncDeclUDAs(FuncDeclaration *decl, IrFunction *irFunc) {
       applyAttrSection(sle, func);
     } else if (ident == Id::udaTarget) {
       applyAttrTarget(sle, func, irFunc);
+    } else if (ident == Id::udaAssumeUsed) {
+      applyAttrAssumeUsed(*gIR, sle, func);
     } else if (ident == Id::udaWeak || ident == Id::udaKernel) {
       // @weak and @kernel are applied elsewhere
     } else if (ident == Id::udaDynamicCompile) {
