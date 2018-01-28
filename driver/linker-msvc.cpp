@@ -9,6 +9,7 @@
 
 #include "errors.h"
 #include "driver/cl_options.h"
+#include "driver/cl_options_instrumentation.h"
 #include "driver/tool.h"
 #include "gen/logger.h"
 
@@ -18,10 +19,11 @@
 
 //////////////////////////////////////////////////////////////////////////////
 
-static llvm::cl::opt<std::string> mscrtlib(
-    "mscrtlib", llvm::cl::ZeroOrMore, llvm::cl::value_desc("name"),
-    llvm::cl::desc(
-        "MS C runtime library to link against (libcmt[d] / msvcrt[d])"));
+static llvm::cl::opt<std::string>
+    mscrtlib("mscrtlib", llvm::cl::ZeroOrMore,
+             llvm::cl::desc("MS C runtime library to link with"),
+             llvm::cl::value_desc("libcmt[d]|msvcrt[d]"),
+             llvm::cl::cat(opts::linkingCategory));
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -98,7 +100,7 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath, bool useInternalLinker,
   args.push_back(("/OUT:" + outputPath).str());
 
   // object files
-  for (auto objfile : *global.params.objfiles) {
+  for (auto objfile : global.params.objfiles) {
     args.push_back(objfile);
   }
 
@@ -109,8 +111,7 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath, bool useInternalLinker,
     args.push_back(std::string("/DEF:") + global.params.deffile);
 
   // Link with profile-rt library when generating an instrumented binary
-  // profile-rt depends on Phobos (MD5 hashing).
-  if (global.params.genInstrProf) {
+  if (opts::isInstrumentingForPGO()) {
     args.push_back("ldc-profile-rt.lib");
     // profile-rt depends on ws2_32 for symbol `gethostname`
     args.push_back("ws2_32.lib");
@@ -122,7 +123,7 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath, bool useInternalLinker,
   }
 
   // user libs
-  for (auto libfile : *global.params.libfiles) {
+  for (auto libfile : global.params.libfiles) {
     args.push_back(libfile);
   }
 
@@ -143,7 +144,7 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath, bool useInternalLinker,
     addSwitch(str);
   }
 
-  for (auto ls : *global.params.linkswitches) {
+  for (auto ls : global.params.linkswitches) {
     addSwitch(ls);
   }
 

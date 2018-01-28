@@ -52,10 +52,10 @@ endfunction()
 #
 
 # Version information
-set(LDC_VERSION "1.7.0") # May be overridden by git hash tag
+set(LDC_VERSION "1.8.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   77)
+set(DMDFE_PATCH_VERSION   78)
 set(DMDFE_FIX_LEVEL       1) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
@@ -89,7 +89,7 @@ if(D_VERSION EQUAL 1)
     message(FATAL_ERROR "D version 1 is no longer supported.
 Please consider using D version 2 or checkout the 'd1' git branch for the last version supporting D version 1.")
 elseif(D_VERSION EQUAL 2)
-    set(DDMDFE_PATH ddmd)
+    set(DDMDFE_PATH dmd)
     set(LDC_EXE ldc2)
     set(LDMD_EXE ldmd2)
     set(LDCPROFDATA_EXE ldc-profdata)
@@ -306,6 +306,7 @@ file(GLOB IR_HDR ir/*.h)
 set(DRV_SRC
     driver/cache.cpp
     driver/cl_options.cpp
+    driver/cl_options_instrumentation.cpp
     driver/cl_options_sanitizers.cpp
     driver/cl_options-llvm.cpp
     driver/codegenerator.cpp
@@ -326,6 +327,7 @@ set(DRV_HDR
     driver/cache.h
     driver/cache_pruning.h
     driver/cl_options.h
+    driver/cl_options_instrumentation.h
     driver/cl_options_sanitizers.h
     driver/cl_options-llvm.h
     driver/codegenerator.h
@@ -376,13 +378,6 @@ source_group("Source Files" FILES ${DRV_SRC_D})
 include(HandleLTOPGOBuildOptions)
 
 #
-# Enable PGO if supported for this platform.
-#
-set(LDC_WITH_PGO True)  # must be a valid Python boolean constant (case sensitive)
-message(STATUS "Building LDC with PGO support")
-append("-DLDC_WITH_PGO" LDC_CXXFLAGS)
-
-#
 # Enable Dynamic compilation if supported for this platform and LLVM version.
 # LLVM >= 3.9 is required
 #
@@ -393,6 +388,7 @@ if(LDC_DYNAMIC_COMPILE STREQUAL "AUTO")
         set(LDC_DYNAMIC_COMPILE True)
         message(STATUS "Building LDC with dynamic compilation support")
         add_definitions(-DLDC_DYNAMIC_COMPILE)
+        add_definitions(-DLDC_DYNAMIC_COMPILE_API_VERSION=1)
     endif()
 endif()
 
@@ -752,9 +748,7 @@ else()
 endif()
 set(LDC_INSTALL_LLVM_RUNTIME_LIBS ${LDC_INSTALL_LLVM_RUNTIME_LIBS_DEFAULT} CACHE BOOL "Copy/install runtime libraries (ASan, libFuzzer) from LLVM/Clang into LDC lib dir when available.")
 function(copy_compilerrt_lib llvm_lib_name ldc_lib_name fixup_dylib)
-    # The LLVM version string can contain the SVN revision number, so cut that off
-    string(SUBSTRING "${LLVM_VERSION_STRING}" 0 5 LLVM_VERSION_STRING_CROPPED)
-    set(llvm_lib_path ${LLVM_LIBRARY_DIRS}/clang/${LLVM_VERSION_STRING_CROPPED}/lib/${llvm_lib_name})
+    set(llvm_lib_path ${LLVM_LIBRARY_DIRS}/clang/${LLVM_VERSION_BASE_STRING}/lib/${llvm_lib_name})
     if(EXISTS ${llvm_lib_path})
         message(STATUS "Copying runtime library: ${llvm_lib_path} --> ${ldc_lib_name}")
         set(ldc_lib_path ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}/${ldc_lib_name})
@@ -775,9 +769,13 @@ if (LDC_INSTALL_LLVM_RUNTIME_LIBS)
         copy_compilerrt_lib("darwin/libclang_rt.asan_osx_dynamic.dylib" "libldc_rt.asan_osx_dynamic.dylib" TRUE)
         if(NOT (LDC_LLVM_VER LESS 600))
             copy_compilerrt_lib("darwin/libclang_rt.fuzzer_osx.a" "libldc_rt.fuzzer_osx.a" FALSE)
+            copy_compilerrt_lib("darwin/libclang_rt.xray_osx.a"   "libldc_rt.xray_osx.a"   FALSE)
         endif()
     elseif(UNIX)
         copy_compilerrt_lib("linux/libclang_rt.asan-x86_64.a" "libldc_rt.asan-x86_64.a" FALSE)
+        if(NOT (LDC_LLVM_VER LESS 500))
+            copy_compilerrt_lib("linux/libclang_rt.xray-x86_64.a"   "libldc_rt.xray-x86_64.a"   FALSE)
+        endif()
         if(NOT (LDC_LLVM_VER LESS 600))
             copy_compilerrt_lib("linux/libclang_rt.fuzzer-x86_64.a" "libldc_rt.fuzzer-x86_64.a" FALSE)
         endif()

@@ -17,7 +17,8 @@
 #                        llvm-config is searched for in ${LLVM_ROOT_DIR}/bin.
 #  LLVM_VERSION_MAJOR  - Major version of LLVM.
 #  LLVM_VERSION_MINOR  - Minor version of LLVM.
-#  LLVM_VERSION_STRING - Full LLVM version string (e.g. 2.9).
+#  LLVM_VERSION_STRING - Full LLVM version string (e.g. 6.0.0svn).
+#  LLVM_VERSION_BASE_STRING - Base LLVM version string without git/svn suffix (e.g. 6.0.0).
 #
 # Note: The variable names were chosen in conformance with the offical CMake
 # guidelines, see ${CMAKE_ROOT}/Modules/readme.txt.
@@ -105,6 +106,9 @@ else()
     llvm_set(ROOT_DIR prefix true)
     llvm_set(ENABLE_ASSERTIONS assertion-mode)
 
+    # The LLVM version string _may_ contain a git/svn suffix, so cut that off
+    string(SUBSTRING "${LLVM_VERSION_STRING}" 0 5 LLVM_VERSION_BASE_STRING)
+
     if(${LLVM_VERSION_STRING} MATCHES "^3\\.[0-8][\\.0-9A-Za-z]*")
         # Versions below 3.9 do not support components debuginfocodeview, globalisel
         list(REMOVE_ITEM LLVM_FIND_COMPONENTS "debuginfocodeview" index)
@@ -133,6 +137,14 @@ else()
             set(LLVM_LIBRARIES "${LLVM_LIBRARIES};-lLLVMTableGen")
         endif()
     endif()
+
+    if(${LLVM_VERSION_STRING} MATCHES "^3\\.[0-9][\\.0-9A-Za-z]*")
+        # Versions below 4.0 do not support llvm-config --cmakedir
+        set(LLVM_CMAKEDIR ${LLVM_LIBRARY_DIRS}/cmake/llvm)
+    else()
+        llvm_set(CMAKEDIR cmakedir)
+    endif()
+
     llvm_set(TARGETS_TO_BUILD targets-built)
     string(REGEX MATCHALL "${pattern}[^ ]+" LLVM_TARGETS_TO_BUILD ${LLVM_TARGETS_TO_BUILD})
 endif()

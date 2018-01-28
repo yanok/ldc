@@ -17,6 +17,7 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
 
 #include "callback_ostream.h"
 #include "context.h"
@@ -69,15 +70,16 @@ struct RtCompileVarList {
 };
 
 struct RtCompileModuleList {
+  int32_t version;
   RtCompileModuleList *next;
   const char *irData;
-  int irDataSize;
-  RtCompileFuncList *funcList;
-  int funcListSize;
-  RtCompileSymList *symList;
-  int symListSize;
-  RtCompileVarList *varList;
-  int varListSize;
+  int32_t irDataSize;
+  const RtCompileFuncList *funcList;
+  int32_t funcListSize;
+  const RtCompileSymList *symList;
+  int32_t symListSize;
+  const RtCompileVarList *varList;
+  int32_t varListSize;
 };
 
 #pragma pack(pop)
@@ -200,29 +202,7 @@ public:
                  llvm::raw_ostream *asmListener) {
     assert(nullptr != module);
     reset();
-    // Build our symbol resolver:
-    // Lambda 1: Look back into the JIT itself to find symbols that are part of
-    //           the same "logical dylib".
-    // Lambda 2: Search for external symbols in the host process.
-    auto Resolver = llvm::orc::createLambdaResolver(
-        [&](const std::string &name) {
-          if (auto Sym = compileLayer.findSymbol(name, false)) {
-            return Sym;
-          }
-          return llvm::JITSymbol(nullptr);
-        },
-        [&](const std::string &name) {
-          auto it = symMap.find(name);
-          if (symMap.end() != it) {
-            return llvm::JITSymbol(
-                reinterpret_cast<llvm::JITTargetAddress>(it->second),
-                llvm::JITSymbolFlags::Exported);
-          }
-          if (auto SymAddr = getSymbolInProcess(name)) {
-            return llvm::JITSymbol(SymAddr, llvm::JITSymbolFlags::Exported);
-          }
-          return llvm::JITSymbol(nullptr);
-        });
+    auto Resolver = createResolver(symMap);
 
     ListenerCleaner cleaner(*this, asmListener);
     // Add the set to the JIT with the resolver we created above
@@ -265,6 +245,33 @@ private:
     compileLayer.removeModuleSet(handle);
 #endif
   }
+
+  std::shared_ptr<llvm::JITSymbolResolver>
+  createResolver(const SymMap &symMap) {
+    // Build our symbol resolver:
+    // Lambda 1: Look back into the JIT itself to find symbols that are part of
+    //           the same "logical dylib".
+    // Lambda 2: Search for external symbols in the host process.
+    return llvm::orc::createLambdaResolver(
+        [&](const std::string &name) {
+          if (auto Sym = compileLayer.findSymbol(name, false)) {
+            return Sym;
+          }
+          return llvm::JITSymbol(nullptr);
+        },
+        [&](const std::string &name) {
+          auto it = symMap.find(name);
+          if (symMap.end() != it) {
+            return llvm::JITSymbol(
+                reinterpret_cast<llvm::JITTargetAddress>(it->second),
+                llvm::JITSymbolFlags::Exported);
+          }
+          if (auto SymAddr = getSymbolInProcess(name)) {
+            return llvm::JITSymbol(SymAddr, llvm::JITSymbolFlags::Exported);
+          }
+          return llvm::JITSymbol(nullptr);
+        });
+  }
 };
 
 MyJIT &getJit() {
@@ -279,8 +286,10 @@ void setRtCompileVars(const Context &context, llvm::Module &module,
   }
 }
 
-template <typename T> llvm::ArrayRef<T> toArray(T *ptr, size_t size) {
-  return llvm::ArrayRef<T>(ptr, size);
+template <typename T>
+auto toArray(T *ptr, size_t size)
+    -> llvm::ArrayRef<typename std::remove_cv<T>::type> {
+  return llvm::ArrayRef<typename std::remove_cv<T>::type>(ptr, size);
 }
 
 void *resolveSymbol(llvm::JITSymbol &symbol) {
@@ -338,6 +347,21 @@ struct JitFinaliser final {
   void finalze() { finalized = true; }
 };
 
+template <typename F>
+void enumModules(const RtCompileModuleList *modlist_head,
+                 const Context& context,
+                 F &&fun) {
+  auto current = modlist_head;
+  while (current != nullptr) {
+    interruptPoint(context, "check version");
+    if (current->version != ApiVersion) {
+      fatal(context, "Module was built with different jit api version");
+    }
+    fun(*current);
+    current = current->next;
+  }
+}
+
 void rtCompileProcessImplSoInternal(const RtCompileModuleList *modlist_head,
                                     const Context &context) {
   if (nullptr == modlist_head) {
@@ -346,7 +370,6 @@ void rtCompileProcessImplSoInternal(const RtCompileModuleList *modlist_head,
   }
   interruptPoint(context, "Init");
   MyJIT &myJit = getJit();
-  auto current = modlist_head;
 
   std::vector<std::pair<std::string, void **>> functions;
   std::unique_ptr<llvm::Module> finalModule;
@@ -354,11 +377,11 @@ void rtCompileProcessImplSoInternal(const RtCompileModuleList *modlist_head,
   OptimizerSettings settings;
   settings.optLevel = context.optLevel;
   settings.sizeLevel = context.sizeLevel;
-  while (nullptr != current) {
+  enumModules(modlist_head, context, [&](const RtCompileModuleList &current) {
     interruptPoint(context, "load IR");
     auto buff = llvm::MemoryBuffer::getMemBuffer(
-        llvm::StringRef(current->irData,
-                        static_cast<std::size_t>(current->irDataSize)),
+        llvm::StringRef(current.irData,
+                        static_cast<std::size_t>(current.irDataSize)),
         "", false);
     interruptPoint(context, "parse IR");
     auto mod = llvm::parseBitcodeFile(*buff, myJit.getContext());
@@ -377,8 +400,8 @@ void rtCompileProcessImplSoInternal(const RtCompileModuleList *modlist_head,
 
       interruptPoint(context, "setRtCompileVars", name.data());
       setRtCompileVars(context, module,
-                       toArray(current->varList,
-                               static_cast<std::size_t>(current->varListSize)));
+                       toArray(current.varList,
+                               static_cast<std::size_t>(current.varListSize)));
 
       if (nullptr == finalModule) {
         finalModule = std::move(*mod);
@@ -388,19 +411,17 @@ void rtCompileProcessImplSoInternal(const RtCompileModuleList *modlist_head,
         }
       }
 
-      for (auto &&fun :
-           toArray(current->funcList,
-                   static_cast<std::size_t>(current->funcListSize))) {
+      for (auto &&fun : toArray(current.funcList, static_cast<std::size_t>(
+                                                      current.funcListSize))) {
         functions.push_back(std::make_pair(fun.name, fun.func));
       }
 
-      for (auto &&sym : toArray(current->symList, static_cast<std::size_t>(
-                                                      current->symListSize))) {
+      for (auto &&sym : toArray(current.symList, static_cast<std::size_t>(
+                                                     current.symListSize))) {
         symMap.insert(std::make_pair(decorate(sym.name), sym.sym));
       }
     }
-    current = current->next;
-  }
+  });
 
   assert(nullptr != finalModule);
   dumpModule(context, *finalModule, DumpStage::MergedModule);
@@ -462,8 +483,8 @@ __declspec(dllexport)
 #else
 __attribute__ ((visibility ("default")))
 #endif
-    void rtCompileProcessImplSo(const void *modlist_head,
-                                const Context *context, size_t contextSize) {
+void JIT_API_ENTRYPOINT(const void *modlist_head,
+                        const Context *context, size_t contextSize) {
   assert(nullptr != context);
   assert(sizeof(*context) == contextSize);
   rtCompileProcessImplSoInternal(

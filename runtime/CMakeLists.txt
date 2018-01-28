@@ -38,7 +38,7 @@ set(BUILD_BC_LIBS         OFF                                 CACHE BOOL   "Buil
 set(INCLUDE_INSTALL_DIR   ${CMAKE_INSTALL_PREFIX}/include/d   CACHE PATH   "Path to install D modules to")
 set(BUILD_SHARED_LIBS     AUTO                                CACHE STRING "Whether to build the runtime as a shared library (ON|OFF|BOTH)")
 set(D_FLAGS               -w                                  CACHE STRING "Runtime D compiler flags, separated by ';'")
-set(D_FLAGS_DEBUG         -g;-link-debuglib                   CACHE STRING "Runtime D compiler flags (debug libraries), separated by ';'")
+set(D_FLAGS_DEBUG         -g;-link-defaultlib-debug           CACHE STRING "Runtime D compiler flags (debug libraries), separated by ';'")
 set(D_FLAGS_RELEASE       -O3;-release                        CACHE STRING "Runtime D compiler flags (release libraries), separated by ';'")
 set(COMPILE_ALL_D_FILES_AT_ONCE ON                            CACHE BOOL   "Compile all D files for a lib in a single command line instead of separately")
 set(RT_ARCHIVE_WITH_LDC   AUTO                                CACHE STRING "Whether to archive the static runtime libs via LDC instead of CMake archiver")
@@ -113,11 +113,7 @@ if(NOT ${BUILD_SHARED_LIBS} STREQUAL "OFF")
     if(NOT SHARED_LIBS_SUPPORTED)
         message(FATAL_ERROR "Shared libraries (BUILD_SHARED_LIBS) are only supported on Linux, macOS and FreeBSD for the time being.")
     endif()
-
-    # Only use the `-shared` lib suffix if static libs are generated too
-    if(NOT ${BUILD_SHARED_LIBS} STREQUAL "ON")
-        set(SHARED_LIB_SUFFIX "-shared")
-    endif()
+    set(SHARED_LIB_SUFFIX "-shared")
 endif()
 
 # Auto-detect C system libraries
@@ -150,14 +146,10 @@ list(REMOVE_ITEM DRUNTIME_D ${RUNTIME_DIR}/src/etc/linux/memoryerror.d)
 #        See PR #1917; partly fixed upstream.
 file(GLOB_RECURSE DRUNTIME_D_STDCPP ${RUNTIME_DIR}/src/core/stdcpp/*.d)
 list(REMOVE_ITEM DRUNTIME_D ${DRUNTIME_D_STDCPP})
-# remove all modules in gcstub/
-file(GLOB_RECURSE DRUNTIME_D_GCSTUB ${RUNTIME_DIR}/src/gcstub/*.d)
-list(REMOVE_ITEM DRUNTIME_D ${DRUNTIME_D_GCSTUB})
 # remove some modules in rt/
 list(REMOVE_ITEM DRUNTIME_D
     ${RUNTIME_DIR}/src/rt/alloca.d
     ${RUNTIME_DIR}/src/rt/llmath.d
-    ${RUNTIME_DIR}/src/rt/trace.d
 )
 # only include core/sys/ modules matching the platform
 file(GLOB_RECURSE DRUNTIME_D_BIONIC  ${RUNTIME_DIR}/src/core/sys/bionic/*.d)
@@ -270,6 +262,14 @@ if("${TARGET_SYSTEM}" MATCHES "Linux|FreeBSD")
     endif()
 endif()
 
+# Only have either shared or static libs?
+# Then explicitly default to linking against them via default LDC switch.
+if(${BUILD_SHARED_LIBS} STREQUAL "ON")
+    set(ADDITIONAL_DEFAULT_LDC_SWITCHES ",\n        \"-link-defaultlib-shared\"")
+elseif(${BUILD_SHARED_LIBS} STREQUAL "OFF")
+    set(ADDITIONAL_DEFAULT_LDC_SWITCHES ",\n        \"-link-defaultlib-shared=false\"")
+endif()
+
 # Only generate the config files if this CMake project is embedded in the LDC CMake project.
 if(LDC_EXE)
     if(PHOBOS2_DIR)
@@ -327,7 +327,7 @@ endif()
 CHECK_INCLUDE_FILE(unistd.h HAVE_UNISTD_H)
 if (HAVE_UNISTD_H)
     # Needed for zlib
-    append("-DHAVE_UNISTD_H" CMAKE_C_FLAGS_RELEASE)
+    append("-DHAVE_UNISTD_H" CMAKE_C_FLAGS)
 endif()
 # 2) Set all other CMAKE_C_FLAGS variants to CMAKE_C_FLAGS_RELEASE
 set(variables
@@ -629,12 +629,9 @@ endmacro()
 macro(build_all_runtime_variants d_flags c_flags ld_flags path_suffix outlist_targets)
     build_runtime_variants("${d_flags}" "${c_flags}" "${ld_flags}" "${path_suffix}" ${outlist_targets})
 
-    if(LDC_WITH_PGO)
-        # static profile-rt
-        build_profile_runtime("${d_flags};${D_FLAGS};${D_FLAGS_RELEASE}" "${c_flags}" "${ld_flags}" "" "${path_suffix}" ${outlist_targets})
-        get_target_suffix("" "${path_suffix}" target_suffix)
-        set_common_library_properties(ldc-profile-rt${target_suffix} OFF)
-    endif()
+    # static profile-rt
+    build_profile_runtime("${c_flags}" "${ld_flags}" "" "${path_suffix}" ${outlist_targets})
+    get_target_suffix("" "${path_suffix}" target_suffix)
 endmacro()
 
 

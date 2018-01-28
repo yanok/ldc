@@ -239,14 +239,8 @@ public:
       // adding more control flow.
       if (result && result->type->ty != Tvoid &&
           !result->definedInFuncEntryBB()) {
-        if (result->isLVal()) {
-          LLValue *copy = DtoAlloca(result->type);
-          DtoMemCpy(copy, DtoLVal(result));
-          result = new DLValue(result->type, copy);
-        } else {
-          LLValue *copy = DtoAllocaDump(result);
-          result = new DLValue(result->type, copy);
-        }
+        LLValue *copy = DtoAllocaDump(result);
+        result = new DLValue(result->type, copy);
       }
 
       llvm::BasicBlock *endbb = p->insertBB("toElem.success");
@@ -597,9 +591,24 @@ public:
 
   using BinOpFunc = DValue *(Loc &, Type *, DValue *, Expression *, bool);
 
+  static Expression *getLValExp(Expression *e) {
+    e = skipOverCasts(e);
+    if (e->op == TOKcomma) {
+      CommaExp *ce = static_cast<CommaExp *>(e);
+      Expression *newCommaRhs = getLValExp(ce->e2);
+      if (newCommaRhs != ce->e2) {
+        CommaExp *newComma = static_cast<CommaExp *>(ce->copy());
+        newComma->e2 = newCommaRhs;
+        newComma->type = newCommaRhs->type;
+        e = newComma;
+      }
+    }
+    return e;
+  }
+
   template <BinOpFunc binOpFunc, bool useLValTypeForBinOp>
   static DValue *binAssign(BinAssignExp *e) {
-    Expression *lvalExp = skipOverCasts(e->e1);
+    Expression *lvalExp = getLValExp(e->e1);
     DValue *lhsLVal = toElem(lvalExp);
 
     // Use the lhs lvalue for the binop lhs and optionally cast it to the full
@@ -1262,9 +1271,6 @@ public:
         llvm_unreachable("Unsupported floating point comparison operator.");
       }
       eval = p->ir->CreateFCmp(cmpop, DtoRVal(l), DtoRVal(r));
-    } else if (t->ty == Tsarray || t->ty == Tarray) {
-      Logger::println("static or dynamic array");
-      eval = DtoArrayCompare(e->loc, e->op, l, r);
     } else if (t->ty == Taarray) {
       eval = LLConstantInt::getFalse(gIR->context());
     } else if (t->ty == Tdelegate) {
@@ -1604,7 +1610,9 @@ public:
       } else if (e->e1->op == TOKvar) {
         if (auto vd = static_cast<VarExp *>(e->e1)->var->isVarDeclaration()) {
           if (vd->onstack) {
-            DtoFinalizeClass(e->loc, DtoRVal(dval));
+            assert(vd->scopeClassType);
+            const auto cd = vd->scopeClassType->sym->isClassDeclaration();
+            DtoFinalizeScopeClass(e->loc, DtoRVal(dval), cd);
             onstack = true;
           }
         }
@@ -1654,7 +1662,7 @@ public:
     auto &PGO = gIR->funcGen().pgo;
     PGO.setCurrentStmt(e);
 
-    if (!global.params.useAssert)
+    if (global.params.useAssert != CHECKENABLEon)
       return;
 
     // condition
@@ -1686,7 +1694,7 @@ public:
      */
     DValue *const msg = e->msg ? toElemDtor(e->msg) : nullptr;
     Module *const module = p->func()->decl->getModule();
-    if (global.params.betterC) {
+    if (global.params.checkAction == CHECKACTION_C) {
       const auto cMsg =
           msg ? DtoArrayPtr(msg) // assuming `msg` is null-terminated, like DMD
               : DtoConstCString(e->e1->toChars());

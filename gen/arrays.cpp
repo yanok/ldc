@@ -188,7 +188,7 @@ static Type *DtoArrayElementType(Type *arrayType) {
 static void copySlice(Loc &loc, LLValue *dstarr, LLValue *sz1, LLValue *srcarr,
                       LLValue *sz2, bool knownInBounds) {
   const bool checksEnabled =
-      global.params.useAssert || gIR->emitArrayBoundsChecks();
+      global.params.useAssert == CHECKENABLEon || gIR->emitArrayBoundsChecks();
   if (checksEnabled && !knownInBounds) {
     LLValue *fn = getRuntimeFunction(loc, gIR->module, "_d_array_slice_copy");
     gIR->CreateCallOrInvoke(fn, dstarr, sz1, srcarr, sz2);
@@ -1146,26 +1146,6 @@ LLValue *DtoArrayEquals(Loc &loc, TOK op, DValue *l, DValue *r) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-LLValue *DtoArrayCompare(Loc &loc, TOK op, DValue *l, DValue *r) {
-  LLValue *res = nullptr;
-  llvm::ICmpInst::Predicate cmpop;
-  tokToICmpPred(op, false, &cmpop, &res);
-
-  if (!res) {
-    Type *t = l->type->toBasetype()->nextOf()->toBasetype();
-    if (t->ty == Tchar) {
-      res = DtoArrayEqCmp_impl(loc, "_adCmpChar", l, r, false);
-    } else {
-      res = DtoArrayEqCmp_impl(loc, "_adCmp2", l, r, true);
-    }
-    res = gIR->ir->CreateICmp(cmpop, res, DtoConstInt(0));
-  }
-
-  assert(res);
-  return res;
-}
-
-////////////////////////////////////////////////////////////////////////////////
 LLValue *DtoArrayCastLength(Loc &loc, LLValue *len, LLType *elemty,
                             LLType *newelemty) {
   IF_LOG Logger::println("DtoArrayCastLength");
@@ -1379,7 +1359,7 @@ void DtoIndexBoundsCheck(Loc &loc, DValue *arr, DValue *index) {
 void DtoBoundsCheckFailCall(IRState *irs, Loc &loc) {
   Module *const module = irs->func()->decl->getModule();
 
-  if (global.params.betterC) {
+  if (global.params.checkAction == CHECKACTION_C) {
     DtoCAssert(module, loc, DtoConstCString("array overflow"));
   } else {
     llvm::Function *errorfn =

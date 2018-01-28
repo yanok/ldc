@@ -146,9 +146,13 @@ class AssemblyAnnotator : public AssemblyAnnotationWriter {
     return "";
   }
 
+  const llvm::DataLayout &DL;
+
 public:
+  AssemblyAnnotator(const llvm::DataLayout &dl) : DL{dl} {}
+
   void emitFunctionAnnot(const Function *F,
-                         formatted_raw_ostream &os) LLVM_OVERRIDE {
+                         formatted_raw_ostream &os) override {
     os << "; [#uses = " << F->getNumUses() << ']';
 
     // show demangled name
@@ -159,8 +163,7 @@ public:
     os << '\n';
   }
 
-  void printInfoComment(const Value &val,
-                        formatted_raw_ostream &os) LLVM_OVERRIDE {
+  void printInfoComment(const Value &val, formatted_raw_ostream &os) override {
     bool padding = false;
     if (!val.getType()->isVoidTy()) {
       os.PadToColumn(50);
@@ -173,7 +176,7 @@ public:
         os << ", type = " << *val.getType();
       } else if (isa<AllocaInst>(&val)) {
         os << ", size/byte = "
-           << gDataLayout->getTypeAllocSize(val.getType()->getContainedType(0));
+           << DL.getTypeAllocSize(val.getType()->getContainedType(0));
       }
       os << ']';
     }
@@ -388,7 +391,7 @@ void writeModule(llvm::Module *m, const char *filename) {
             errinfo.message().c_str());
       fatal();
     }
-    AssemblyAnnotator annotator;
+    AssemblyAnnotator annotator(m->getDataLayout());
     m->print(aos, &annotator);
   }
 

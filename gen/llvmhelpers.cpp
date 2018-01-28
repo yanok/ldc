@@ -20,7 +20,6 @@
 #include "gen/functions.h"
 #include "gen/irstate.h"
 #include "gen/llvm.h"
-#include "gen/llvmcompat.h"
 #include "gen/logger.h"
 #include "gen/nested.h"
 #include "gen/mangling.h"
@@ -220,12 +219,30 @@ LLValue *DtoAllocaDump(DValue *val, const char *name) {
   return DtoAllocaDump(val, val->type, name);
 }
 
+LLValue *DtoAllocaDump(DValue *val, int alignment, const char *name) {
+  return DtoAllocaDump(val, DtoType(val->type), alignment, name);
+}
+
 LLValue *DtoAllocaDump(DValue *val, Type *asType, const char *name) {
   return DtoAllocaDump(val, DtoType(asType), DtoAlignment(asType), name);
 }
 
 LLValue *DtoAllocaDump(DValue *val, LLType *asType, int alignment,
                        const char *name) {
+  if (val->isLVal()) {
+    LLValue *lval = DtoLVal(val);
+    LLType *asMemType = i1ToI8(voidToI8(asType));
+    LLValue *copy = DtoRawAlloca(asMemType, alignment, name);
+    const auto minSize =
+        std::min(getTypeAllocSize(lval->getType()->getPointerElementType()),
+                 getTypeAllocSize(asMemType));
+    const auto minAlignment =
+        std::min(DtoAlignment(val->type), static_cast<unsigned>(alignment));
+    DtoMemCpy(copy, lval, DtoConstSize_t(minSize), minAlignment);
+    // TODO: zero-out any remaining bytes?
+    return copy;
+  }
+
   return DtoAllocaDump(DtoRVal(val), asType, alignment, name);
 }
 
@@ -1022,7 +1039,7 @@ DValue *DtoDeclarationExp(Dsymbol *declaration) {
   } else if (AttribDeclaration *a = declaration->isAttribDeclaration()) {
     Logger::println("AttribDeclaration");
     // choose the right set in case this is a conditional declaration
-    if (auto d = a->include(nullptr, nullptr)) {
+    if (auto d = a->include(nullptr)) {
       for (unsigned i = 0; i < d->dim; ++i) {
         DtoDeclarationExp((*d)[i]);
       }
