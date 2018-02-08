@@ -53,6 +53,7 @@ private:
   virtual void addASanLinkFlags(const llvm::Triple &triple);
   virtual void addFuzzLinkFlags(const llvm::Triple &triple);
   virtual void addCppStdlibLinkFlags(const llvm::Triple &triple);
+  virtual void addProfileRuntimeLinkFlags(const llvm::Triple &triple);
   virtual void addXRayLinkFlags(const llvm::Triple &triple);
 
   virtual void addLinker();
@@ -368,6 +369,33 @@ void ArgsBuilder::addCppStdlibLinkFlags(const llvm::Triple &triple) {
   }
 }
 
+// Adds all required link flags for PGO.
+void ArgsBuilder::addProfileRuntimeLinkFlags(const llvm::Triple &triple) {
+  std::string searchPaths[] = {
+    getFullCompilerRTLibPath(triple, "libldc_rt.profile"),
+    getFullCompilerRTLibPath(triple, "libclang_rt.profile"),
+    getFullClangCompilerRTLibPath(triple, "libclang_rt.profile"),
+  };
+
+#if LDC_LLVM_VER >= 308
+  if (global.params.targetTriple->isOSLinux()) {
+    // For Linux, explicitly define __llvm_profile_runtime as undefined
+    // symbol, so that the initialization part of profile-rt is linked in.
+    addLdFlag("-u", llvm::getInstrProfRuntimeHookVarName());
+  }
+#endif
+
+  for (const auto &filepath : searchPaths) {
+    IF_LOG Logger::println("Searching profile runtime: %s", filepath.c_str());
+
+    if (llvm::sys::fs::exists(filepath)) {
+      IF_LOG Logger::println("Found, linking with %s", filepath.c_str());
+      args.push_back(filepath);
+      return;
+    }
+  }
+}
+
 void ArgsBuilder::addSanitizers(const llvm::Triple &triple) {
   if (opts::isSanitizerEnabled(opts::AddressSanitizer)) {
     addASanLinkFlags(triple);
@@ -401,14 +429,7 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
 
   // Link with profile-rt library when generating an instrumented binary.
   if (opts::isInstrumentingForPGO()) {
-#if LDC_LLVM_VER >= 308
-    if (global.params.targetTriple->isOSLinux()) {
-      // For Linux, explicitly define __llvm_profile_runtime as undefined
-      // symbol, so that the initialization part of profile-rt is linked in.
-      addLdFlag("-u", llvm::getInstrProfRuntimeHookVarName());
-    }
-#endif
-    args.push_back("-lldc-profile-rt");
+    addProfileRuntimeLinkFlags(*global.params.targetTriple);
   }
 
   if (opts::enableDynamicCompile) {
@@ -516,10 +537,12 @@ void ArgsBuilder::addUserSwitches() {
 void ArgsBuilder::addDefaultLibs() {
   bool addSoname = false;
 
-  switch (global.params.targetTriple->getOS()) {
+  const auto &triple = *global.params.targetTriple;
+
+  switch (triple.getOS()) {
   case llvm::Triple::Linux:
     addSoname = true;
-    if (global.params.targetTriple->getEnvironment() == llvm::Triple::Android) {
+    if (triple.getEnvironment() == llvm::Triple::Android) {
       args.push_back("-ldl");
       args.push_back("-lm");
       break;
@@ -552,7 +575,7 @@ void ArgsBuilder::addDefaultLibs() {
     break;
   }
 
-  if (global.params.targetTriple->isWindowsGNUEnvironment()) {
+  if (triple.isWindowsGNUEnvironment()) {
     // This is really more of a kludge, as linking in the Winsock functions
     // should be handled by the pragma(lib, ...) in std.socket, but it
     // makes LDC behave as expected for now.
