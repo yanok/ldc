@@ -56,7 +56,7 @@ set(LDC_VERSION "1.8.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
 set(DMDFE_PATCH_VERSION   78)
-set(DMDFE_FIX_LEVEL       1) # Comment out if not used
+set(DMDFE_FIX_LEVEL       3) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -321,6 +321,7 @@ set(DRV_SRC
     driver/linker-gcc.cpp
     driver/linker-msvc.cpp
     driver/main.cpp
+    driver/plugins.cpp
     ${CMAKE_BINARY_DIR}/driver/ldc-version.cpp
 )
 set(DRV_HDR
@@ -337,6 +338,7 @@ set(DRV_HDR
     driver/ldc-version.h
     driver/archiver.h
     driver/linker.h
+    driver/plugins.h
     driver/targetmachine.h
     driver/toobj.h
     driver/tool.h
@@ -379,12 +381,11 @@ include(HandleLTOPGOBuildOptions)
 
 #
 # Enable Dynamic compilation if supported for this platform and LLVM version.
-# LLVM >= 3.9 is required
 #
 set(LDC_DYNAMIC_COMPILE "AUTO" CACHE STRING "Support dynamic compilation (True|False). Enabled by default.")
 if(LDC_DYNAMIC_COMPILE STREQUAL "AUTO")
     set(LDC_DYNAMIC_COMPILE False)  # must be a valid Python boolean constant (case sensitive)
-    if (NOT (LDC_LLVM_VER LESS 400))
+    if (NOT (LDC_LLVM_VER LESS 500))
         set(LDC_DYNAMIC_COMPILE True)
         message(STATUS "Building LDC with dynamic compilation support")
         add_definitions(-DLDC_DYNAMIC_COMPILE)
@@ -559,6 +560,24 @@ if(LDC_WITH_LLD)
     else()
         set(LDC_LINKERFLAG_LIST "-llldCOFF;-llldCore;-llldDriver;${LDC_LINKERFLAG_LIST}")
     endif()
+endif()
+
+# Plugin support
+if(UNIX)
+    set(LDC_ENABLE_PLUGINS_DEFAULT ON)
+else()
+    set(LDC_ENABLE_PLUGINS_DEFAULT OFF)
+endif()
+set(LDC_ENABLE_PLUGINS ${LDC_ENABLE_PLUGINS_DEFAULT} CACHE BOOL "Build LDC with plugin support (increases binary size)")
+if(LDC_ENABLE_PLUGINS)
+    message(STATUS "Building LDC with plugin support (LDC_ENABLE_PLUGINS=ON)")
+    add_definitions(-DLDC_ENABLE_PLUGINS)
+    # For plugin support, we need to link with --export-dynamic on Unix.
+    if(UNIX AND NOT APPLE)
+        set(LDC_LINKERFLAG_LIST "${LDC_LINKERFLAG_LIST};-Wl,--export-dynamic")
+    endif()
+else()
+    message(STATUS "Building LDC without plugin support (LDC_ENABLE_PLUGINS=OFF)")
 endif()
 
 set(LDC_LINK_MANUALLY OFF)
