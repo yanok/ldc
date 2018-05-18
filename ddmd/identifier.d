@@ -137,6 +137,27 @@ public:
         return idPool(buf.peekSlice());
     }
 
+    /***************************************
+     * Generate deterministic named identifier based on a source location,
+     * such that the name is consistent across multiple compilations.
+     * Params:
+     *      prefix      = first part of the identifier name.
+     *      loc         = source location to use is the identifier name.
+     * Returns:
+     *      Identifier (inside Identifier.idPool) with deterministic name based
+     *      on the source location.
+     */
+    extern (D) static Identifier generateIdWithLoc(string prefix, const ref Loc loc)
+    {
+        OutBuffer buf;
+        buf.writestring(prefix);
+        buf.writestring("_L");
+        buf.printf("%llu", cast(ulong)loc.linnum);
+        buf.writestring("_C");
+        buf.printf("%llu", cast(ulong)loc.charnum);
+        return idPool(buf.peekSlice());
+    }
+
     /********************************************
      * Create an identifier in the string table.
      */
