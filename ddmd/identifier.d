@@ -29,53 +29,53 @@ extern (C++) final class Identifier : RootObject
 {
 private:
     const int value;
-    const char* string;
+    const char* name;
     const size_t len;
 
 public:
 
-    extern (D) this(const(char)* string, size_t length, int value)
+    extern (D) this(const(char)* name, size_t length, int value)
     {
-        //printf("Identifier('%s', %d)\n", string, value);
-        this.string = string;
+        //printf("Identifier('%s', %d)\n", name, value);
+        this.name = name;
         this.value = value;
         this.len = length;
     }
 
-    extern (D) this(const(char)* string)
+    extern (D) this(const(char)* name)
     {
-        //printf("Identifier('%s', %d)\n", string, value);
-        this(string, strlen(string), TOKidentifier);
+        //printf("Identifier('%s', %d)\n", name, value);
+        this(name, strlen(name), TOKidentifier);
     }
 
-    static Identifier create(const(char)* string)
+    static Identifier create(const(char)* name)
     {
-        return new Identifier(string);
+        return new Identifier(name);
     }
 
     override bool equals(RootObject o) const
     {
-        return this == o || strncmp(string, o.toChars(), len + 1) == 0;
+        return this == o || strncmp(name, o.toChars(), len + 1) == 0;
     }
 
     override int compare(RootObject o) const
     {
-        return strncmp(string, o.toChars(), len + 1);
+        return strncmp(name, o.toChars(), len + 1);
     }
 
     override void print() const
     {
-        fprintf(stderr, "%s", string);
+        fprintf(stderr, "%s", name);
     }
 
     override const(char)* toChars() const
     {
-        return string;
+        return name;
     }
 
     extern (D) final const(char)[] toString() const
     {
-        return string[0 .. len];
+        return name[0 .. len];
     }
 
     final int getValue() const
