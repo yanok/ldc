@@ -3389,12 +3389,12 @@ extern (C++) class StaticCtorDeclaration : FuncDeclaration
 {
     final extern (D) this(Loc loc, Loc endloc, StorageClass stc)
     {
-        super(loc, endloc, Identifier.generateId("_staticCtor"), STCstatic | stc, null);
+        super(loc, endloc, Identifier.generateIdWithLoc("_staticCtor", loc), STCstatic | stc, null);
     }
 
-    final extern (D) this(Loc loc, Loc endloc, const(char)* name, StorageClass stc)
+    final extern (D) this(Loc loc, Loc endloc, string name, StorageClass stc)
     {
-        super(loc, endloc, Identifier.generateId(name), STCstatic | stc, null);
+        super(loc, endloc, Identifier.generateIdWithLoc(name, loc), STCstatic | stc, null);
     }
 
     override Dsymbol syntaxCopy(Dsymbol s)
@@ -3475,12 +3475,12 @@ extern (C++) class StaticDtorDeclaration : FuncDeclaration
 
     final extern (D) this(Loc loc, Loc endloc, StorageClass stc)
     {
-        super(loc, endloc, Identifier.generateId("_staticDtor"), STCstatic | stc, null);
+        super(loc, endloc, Identifier.generateIdWithLoc("_staticDtor", loc), STCstatic | stc, null);
     }
 
-    final extern (D) this(Loc loc, Loc endloc, const(char)* name, StorageClass stc)
+    final extern (D) this(Loc loc, Loc endloc, string name, StorageClass stc)
     {
-        super(loc, endloc, Identifier.generateId(name), STCstatic | stc, null);
+        super(loc, endloc, Identifier.generateIdWithLoc(name, loc), STCstatic | stc, null);
     }
 
     override Dsymbol syntaxCopy(Dsymbol s)
@@ -3608,7 +3608,7 @@ extern (C++) final class UnitTestDeclaration : FuncDeclaration
 
     extern (D) this(Loc loc, Loc endloc, StorageClass stc, char* codedoc)
     {
-        super(loc, endloc, createIdentifier(loc), stc, null);
+        super(loc, endloc, Identifier.generateIdWithLoc("__unittest", loc), stc, null);
         this.codedoc = codedoc;
     }
 
@@ -3617,17 +3617,6 @@ extern (C++) final class UnitTestDeclaration : FuncDeclaration
         assert(!s);
         auto utd = new UnitTestDeclaration(loc, endloc, storage_class, codedoc);
         return FuncDeclaration.syntaxCopy(utd);
-    }
-
-    /***********************************************************
-     * Generate unique unittest function Id so we can have multiple
-     * instances per module.
-     */
-    private static Identifier createIdentifier(Loc loc)
-    {
-        OutBuffer buf;
-        buf.printf("__unittest_L%u_C%u", loc.linnum, loc.charnum);
-        return Identifier.idPool(buf.peekSlice());
     }
 
     override AggregateDeclaration isThis()
