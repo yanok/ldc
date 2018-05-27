@@ -156,6 +156,14 @@ nothrow:
         buf.print(loc.linnum);
         buf.writestring("_C");
         buf.print(loc.charnum);
+        auto basesize = buf.peekSlice().length;
+        uint counter = 1;
+        while (stringtable.lookup(buf.peekSlice().ptr, buf.peekSlice().length) !is null)
+        {
+            buf.setsize(basesize);
+            buf.writestring("_");
+            buf.print(counter++);
+        }
         return idPool(buf.peekSlice());
     }
 
