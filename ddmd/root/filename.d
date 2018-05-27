@@ -31,6 +31,8 @@ version (Windows) alias _mkdir = mkdir;
 version (Posix) extern (C) char* canonicalize_file_name(const char*);
 version (Windows) extern (C) int stricmp(const char*, const char*) pure;
 version (Windows) extern (Windows) DWORD GetFullPathNameA(LPCSTR lpFileName, DWORD nBufferLength, LPSTR lpBuffer, LPSTR* lpFilePart);
+version (Windows) extern (C) char* getcwd(char* buffer, size_t maxlen);
+version (Posix) import core.sys.posix.unistd : getcwd;
 }
 
 alias Strings = Array!(const(char)*);
@@ -97,6 +99,20 @@ nothrow:
         {
             assert(0);
         }
+    }
+
+    /**
+    Return the given name as an absolute path
+
+    Params:
+        name = path
+        base = the absolute base to prefix name with if it is relative
+
+    Returns: name as an absolute path relative to base
+    */
+    extern (C++) static const(char)* toAbsolute(const(char)* name, const(char)* base = null)
+    {
+        return absolute(name) ? name : combine(base ? base : getcwd(null, 0), name);
     }
 
     /********************************
