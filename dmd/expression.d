@@ -1828,7 +1828,7 @@ extern (C++) /* IN_LLVM abstract */ class Expression : RootObject
     }
 
     /****************************************
-     * Resolve __FILE__, __LINE__, __MODULE__, __FUNCTION__, __PRETTY_FUNCTION__ to loc.
+     * Resolve __FILE__, __LINE__, __MODULE__, __FUNCTION__, __PRETTY_FUNCTION__, __FILE_FULL_PATH__ to loc.
      */
     Expression resolveLoc(Loc loc, Scope* sc)
     {
@@ -7092,9 +7092,12 @@ extern (C++) final class FileInitExp : DefaultInitExp
     override Expression resolveLoc(Loc loc, Scope* sc)
     {
         //printf("FileInitExp::resolve() %s\n", toChars());
-        const(char)* s = loc.filename ? loc.filename : sc._module.ident.toChars();
+        const(char)* s;
         if (subop == TOKfilefullpath)
-            s = FileName.combine(sc._module.srcfilePath, s);
+            s = FileName.toAbsolute(loc.filename ? loc.filename : sc._module.srcfile.name.toChars());
+        else
+            s = loc.filename ? loc.filename : sc._module.ident.toChars();
+
         Expression e = new StringExp(loc, cast(char*)s);
         e = e.expressionSemantic(sc);
         e = e.castTo(sc, type);
