@@ -1,7 +1,6 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (c) 2013-2014 by The D Language Foundation
- * All Rights Reserved
+ * Copyright (C) 2013-2018 by The D Language Foundation, All Rights Reserved
  * http://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
  * http://www.boost.org/LICENSE_1_0.txt
@@ -189,6 +188,7 @@ class TupleExp;
 class ArrayLiteralExp;
 class AssocArrayLiteralExp;
 class StructLiteralExp;
+class ObjcClassReferenceExp;
 class TypeExp;
 class ScopeExp;
 class TemplateExp;
@@ -602,6 +602,7 @@ public:
     virtual void visit(ErrorExp *e) { visit((Expression *)e); }
     virtual void visit(ComplexExp *e) { visit((Expression *)e); }
     virtual void visit(StructLiteralExp *e) { visit((Expression *)e); }
+    virtual void visit(ObjcClassReferenceExp *e) { visit((Expression *)e); }
     virtual void visit(SymOffExp *e) { visit((SymbolExp *)e); }
     virtual void visit(OverExp *e) { visit((Expression *)e); }
     virtual void visit(HaltExp *e) { visit((Expression *)e); }

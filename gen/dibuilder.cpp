@@ -246,6 +246,10 @@ ldc::DIType ldc::DIBuilder::CreateEnumType(Type *type) {
   llvm::Type *T = DtoType(type);
   TypeEnum *te = static_cast<TypeEnum *>(type);
 
+  if (te->sym->isSpecial()) {
+    return CreateBasicType(te->sym->memtype);
+  }
+
   llvm::SmallVector<LLMetadata *, 8> subscripts;
   for (auto m : *te->sym->members) {
     EnumMember *em = m->isEnumMember();
@@ -339,8 +343,8 @@ ldc::DIType ldc::DIBuilder::CreateComplexType(Type *type) {
 
     auto imoffset = getTypeAllocSize(DtoType(elemtype));
     LLMetadata *elems[] = {
-        CreateMemberType(0, elemtype, file, "re", 0, PROTpublic),
-        CreateMemberType(0, elemtype, file, "im", imoffset, PROTpublic)};
+        CreateMemberType(0, elemtype, file, "re", 0, Prot::public_),
+        CreateMemberType(0, elemtype, file, "im", imoffset, Prot::public_)};
 
     return DBuilder.createStructType(GetCU(),
                                      t->toChars(),            // Name
@@ -359,7 +363,7 @@ ldc::DIType ldc::DIBuilder::CreateComplexType(Type *type) {
 ldc::DIType ldc::DIBuilder::CreateMemberType(unsigned linnum, Type *type,
                                              ldc::DIFile file,
                                              const char *c_name,
-                                             unsigned offset, PROTKIND prot) {
+                                             unsigned offset, Prot::Kind prot) {
   Type *t = type->toBasetype();
 
   // translate functions to function pointers
@@ -373,13 +377,13 @@ ldc::DIType ldc::DIBuilder::CreateMemberType(unsigned linnum, Type *type,
 
   auto Flags = DIFlagZero;
   switch (prot) {
-  case PROTprivate:
+  case Prot::private_:
     Flags = DIFlags::FlagPrivate;
     break;
-  case PROTprotected:
+  case Prot::protected_:
     Flags = DIFlags::FlagProtected;
     break;
-  case PROTpublic:
+  case Prot::public_:
     Flags = DIFlags::FlagPublic;
     break;
   default:
@@ -482,7 +486,12 @@ ldc::DIType ldc::DIBuilder::CreateCompositeType(Type *type) {
                                    getNullDIType(), // VTableHolder
                                    nullptr,         // TemplateParms
                                    uniqueIdent(t)); // UniqueIdentifier
-      auto dt = DBuilder.createInheritance(fwd, derivedFrom, 0,
+      auto dt = DBuilder.createInheritance(fwd,
+                                           derivedFrom, // base class type
+                                           0,           // offset of base class
+#if LDC_LLVM_VER >= 700
+                                           0, // offset of virtual base pointer
+#endif
                                            DIFlags::FlagPublic);
       elems.push_back(dt);
     }
@@ -536,9 +545,9 @@ ldc::DIType ldc::DIBuilder::CreateArrayType(Type *type) {
   ldc::DIFile file = CreateFile();
 
   LLMetadata *elems[] = {
-      CreateMemberType(0, Type::tsize_t, file, "length", 0, PROTpublic),
+      CreateMemberType(0, Type::tsize_t, file, "length", 0, Prot::public_),
       CreateMemberType(0, t->nextOf()->pointerTo(), file, "ptr",
-                       global.params.is64bit ? 8 : 4, PROTpublic)};
+                       global.params.is64bit ? 8 : 4, Prot::public_)};
 
   return DBuilder.createStructType(GetCU(),
                                    type->toPrettyChars(true), // Name
@@ -627,9 +636,9 @@ ldc::DIType ldc::DIBuilder::CreateDelegateType(Type *type) {
   auto file = CreateFile();
 
   LLMetadata *elems[] = {
-      CreateMemberType(0, Type::tvoidptr, file, "context", 0, PROTpublic),
+      CreateMemberType(0, Type::tvoidptr, file, "context", 0, Prot::public_),
       CreateMemberType(0, t->next, file, "funcptr",
-                       global.params.is64bit ? 8 : 4, PROTpublic)};
+                       global.params.is64bit ? 8 : 4, Prot::public_)};
 
   return DBuilder.createStructType(CU,           // compile unit where defined
                                    type->toPrettyChars(true), // name
@@ -825,7 +834,7 @@ ldc::DISubprogram ldc::DIBuilder::EmitSubProgram(FuncDeclaration *fd) {
       file,                               // file
       fd->loc.linnum,                     // line no
       DIFnType,                           // type
-      fd->protection.kind == PROTprivate, // is local to unit
+      fd->protection.kind == Prot::private_, // is local to unit
       true,                               // isdefinition
       fd->loc.linnum,                     // FIXME: scope line
       DIFlags::FlagPrototyped,            // Flags
@@ -869,7 +878,7 @@ ldc::DISubprogram ldc::DIBuilder::EmitThunk(llvm::Function *Thunk,
       file,                               // file
       fd->loc.linnum,                     // line no
       DIFnType,                           // type
-      fd->protection.kind == PROTprivate, // is local to unit
+      fd->protection.kind == Prot::private_, // is local to unit
       true,                               // isdefinition
       fd->loc.linnum,                     // FIXME: scope line
       DIFlags::FlagPrototyped,            // Flags
@@ -1057,7 +1066,7 @@ void ldc::DIBuilder::EmitLocalVariable(llvm::Value *ll, VarDeclaration *vd,
 
   const bool isRefOrOut = vd->isRef() || vd->isOut(); // incl. special-ref vars
 
-  // For MSVC x64 targets, declare params rewritten by ExplicitByvalRewrite as
+  // For MSVC x64 targets, declare params rewritten by IndirectByvalRewrite as
   // DI references, as if they were ref parameters.
   const bool isPassedExplicitlyByval =
       isTargetMSVCx64 && !isRefOrOut && isaArgument(ll) && addr.empty();
@@ -1189,7 +1198,7 @@ void ldc::DIBuilder::EmitGlobalVariable(llvm::GlobalVariable *llVar,
       CreateFile(vd),                         // file
       vd->loc.linnum,                         // line num
       CreateTypeDescription(vd->type),        // type
-      vd->protection.kind == PROTprivate,     // is local to unit
+      vd->protection.kind == Prot::private_,     // is local to unit
 #if LDC_LLVM_VER >= 400
       nullptr // relative location of field
 #else

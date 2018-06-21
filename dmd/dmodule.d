@@ -2,15 +2,15 @@
  * Compiler implementation of the
  * $(LINK2 http://www.dlang.org, D programming language).
  *
- * Copyright:   Copyright (c) 1999-2017 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2018 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/dmodule.d, _dmodule.d)
+ * Documentation:  https://dlang.org/phobos/dmd_dmodule.html
+ * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/dmodule.d
  */
 
 module dmd.dmodule;
-
-// Online documentation: https://dlang.org/phobos/dmd_dmodule.html
 
 import core.stdc.stdio;
 import core.stdc.stdlib;
@@ -35,7 +35,8 @@ import dmd.root.file;
 import dmd.root.filename;
 import dmd.root.outbuffer;
 import dmd.root.port;
-import dmd.semantic;
+import dmd.semantic2;
+import dmd.semantic3;
 import dmd.target;
 import dmd.visitor;
 version(IN_LLVM)
@@ -62,7 +63,7 @@ version(Windows) {
  * Returns:
  *      NULL if it's not different from filename.
  */
-extern (C++) const(char)* lookForSourceFile(const(char)* filename)
+private const(char)* lookForSourceFile(const(char)* filename)
 {
     /* Search along global.path for .di file, then .d file.
      */
@@ -130,7 +131,7 @@ void semantic3OnDependencies(Module m)
     if (!m)
         return;
 
-    if (m.semanticRun > PASSsemantic3)
+    if (m.semanticRun > PASS.semantic3)
         return;
 
     m.semantic3(null);
@@ -141,14 +142,10 @@ void semantic3OnDependencies(Module m)
 
 enum PKG : int
 {
-    PKGunknown,     // not yet determined whether it's a package.d or not
-    PKGmodule,      // already determined that's an actual package.d
-    PKGpackage,     // already determined that's an actual package
+    unknown,     // not yet determined whether it's a package.d or not
+    module_,      // already determined that's an actual package.d
+    package_,     // already determined that's an actual package
 }
-
-alias PKGunknown = PKG.PKGunknown;
-alias PKGmodule = PKG.PKGmodule;
-alias PKGpackage = PKG.PKGpackage;
 
 /***********************************************************
  */
@@ -156,12 +153,12 @@ extern (C++) class Package : ScopeDsymbol
 {
     PKG isPkgMod;
     uint tag;        // auto incremented tag, used to mask package tree in scopes
-    Module mod;     // !=null if isPkgMod == PKGmodule
+    Module mod;     // !=null if isPkgMod == PKG.module_
 
     final extern (D) this(Identifier ident)
     {
         super(ident);
-        this.isPkgMod = PKGunknown;
+        this.isPkgMod = PKG.unknown;
         __gshared uint packageTag;
         this.tag = packageTag++;
     }
@@ -258,7 +255,7 @@ extern (C++) class Package : ScopeDsymbol
         return isAncestorPackageOf(pkg.parent.isPackage());
     }
 
-    override Dsymbol search(Loc loc, Identifier ident, int flags = SearchLocalsOnly)
+    override Dsymbol search(const ref Loc loc, Identifier ident, int flags = SearchLocalsOnly)
     {
         //printf("%s Package.search('%s', flags = x%x)\n", toChars(), ident.toChars(), flags);
         flags &= ~SearchLocalsOnly;  // searching an import is always transitive
@@ -281,7 +278,7 @@ extern (C++) class Package : ScopeDsymbol
 
     final Module isPackageMod()
     {
-        if (isPkgMod == PKGmodule)
+        if (isPkgMod == PKG.module_)
         {
             return mod;
         }
@@ -300,6 +297,12 @@ extern (C++) final class Module : Package
     extern (C++) static __gshared Dsymbols deferred2;   // deferred Dsymbol's needing semantic2() run on them
     extern (C++) static __gshared Dsymbols deferred3;   // deferred Dsymbol's needing semantic3() run on them
     extern (C++) static __gshared uint dprogress;       // progress resolving the deferred list
+    /**
+     * A callback function that is called once an imported module is
+     * parsed. If the callback returns true, then it tells the
+     * frontend that the driver intends on compiling the import.
+     */
+    extern (C++) static __gshared bool function(Module mod) onImport;
 
     static void _init()
     {
@@ -318,6 +321,7 @@ extern (C++) final class Module : Package
     uint numlines;              // number of lines in source file
     int isDocFile;              // if it is a documentation input file, not D source
     bool isPackageFile;         // if it is a package.d
+    Strings contentImportedFiles; // array of files whose content was imported
     int needmoduleinfo;
     int selfimports;            // 0: don't know, 1: does not, 2: does
 
@@ -371,9 +375,13 @@ extern (C++) final class Module : Package
     Dsymbol searchCacheSymbol;  // cached value of search
     int searchCacheFlags;       // cached flags
 
-    // module from command line we're imported from,
-    // i.e. a module that will be taken all the
-    // way to an object file
+    /**
+     * A root module is one that will be compiled all the way to
+     * object code.  This field holds the root module that caused
+     * this module to be loaded.  If this module is a root module,
+     * then it will be set to `this`.  This is used to determine
+     * ownership of template instantiation.
+     */
     Module importedFrom;
 
     Dsymbols* decldefs;         // top level declarations for this Module
@@ -470,7 +478,7 @@ else
                     const m = (*ms)[j];
                     const q = strchr(m, '=');
                     assert(q);
-                    if (dotmods.offset <= q - m && memcmp(dotmods.peekString(), m, q - m) == 0)
+                    if (dotmods.offset == q - m && memcmp(dotmods.peekString(), m, q - m) == 0)
                     {
                         buf.reset();
                         auto qlen = strlen(q + 1);
@@ -517,18 +525,55 @@ else
             return null;
         if (global.params.verbose)
         {
-            fprintf(global.stdmsg, "import    ");
+            OutBuffer buf;
             if (packages)
             {
                 for (size_t i = 0; i < packages.dim; i++)
                 {
                     Identifier pid = (*packages)[i];
-                    fprintf(global.stdmsg, "%s.", pid.toChars());
+                    buf.writestring(pid.toChars());
+                    buf.writeByte('.');
                 }
             }
-            fprintf(global.stdmsg, "%s\t(%s)\n", ident.toChars(), m.srcfile.toChars());
+            buf.printf("%s\t(%s)", ident.toChars(), m.srcfile.toChars());
+            message("import    %s", buf.peekString());
         }
         m = m.parse();
+
+        // Call onImport here because if the module is going to be compiled then we
+        // need to determine it early because it affects semantic analysis. This is
+        // being done after parsing the module so the full module name can be taken
+        // from whatever was declared in the file.
+
+        //!!!!!!!!!!!!!!!!!!!!!!!
+        // Workaround for bug in dmd version 2.068.2 platform Darwin_64_32.
+        // This is the compiler version that the autotester uses, and this code
+        // has been carefully crafted using trial and error to prevent a seg fault
+        // bug that occurs with that version of the compiler.  Note, this segfault
+        // does not occur on the next version of dmd, namely, version 2.069.0. If
+        // the autotester upgrades to that version, then this workaround can be removed.
+        //!!!!!!!!!!!!!!!!!!!!!!!
+        version(OSX)
+        {
+            if (!m.isRoot() && onImport)
+            {
+                auto onImportResult = onImport(m);
+                if(onImportResult)
+                {
+                    m.importedFrom = m;
+                    assert(m.isRoot());
+                }
+            }
+        }
+        else
+        {
+            if (!m.isRoot() && onImport && onImport(m))
+            {
+                m.importedFrom = m;
+                assert(m.isRoot());
+            }
+        }
+
         Target.loadModule(m);
         return m;
     }
@@ -558,6 +603,16 @@ else
         else
         {
             const(char)* argdoc;
+            OutBuffer buf;
+            if (!strcmp(arg, "__stdin.d"))
+            {
+                version (Posix)
+                    import core.sys.posix.unistd : getpid;
+                else version (Windows)
+                    import core.sys.windows.windows : getpid = GetCurrentProcessId;
+                buf.printf("__stdin_%d.d", getpid());
+                arg = buf.peekString();
+            }
             if (global.params.preservePaths)
                 argdoc = arg;
             else
@@ -904,11 +959,7 @@ else
             immutable code_ArrayEq = "bool _ArrayEq(T1, T2)(T1[] a, T2[] b) {\n if (a.length != b.length) return false;\n foreach (size_t i; 0 .. a.length) { if (a[i] != b[i]) return false; }\n return true; }\n";
             immutable code_ArrayPostblit = "void _ArrayPostblit(T)(T[] a) { foreach (ref T e; a) e.__xpostblit(); }\n";
             immutable code_ArrayDtor = "void _ArrayDtor(T)(T[] a) { foreach_reverse (ref T e; a) e.__xdtor(); }\n";
-            immutable code_xopEquals = "bool _xopEquals(in void*, in void*) { throw new Error(\"TypeInfo.equals is not implemented\"); }\n";
-            immutable code_xopCmp = "bool _xopCmp(in void*, in void*) { throw new Error(\"TypeInfo.compare is not implemented\"); }\n";
             Identifier arreq = Id._ArrayEq;
-            Identifier xopeq = Identifier.idPool("_xopEquals");
-            Identifier xopcmp = Identifier.idPool("_xopCmp");
             for (size_t i = 0; i < members.dim; i++)
             {
                 Dsymbol sx = (*members)[i];
@@ -916,10 +967,6 @@ else
                     continue;
                 if (arreq && sx.ident == arreq)
                     arreq = null;
-                if (xopeq && sx.ident == xopeq)
-                    xopeq = null;
-                if (xopcmp && sx.ident == xopcmp)
-                    xopcmp = null;
             }
             if (arreq)
             {
@@ -934,18 +981,6 @@ else
             }
             {
                 scope p = new Parser!ASTCodegen(loc, this, code_ArrayDtor, false);
-                p.nextToken();
-                members.append(p.parseDeclDefs(0));
-            }
-            if (xopeq)
-            {
-                scope p = new Parser!ASTCodegen(loc, this, code_xopEquals, false);
-                p.nextToken();
-                members.append(p.parseDeclDefs(0));
-            }
-            if (xopcmp)
-            {
-                scope p = new Parser!ASTCodegen(loc, this, code_xopCmp, false);
                 p.nextToken();
                 members.append(p.parseDeclDefs(0));
             }
@@ -968,12 +1003,12 @@ else
              *
              * To avoid the conflict:
              * 1. If preceding package name insertion had occurred by Package::resolve,
-             *    later package.d loading will change Package::isPkgMod to PKGmodule and set Package::mod.
+             *    later package.d loading will change Package::isPkgMod to PKG.module_ and set Package::mod.
              * 2. Otherwise, 'package.d' wrapped by 'Package' is inserted to the internal tree in here.
              */
             auto p = new Package(ident);
             p.parent = this.parent;
-            p.isPkgMod = PKGmodule;
+            p.isPkgMod = PKG.module_;
             p.mod = this;
             p.tag = this.tag; // reuse the same package tag
             p.symtab = new DsymbolTable();
@@ -1000,14 +1035,15 @@ else
             }
             else if (Package pkg = prev.isPackage())
             {
-                if (pkg.isPkgMod == PKGunknown && isPackageFile)
+                if (pkg.isPkgMod == PKG.unknown && isPackageFile)
                 {
                     /* If the previous inserted Package is not yet determined as package.d,
                      * link it to the actual module.
                      */
-                    pkg.isPkgMod = PKGmodule;
+                    pkg.isPkgMod = PKG.module_;
                     pkg.mod = this;
                     pkg.tag = this.tag; // reuse the same package tag
+                    amodules.push(this); // Add to global array of all modules
                 }
                 else
                     error(md ? md.loc : loc, "from file %s conflicts with package name %s", srcname, pkg.toChars());
@@ -1052,7 +1088,7 @@ else
         // would fail inside object.d.
         if (members.dim == 0 || (*members)[0].ident != Id.object)
         {
-            auto im = new Import(Loc(), null, Id.object, null, 0);
+            auto im = new Import(Loc.initial, null, Id.object, null, 0);
             members.shift(im);
         }
         if (!symtab)
@@ -1099,7 +1135,7 @@ else
         return needmoduleinfo || global.params.cov;
     }
 
-    override Dsymbol search(Loc loc, Identifier ident, int flags = SearchLocalsOnly)
+    override Dsymbol search(const ref Loc loc, Identifier ident, int flags = SearchLocalsOnly)
     {
         /* Since modules can be circularly referenced,
          * need to stop infinite recursive searches.
@@ -1148,7 +1184,7 @@ else
         scope (exit)
             insearch = false;
         if (flags & IgnorePrivateImports)
-            protection = Prot(PROTpublic); // only consider public imports
+            protection = Prot(Prot.Kind.public_); // only consider public imports
         return super.isPackageAccessible(p, protection);
     }
 

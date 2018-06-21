@@ -15,6 +15,9 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "simplify-drtcalls"
+#if LDC_LLVM_VER < 700
+#define LLVM_DEBUG DEBUG
+#endif
 
 #include "Passes.h"
 #include "llvm/Pass.h"
@@ -173,7 +176,7 @@ struct LLVM_LIBRARY_VISIBILITY ArrayCastLenOpt : public LibCallOptimization {
                        IRBuilder<> &B) override {
     // Verify we have a reasonable prototype for _d_array_cast_len
     const FunctionType *FT = Callee->getFunctionType();
-    const Type *RetTy = FT->getReturnType();
+    const llvm::Type *RetTy = FT->getReturnType();
     if (Callee->arg_size() != 3 || !isa<IntegerType>(RetTy) ||
         FT->getParamType(0) != RetTy || FT->getParamType(1) != RetTy ||
         FT->getParamType(2) != RetTy) {
@@ -263,7 +266,7 @@ struct LLVM_LIBRARY_VISIBILITY ArraySliceCopyOpt : public LibCallOptimization {
                        IRBuilder<> &B) override {
     // Verify we have a reasonable prototype for _d_array_slice_copy
     const FunctionType *FT = Callee->getFunctionType();
-    const Type *VoidPtrTy = PointerType::getUnqual(B.getInt8Ty());
+    const llvm::Type *VoidPtrTy = PointerType::getUnqual(B.getInt8Ty());
     if (Callee->arg_size() != 4 || FT->getReturnType() != B.getVoidTy() ||
         FT->getParamType(0) != VoidPtrTy ||
         !isa<IntegerType>(FT->getParamType(1)) ||
@@ -424,7 +427,7 @@ bool SimplifyDRuntimeCalls::runOnce(Function &F, const DataLayout *DL,
         continue;
       }
 
-      DEBUG(errs() << "SimplifyDRuntimeCalls inspecting: " << *CI);
+      LLVM_DEBUG(errs() << "SimplifyDRuntimeCalls inspecting: " << *CI);
 
       // Save the iterator to the call instruction and set the builder to the
       // next instruction.
@@ -443,7 +446,7 @@ bool SimplifyDRuntimeCalls::runOnce(Function &F, const DataLayout *DL,
         continue;
       }
 
-      DEBUG(errs() << "SimplifyDRuntimeCalls simplified: " << *CI;
+      LLVM_DEBUG(errs() << "SimplifyDRuntimeCalls simplified: " << *CI;
             errs() << "  into: " << *Result << "\n");
 
       // Something changed!

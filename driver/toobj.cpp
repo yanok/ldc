@@ -84,12 +84,16 @@ static void codegenModule(llvm::TargetMachine &Target, llvm::Module &m,
   Passes.add(
       createTargetTransformInfoWrapperPass(Target.getTargetIRAnalysis()));
 
-  if (Target.addPassesToEmitFile(Passes,
-                                 out,
-        // Always generate assembly for ptx as it is an assembly format
-        // The PTX backend fails if we pass anything else.
-        (cb == ComputeBackend::NVPTX) ? llvm::TargetMachine::CGFT_AssemblyFile
-                                      : fileType,
+  if (Target.addPassesToEmitFile(
+          Passes,
+          out, // Output file
+#if LDC_LLVM_VER >= 700
+          nullptr, // DWO output file
+#endif
+          // Always generate assembly for ptx as it is an assembly format
+          // The PTX backend fails if we pass anything else.
+          (cb == ComputeBackend::NVPTX) ? llvm::TargetMachine::CGFT_AssemblyFile
+                                        : fileType,
           codeGenOptLevel())) {
     llvm_unreachable("no support for asm output");
   }
@@ -343,9 +347,12 @@ void writeModule(llvm::Module *m, const char *filename) {
   };
 
   // write LLVM bitcode
-  if (global.params.output_bc || (doLTO && outputObj)) {
-    std::string bcpath =
-        (doLTO && outputObj) ? filename : replaceExtensionWith(global.bc_ext);
+  const bool emitBitcodeAsObjectFile =
+      doLTO && outputObj && !global.params.output_bc;
+  if (global.params.output_bc || emitBitcodeAsObjectFile) {
+    std::string bcpath = emitBitcodeAsObjectFile
+                             ? filename
+                             : replaceExtensionWith(global.bc_ext);
     Logger::println("Writing LLVM bitcode to: %s\n", bcpath.c_str());
     std::error_code errinfo;
     llvm::raw_fd_ostream bos(bcpath.c_str(), errinfo, llvm::sys::fs::F_None);
@@ -436,7 +443,7 @@ void writeModule(llvm::Module *m, const char *filename) {
     }
   }
 
-  if (outputObj && !doLTO) {
+  if (outputObj && !emitBitcodeAsObjectFile) {
     writeObjectFile(m, filename);
     if (useIR2ObjCache) {
       cache::cacheObjectFile(filename, moduleHash);

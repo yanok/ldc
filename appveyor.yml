@@ -12,14 +12,14 @@ environment:
   matrix:
     - APPVEYOR_JOB_ARCH:           x64
       APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2017
-      LLVM_VERSION:                5.0.1
-      HOST_LDC_VERSION:            1.6.0
-      DUB_VERSION:                 v1.7.2
+      LLVM_VERSION:                6.0.0
+      HOST_LDC_VERSION:            1.8.0
+      DUB_VERSION:                 v1.8.1
     - APPVEYOR_JOB_ARCH:           x86
       APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2017
       LLVM_VERSION:                5.0.1
-      HOST_LDC_VERSION:            1.6.0
-      DUB_VERSION:                 v1.7.2
+      HOST_LDC_VERSION:            1.8.0
+      DUB_VERSION:                 v1.8.1
 
 # scripts that are called at very beginning, before repo cloning
 init:
@@ -64,15 +64,9 @@ install:
   - ps: |
         If (Test-Path Env:HOST_LDC_VERSION) {
           $ldcVersion = $Env:HOST_LDC_VERSION
-          If ($Env:APPVEYOR_JOB_ARCH -eq 'x64') {
-            appveyor DownloadFile "http://github.com/ldc-developers/ldc/releases/download/v$ldcVersion/ldc2-$ldcVersion-win64-msvc.zip" -FileName ldc2.zip
-            7z x ldc2.zip > $null
-            Set-Item -path env:DMD -value "c:\projects\ldc2-$ldcVersion-win64-msvc\bin\ldmd2.exe"
-          } Else {
-            appveyor DownloadFile "http://github.com/ldc-developers/ldc/releases/download/v$ldcVersion/ldc2-$ldcVersion-win32-msvc.zip" -FileName ldc2.zip
-            7z x ldc2.zip > $null
-            Set-Item -path env:DMD -value "c:\projects\ldc2-$ldcVersion-win32-msvc\bin\ldmd2.exe"
-          }
+          appveyor DownloadFile "http://github.com/ldc-developers/ldc/releases/download/v$ldcVersion/ldc2-$ldcVersion-windows-$Env:APPVEYOR_JOB_ARCH.7z" -FileName ldc2.7z
+          7z x ldc2.7z > $null
+          Set-Item -path env:DMD -value "c:\projects\ldc2-$ldcVersion-windows-$Env:APPVEYOR_JOB_ARCH\bin\ldmd2.exe"
         } Else {
           $dmdVersion = $Env:HOST_DMD_VERSION
           appveyor DownloadFile "http://downloads.dlang.org/releases/2.x/$dmdVersion/dmd.$dmdVersion.windows.7z" -FileName dmd.7z
@@ -137,13 +131,22 @@ test_script:
   # Build and run LDC D unittests
   - ctest --output-on-failure -R "ldc2-unittest"
   # Run LIT testsuite
+  # Exclude linking/link_internally.d with LLD < 6 due to a magic symbol
+  # required since VS 2017 v15.5 (see https://reviews.llvm.org/D41089).
+  - ps: If ($($Env:LLVM_VERSION[0]) -lt '6') { del ..\ldc\tests\linking\link_internally.d }
   - ctest -V -R "lit-tests"
   # Run DMD testsuite
   - if "%APPVEYOR_JOB_ARCH%"=="x64" ( set OS=Win_64) else ( set OS=Win_32)
   - set DMD_TESTSUITE_MAKE_ARGS=-j2
   - ctest -V -R "dmd-testsuite"
   # Run stdlib unittests
-  - ctest -j2 --output-on-failure -E "dmd-testsuite|lit-tests|ldc2-unittest"
+  - ps: |
+        If ($Env:APPVEYOR_JOB_ARCH -eq 'x64') {
+          # Exclude std.random unittests with enabled optimizations.
+          ctest -j2 --output-on-failure -E 'dmd-testsuite|lit-tests|ldc2-unittest|^std\.random$'
+        } Else {
+          ctest -j2 --output-on-failure -E 'dmd-testsuite|lit-tests|ldc2-unittest'
+        }
 
 #---------------------------------#
 #     deployment configuration    #
@@ -229,7 +232,7 @@ after_test:
             ren lib lib32
             (cat etc\ldc2.conf).replace('%%ldcbinarypath%%/../lib', '%%ldcbinarypath%%/../lib64') | Set-Content etc\ldc2.conf
             $conf32 = cat ..\ldc2-x86\etc\ldc2.conf -Raw
-            $conf32 = "`r`ni686-pc-windows-msvc:" + $conf32.Substring($conf32.IndexOf("`r`ndefault:") + 10)
+            $conf32 = "`r`n""i[3-6]86-.*-windows-msvc"":" + $conf32.Substring($conf32.IndexOf("`r`ndefault:") + 10)
             $conf32 = $conf32.Replace('%%ldcbinarypath%%/../lib', '%%ldcbinarypath%%/../lib32')
             Add-Content etc\ldc2.conf $conf32
             cd ..

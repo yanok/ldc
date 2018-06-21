@@ -13,6 +13,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Regex.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -34,6 +35,8 @@ namespace sys = llvm::sys;
 static llvm::cl::opt<std::string>
     clConf("conf", llvm::cl::desc("Use configuration file <filename>"),
            llvm::cl::value_desc("filename"), llvm::cl::ZeroOrMore);
+
+ConfigFile ConfigFile::instance;
 
 #if _WIN32
 std::string getUserHomeDirectory() {
@@ -170,7 +173,7 @@ bool ConfigFile::locate(std::string &pathstr) {
   return false;
 }
 
-bool ConfigFile::read(const char *explicitConfFile, const char *section) {
+bool ConfigFile::read(const char *explicitConfFile, const char *triple) {
   std::string pathstr;
   // explicitly provided by user in command line?
   if (explicitConfFile) {
@@ -199,7 +202,7 @@ bool ConfigFile::read(const char *explicitConfFile, const char *section) {
   pathcstr = strdup(pathstr.c_str());
   auto binpath = exe_path::getBinDir();
 
-  return readConfig(pathcstr, section, binpath.c_str());
+  return readConfig(pathcstr, triple, binpath.c_str());
 }
 
 void ConfigFile::extendCommandLine(llvm::SmallVectorImpl<const char *> &args) {
@@ -216,4 +219,8 @@ void ConfigFile::extendCommandLine(llvm::SmallVectorImpl<const char *> &args) {
   }
   args.insert(runIndex == 0 ? args.end() : args.begin() + runIndex,
               postSwitches.begin(), postSwitches.end());
+}
+
+bool ConfigFile::sectionMatches(const char *section, const char *triple) {
+  return llvm::Regex(section).match(triple);
 }

@@ -1,7 +1,6 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (c) 1999-2016 by The D Language Foundation
- * All Rights Reserved
+ * Copyright (C) 1999-2018 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
  * http://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
@@ -60,7 +59,7 @@ public:
 
     bool isAncestorPackageOf(const Package * const pkg) const;
 
-    Dsymbol *search(Loc loc, Identifier *ident, int flags = SearchLocalsOnly);
+    Dsymbol *search(const Loc &loc, Identifier *ident, int flags = SearchLocalsOnly);
     void accept(Visitor *v) { v->visit(this); }
 
     Module *isPackageMod();
@@ -76,6 +75,12 @@ public:
     static Dsymbols deferred2;  // deferred Dsymbol's needing semantic2() run on them
     static Dsymbols deferred3;  // deferred Dsymbol's needing semantic3() run on them
     static unsigned dprogress;  // progress resolving the deferred list
+    /**
+     * A callback function that is called once an imported module is
+     * parsed. If the callback returns true, then it tells the
+     * frontend that the driver intends on compiling the import.
+     */
+    static bool (*onImport)(Module);
     static void _init();
 
     static AggregateDeclaration *moduleinfo;
@@ -91,6 +96,7 @@ public:
     unsigned numlines;  // number of lines in source file
     int isDocFile;      // if it is a documentation input file, not D source
     bool isPackageFile; // if it is a package.d
+    Strings contentImportedFiles;  // array of files whose content was imported
     int needmoduleinfo;
     int selfimports;            // 0: don't know, 1: does not, 2: does
     bool selfImports();         // returns true if module imports itself
@@ -137,7 +143,7 @@ public:
     Module *parse();    // syntactic parse
     void importAll(Scope *sc);
     int needModuleInfo();
-    Dsymbol *search(Loc loc, Identifier *ident, int flags = SearchLocalsOnly);
+    Dsymbol *search(const Loc &loc, Identifier *ident, int flags = SearchLocalsOnly);
     bool isPackageAccessible(Package *p, Prot protection, int flags = 0);
     Dsymbol *symtabInsert(Dsymbol *s);
     void deleteObjFile();

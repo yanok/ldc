@@ -345,13 +345,17 @@ llvm::TargetMachine *
 createTargetMachine(const std::string targetTriple, const std::string arch,
                     std::string cpu, const std::string featuresString,
                     const ExplicitBitness::Type bitness,
-                    FloatABI::Type floatABI,
+                    FloatABI::Type &floatABI,
 #if LDC_LLVM_VER >= 309
                     llvm::Optional<llvm::Reloc::Model> relocModel,
 #else
                     llvm::Reloc::Model relocModel,
 #endif
-                    const llvm::CodeModel::Model codeModel,
+#if LDC_LLVM_VER >= 600
+                    llvm::Optional<llvm::CodeModel::Model> codeModel,
+#else
+                    llvm::CodeModel::Model codeModel,
+#endif
                     const llvm::CodeGenOpt::Level codeGenOptLevel,
                     const bool noLinkerStripDead) {
   // Determine target triple. If the user didn't explicitly specify one, use
@@ -458,20 +462,19 @@ createTargetMachine(const std::string targetTriple, const std::string arch,
   if (targetOptions.MCOptions.ABIName.empty())
     targetOptions.MCOptions.ABIName = getABI(triple);
 
-  auto ldcFloatABI = floatABI;
-  if (ldcFloatABI == FloatABI::Default) {
+  if (floatABI == FloatABI::Default) {
     switch (triple.getArch()) {
     default: // X86, ...
-      ldcFloatABI = FloatABI::Hard;
+      floatABI = FloatABI::Hard;
       break;
     case llvm::Triple::arm:
     case llvm::Triple::thumb:
-      ldcFloatABI = getARMFloatABI(triple, getLLVMArchSuffixForARM(cpu));
+      floatABI = getARMFloatABI(triple, getLLVMArchSuffixForARM(cpu));
       break;
     }
   }
 
-  switch (ldcFloatABI) {
+  switch (floatABI) {
   default:
     llvm_unreachable("Floating point ABI type unknown.");
   case FloatABI::Soft:
@@ -507,7 +510,7 @@ createTargetMachine(const std::string targetTriple, const std::string arch,
   }
 
   return target->createTargetMachine(triple.str(), cpu, finalFeaturesString,
-                                     targetOptions, relocModel, opts::getCodeModel(),
+                                     targetOptions, relocModel, codeModel,
                                      codeGenOptLevel);
 }
 

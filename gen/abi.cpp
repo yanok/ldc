@@ -37,6 +37,13 @@ llvm::Value *ABIRewrite::getRVal(Type *dty, LLValue *v) {
 
 //////////////////////////////////////////////////////////////////////////////
 
+void ABIRewrite::applyTo(IrFuncTyArg &arg, LLType *finalLType) {
+  arg.rewrite = this;
+  arg.ltype = finalLType ? finalLType : this->type(arg.type);
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 LLValue *ABIRewrite::getAddressOf(DValue *v) {
   if (v->isLVal())
     return DtoLVal(v);
@@ -197,6 +204,7 @@ bool TargetABI::isMagicCppStruct(Type *t) {
 
   Identifier *id = static_cast<TypeStruct *>(t)->sym->ident;
   return (id == Id::__c_long) || (id == Id::__c_ulong) ||
+         (id == Id::__c_longlong) || (id == Id::__c_ulonglong) ||
          (id == Id::__c_long_double);
 }
 
@@ -226,6 +234,14 @@ bool TargetABI::isPOD(Type *t, bool excludeStructsWithCtor) {
 bool TargetABI::canRewriteAsInt(Type *t, bool include64bit) {
   auto size = t->toBasetype()->size();
   return size == 1 || size == 2 || size == 4 || (include64bit && size == 8);
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+bool TargetABI::reverseExplicitParams(TypeFunction *tf) {
+  // Required by druntime for extern(D), except for `, ...`-style variadics.
+  return tf->linkage == LINKd && tf->varargs != 1 &&
+         Parameter::dim(tf->parameters) > 1;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -296,7 +312,7 @@ struct UnknownTargetABI : TargetABI {
 
   bool passByVal(Type *t) override { return t->toBasetype()->ty == Tstruct; }
 
-  void rewriteFunctionType(TypeFunction *t, IrFuncTy &fty) override {
+  void rewriteFunctionType(IrFuncTy &) override {
     // why?
   }
 };
@@ -347,6 +363,8 @@ struct IntrinsicABI : TargetABI {
 
   bool passByVal(Type *t) override { return false; }
 
+  bool reverseExplicitParams(TypeFunction *) override { return false; }
+
   void rewriteArgument(IrFuncTy &fty, IrFuncTyArg &arg) override {
     Type *ty = arg.type->toBasetype();
     if (ty->ty != Tstruct) {
@@ -357,12 +375,11 @@ struct IntrinsicABI : TargetABI {
     LLType *abiTy = DtoUnpaddedStructType(arg.type);
 
     if (abiTy && abiTy != arg.ltype) {
-      arg.ltype = abiTy;
-      arg.rewrite = &remove_padding;
+      remove_padding.applyTo(arg, abiTy);
     }
   }
 
-  void rewriteFunctionType(TypeFunction *tf, IrFuncTy &fty) override {
+  void rewriteFunctionType(IrFuncTy &fty) override {
     if (!fty.arg_sret) {
       Type *rt = fty.ret->type->toBasetype();
       if (rt->ty == Tstruct) {

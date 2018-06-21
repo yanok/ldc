@@ -84,45 +84,20 @@ int rt_init();
 // In dmd/doc.d
 void gendocfile(Module *m);
 
+// In dmd/mars.d
+extern bool includeImports;
+extern Strings includeModulePatterns;
+void generateJson(Modules *modules);
+
 using namespace opts;
 
 extern void getenv_setargv(const char *envvar, int *pargc, char ***pargv);
-
-static cl::opt<bool> noDefaultLib(
-    "nodefaultlib", cl::ZeroOrMore, cl::Hidden,
-    cl::desc("Don't add a default library for linking implicitly"));
 
 static StringsAdapter impPathsStore("I", global.params.imppath);
 static cl::list<std::string, StringsAdapter>
     importPaths("I", cl::desc("Look for imports also in <directory>"),
                 cl::value_desc("directory"), cl::location(impPathsStore),
                 cl::Prefix);
-
-static cl::opt<std::string>
-    defaultLib("defaultlib", cl::ZeroOrMore, cl::value_desc("lib1,lib2,..."),
-               cl::desc("Default libraries to link with (overrides previous)"),
-               cl::cat(linkingCategory));
-
-static cl::opt<std::string> debugLib(
-    "debuglib", cl::ZeroOrMore, cl::Hidden, cl::value_desc("lib1,lib2,..."),
-    cl::desc("Debug versions of default libraries (overrides previous). If the "
-             "option is omitted, LDC will append -debug to the -defaultlib "
-             "names when linking with -link-defaultlib-debug"),
-    cl::cat(linkingCategory));
-
-static cl::opt<bool> linkDefaultLibDebug(
-    "link-defaultlib-debug", cl::ZeroOrMore,
-    cl::desc("Link with debug versions of default libraries"),
-    cl::cat(linkingCategory));
-static cl::alias _linkDebugLib("link-debuglib", cl::Hidden,
-                               cl::aliasopt(linkDefaultLibDebug),
-                               cl::desc("Alias for -link-defaultlib-debug"),
-                               cl::cat(linkingCategory));
-
-static cl::opt<bool> linkDefaultLibShared(
-    "link-defaultlib-shared", cl::ZeroOrMore,
-    cl::desc("Link with shared versions of default libraries"),
-    cl::cat(linkingCategory));
 
 // This function exits the program.
 void printVersion(llvm::raw_ostream &OS) {
@@ -167,6 +142,9 @@ void printVersionStdout() {
 
 
 namespace {
+
+// True when target triple has an uClibc environment
+bool isUClibc = false;
 
 // Helper function to handle -d-debug=* and -d-version=*
 void processVersions(std::vector<std::string> &list, const char *type,
@@ -325,7 +303,7 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles,
   expandResponseFiles(allocator, allArguments);
 
   // read config file
-  ConfigFile cfg_file;
+  ConfigFile &cfg_file = ConfigFile::instance;
   const char *explicitConfFile = tryGetExplicitConfFile(allArguments);
   const std::string cfg_triple = tryGetExplicitTriple(allArguments).getTriple();
   // just ignore errors for now, they are still printed
@@ -364,18 +342,19 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles,
     return;
   }
 
+  if (!cfg_file.path().empty())
+    global.inifilename = dupPathString(cfg_file.path());
+
   // Print some information if -v was passed
   // - path to compiler binary
   // - version number
   // - used config file
   if (global.params.verbose) {
-    fprintf(global.stdmsg, "binary    %s\n", exe_path::getExePath().c_str());
-    fprintf(global.stdmsg, "version   %s (DMD %s, LLVM %s)\n",
-            global.ldc_version, global.version, global.llvm_version);
-    const std::string path = cfg_file.path();
-    if (!path.empty()) {
-      fprintf(global.stdmsg, "config    %s (%s)\n", path.c_str(),
-              cfg_triple.c_str());
+    message("binary    %s", exe_path::getExePath().c_str());
+    message("version   %s (DMD %s, LLVM %s)", global.ldc_version,
+            global.version, global.llvm_version);
+    if (global.inifilename) {
+      message("config    %s (%s)", global.inifilename, cfg_triple.c_str());
     }
   }
 
@@ -419,6 +398,26 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles,
   toWinPaths(global.params.imppath);
   toWinPaths(global.params.fileImppath);
 #endif
+
+  for (const auto &field : jsonFields) {
+    const unsigned flag = tryParseJsonField(field.c_str());
+    if (flag == 0) {
+      error(Loc(), "unknown JSON field `-Xi=%s`", field.c_str());
+    } else {
+      global.params.jsonFieldFlags |= flag;
+    }
+  }
+
+  includeImports = !opts::includeModulePatterns.empty();
+  for (const auto &pattern : opts::includeModulePatterns) {
+    // a value-less `-i` only enables `includeImports`
+    if (!pattern.empty())
+      ::includeModulePatterns.push_back(pattern.c_str());
+  }
+  // When including imports, their object files aren't tracked in
+  // global.params.objfiles etc. Enforce `-singleobj` to avoid related issues.
+  if (includeImports)
+    global.params.oneobj = true;
 
 #if LDC_LLVM_VER >= 400
   if (saveOptimizationRecord.getNumOccurrences() > 0) {
@@ -491,46 +490,6 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles,
         char *copy = opts::dupPathString(file);
         sourceFiles.push(copy);
       }
-    }
-  }
-
-  // default libraries
-  if (noDefaultLib) {
-    deprecation(Loc(), "-nodefaultlib is deprecated, as -defaultlib now "
-                       "overrides the existing list instead of appending to "
-                       "it. Please use the latter instead.");
-  } else if (!global.params.betterC) {
-    if (linkDefaultLibShared && staticFlag == cl::BOU_TRUE) {
-      error(Loc(), "Can't use -link-defaultlib-shared and -static together");
-    }
-
-    const bool addDebugSuffix =
-        (linkDefaultLibDebug && debugLib.getNumOccurrences() == 0);
-    // Default to shared default libs for DLLs compiled without -static.
-    const bool addSharedSuffix =
-        linkDefaultLibShared ||
-        (linkDefaultLibShared.getNumOccurrences() == 0 && global.params.dll &&
-         staticFlag != cl::BOU_TRUE);
-
-    // Parse comma-separated default library list.
-    std::stringstream libNames(
-        linkDefaultLibDebug && !addDebugSuffix ? debugLib : defaultLib);
-    while (libNames.good()) {
-      std::string lib;
-      std::getline(libNames, lib, ',');
-      if (lib.empty()) {
-        continue;
-      }
-
-      std::ostringstream os;
-      os << "-l" << lib;
-      if (addDebugSuffix)
-        os << "-debug";
-      if (addSharedSuffix)
-        os << "-shared";
-
-      char *arg = mem.xstrdup(os.str().c_str());
-      global.params.linkswitches.push(arg);
     }
   }
 
@@ -645,25 +604,39 @@ static void registerMipsABI() {
   }
 }
 
+// Check if triple environment name starts with "uclibc" and change it to "gnu"
+void fixupUClibcEnv()
+{
+  llvm::Triple triple(mTargetTriple);
+  if (triple.getEnvironmentName().find("uclibc") != 0)
+    return;
+  std::string envName = triple.getEnvironmentName();
+  envName.replace(0, 6, "gnu");
+  triple.setEnvironmentName(envName);
+  mTargetTriple = triple.normalize();
+  isUClibc = true;
+}
+
 /// Register the float ABI.
 /// Also defines D_HardFloat or D_SoftFloat depending if FPU should be used
 void registerPredefinedFloatABI(const char *soft, const char *hard,
                                 const char *softfp = nullptr) {
-  // Use target floating point unit instead of s/w float routines
-  // FIXME: This is a semantic change!
-  bool useFPU = gTargetMachine->Options.FloatABIType == llvm::FloatABI::Hard;
-  VersionCondition::addPredefinedGlobalIdent(useFPU ? "D_HardFloat"
-                                                    : "D_SoftFloat");
-
-  if (gTargetMachine->Options.FloatABIType == llvm::FloatABI::Soft) {
-    VersionCondition::addPredefinedGlobalIdent(useFPU && softfp ? softfp
-                                                                : soft);
-  } else if (gTargetMachine->Options.FloatABIType == llvm::FloatABI::Hard) {
-    assert(useFPU && "Should be using the FPU if using float-abi=hard");
+  switch (floatABI) {
+  case FloatABI::Soft:
+    VersionCondition::addPredefinedGlobalIdent(soft);
+    break;
+  case FloatABI::SoftFP:
+    VersionCondition::addPredefinedGlobalIdent(softfp ? softfp : soft);
+    break;
+  case FloatABI::Hard:
     VersionCondition::addPredefinedGlobalIdent(hard);
-  } else {
-    assert(0 && "FloatABIType neither Soft or Hard");
+    break;
+  default:
+    llvm_unreachable("Unknown float ABI");
   }
+
+  VersionCondition::addPredefinedGlobalIdent(
+      floatABI == FloatABI::Soft ? "D_SoftFloat" : "D_HardFloat");
 }
 
 /// Registers the predefined versions specific to the current target triple
@@ -720,6 +693,7 @@ void registerPredefinedTargetVersions() {
   case llvm::Triple::mips:
   case llvm::Triple::mipsel:
     VersionCondition::addPredefinedGlobalIdent("MIPS");
+    VersionCondition::addPredefinedGlobalIdent("MIPS32");
     registerPredefinedFloatABI("MIPS_SoftFloat", "MIPS_HardFloat");
     registerMipsABI();
     break;
@@ -791,16 +765,16 @@ void registerPredefinedTargetVersions() {
     VersionCondition::addPredefinedGlobalIdent("D_PIC");
   }
 
-  /* LDC doesn't support DMD's core.simd interface.
   if (arch == llvm::Triple::x86 || arch == llvm::Triple::x86_64) {
+    /* LDC doesn't support DMD's core.simd interface.
     if (traitsTargetHasFeature("sse2"))
       VersionCondition::addPredefinedGlobalIdent("D_SIMD");
+    */
     if (traitsTargetHasFeature("avx"))
       VersionCondition::addPredefinedGlobalIdent("D_AVX");
     if (traitsTargetHasFeature("avx2"))
       VersionCondition::addPredefinedGlobalIdent("D_AVX2");
   }
-  */
 
   // parse the OS out of the target triple
   // see http://gcc.gnu.org/install/specific.html for details
@@ -832,7 +806,7 @@ void registerPredefinedTargetVersions() {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Bionic");
     } else if (isMusl()) {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Musl");
-    } else if (triple.getEnvironmentName() == "uclibc") {
+    } else if (isUClibc) {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_UClibc");
     } else {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Glibc");
@@ -988,7 +962,12 @@ int cppmain(int argc, char **argv) {
   }
 
   if (files.dim == 0) {
-    cl::PrintHelpMessage();
+    if (global.params.jsonFieldFlags) {
+      generateJson(nullptr);
+      return EXIT_SUCCESS;
+    }
+
+    cl::PrintHelpMessage(/*Hidden=*/false, /*Categorized=*/true);
     return EXIT_FAILURE;
   }
 
@@ -1022,6 +1001,10 @@ int cppmain(int argc, char **argv) {
     relocModel = llvm::Reloc::PIC_;
   }
 
+  // check and fix environment for uClibc
+  fixupUClibcEnv();
+
+  // create target machine and finalize floatABI
   gTargetMachine = createTargetMachine(
       mTargetTriple, arch, opts::getCPUStr(), opts::getFeaturesStr(), bitness,
       floatABI, relocModel, opts::getCodeModel(), codeGenOptLevel(),
@@ -1044,6 +1027,7 @@ int cppmain(int argc, char **argv) {
     global.params.isWindows = triple->isOSWindows();
     global.params.isFreeBSD = triple->isOSFreeBSD();
     global.params.isOpenBSD = triple->isOSOpenBSD();
+    global.params.isDragonFlyBSD = triple->isOSDragonFly();
     global.params.isSolaris = triple->isOSSolaris();
     global.params.isLP64 = gDataLayout->getPointerSizeInBits() == 64;
     global.params.is64bit = triple->isArch64Bit();
@@ -1078,7 +1062,6 @@ int cppmain(int argc, char **argv) {
 
 void addDefaultVersionIdentifiers() {
   registerPredefinedVersions();
-  printPredefinedVersions();
 }
 
 void codegenModules(Modules &modules) {
@@ -1098,7 +1081,7 @@ void codegenModules(Modules &modules) {
     for (d_size_t i = modules.dim; i-- > 0;) {
       Module *const m = modules[i];
       if (global.params.verbose)
-        fprintf(global.stdmsg, "code      %s\n", m->toChars());
+        message("code      %s", m->toChars());
 
       const auto atCompute = hasComputeAttr(m);
       if (atCompute == DComputeCompileFor::hostOnly ||

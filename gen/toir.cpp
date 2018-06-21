@@ -968,8 +968,8 @@ public:
       // Also, private/package methods are always non-virtual.
       const bool nonFinal = !fdecl->isFinalFunc() &&
                             (fdecl->isAbstract() || fdecl->isVirtual()) &&
-                            fdecl->prot().kind != PROTprivate &&
-                            fdecl->prot().kind != PROTpackage;
+                            fdecl->prot().kind != Prot::private_ &&
+                            fdecl->prot().kind != Prot::package_;
 
       // Get the actual function value to call.
       LLValue *funcval = nullptr;
@@ -1240,30 +1240,6 @@ public:
         break;
       case TOKge:
         cmpop = llvm::FCmpInst::FCMP_OGE;
-        break;
-      case TOKunord:
-        cmpop = llvm::FCmpInst::FCMP_UNO;
-        break;
-      case TOKule:
-        cmpop = llvm::FCmpInst::FCMP_ULE;
-        break;
-      case TOKul:
-        cmpop = llvm::FCmpInst::FCMP_ULT;
-        break;
-      case TOKuge:
-        cmpop = llvm::FCmpInst::FCMP_UGE;
-        break;
-      case TOKug:
-        cmpop = llvm::FCmpInst::FCMP_UGT;
-        break;
-      case TOKue:
-        cmpop = llvm::FCmpInst::FCMP_UEQ;
-        break;
-      case TOKlg:
-        cmpop = llvm::FCmpInst::FCMP_ONE;
-        break;
-      case TOKleg:
-        cmpop = llvm::FCmpInst::FCMP_ORD;
         break;
 
       default:
@@ -2094,6 +2070,17 @@ public:
                          e->type->toChars());
     LOG_SCOPE;
 
+    if (global.params.betterC) {
+      error(
+          e->loc,
+          "array concatenation of expression `%s` requires the GC which is not "
+          "available with -betterC",
+          e->toChars());
+      result =
+          new DSliceValue(e->type, llvm::UndefValue::get(DtoType(e->type)));
+      return;
+    }
+
     result = DtoCatArrays(e->loc, e->type, e->e1, e->e2);
   }
 
@@ -2286,7 +2273,7 @@ public:
       initsym = DtoBitCast(initsym, DtoType(e->type->pointerTo()));
 
       if (!dstMem)
-        return new DLValue(e->type, initsym);
+        dstMem = DtoAlloca(e->type, ".structliteral");
 
       assert(dstMem->getType() == initsym->getType());
       DtoMemCpy(dstMem, initsym);
@@ -2431,7 +2418,7 @@ public:
       LLFunctionType *funcTy = func->getFunctionType();
       LLValue *aaTypeInfo =
           DtoBitCast(DtoTypeInfoOf(stripModifiers(aatype), /*base=*/false),
-                     DtoType(Type::typeinfoassociativearray->type));
+                     DtoType(getAssociativeArrayTypeInfoType()));
 
       LLConstant *idxs[2] = {DtoConstUint(0), DtoConstUint(0)};
 
@@ -2622,8 +2609,8 @@ public:
 
   void visit(TypeidExp *e) override {
     if (Type *t = isType(e->obj)) {
-      result = DtoSymbolAddress(e->loc, e->type,
-                                getOrCreateTypeInfoDeclaration(t, nullptr));
+      result = DtoSymbolAddress(
+          e->loc, e->type, getOrCreateTypeInfoDeclaration(e->loc, t, nullptr));
       return;
     }
     if (Expression *ex = isExpression(e->obj)) {
@@ -2643,11 +2630,11 @@ public:
         // For interfaces, the first entry in the vtbl is actually a pointer
         // to an Interface instance, which has the type info as its first
         // member, so we have to add an extra layer of indirection.
-        resultType = Type::typeinfointerface->type;
+        resultType = getInterfaceTypeInfoType();
         typinf = DtoLoad(
             DtoBitCast(typinf, DtoType(resultType->pointerTo()->pointerTo())));
       } else {
-        resultType = Type::typeinfoclass->type;
+        resultType = getClassInfoType();
         typinf = DtoBitCast(typinf, DtoType(resultType->pointerTo()));
       }
 

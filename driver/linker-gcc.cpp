@@ -11,8 +11,10 @@
 #include "driver/cl_options.h"
 #include "driver/cl_options_instrumentation.h"
 #include "driver/cl_options_sanitizers.h"
+#include "driver/configfile.h"
 #include "driver/exe_path.h"
 #include "driver/ldc-version.h"
+#include "driver/linker.h"
 #include "driver/tool.h"
 #include "gen/irstate.h"
 #include "gen/logger.h"
@@ -22,6 +24,10 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+
+#if LDC_WITH_LLD && LDC_LLVM_VER >= 600
+#include "lld/Common/Driver.h"
+#endif
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -46,7 +52,7 @@ public:
   virtual ~ArgsBuilder() = default;
 
   void build(llvm::StringRef outputPath,
-             llvm::cl::boolOrDefault fullyStaticFlag);
+             const std::vector<std::string> &defaultLibNames);
 
 private:
   virtual void addSanitizers(const llvm::Triple &triple);
@@ -58,7 +64,7 @@ private:
 
   virtual void addLinker();
   virtual void addUserSwitches();
-  void addDefaultLibs();
+  void addDefaultPlatformLibs();
   virtual void addTargetFlags();
 
 #if LDC_LLVM_VER >= 309
@@ -421,7 +427,7 @@ void ArgsBuilder::addSanitizers(const llvm::Triple &triple) {
 //////////////////////////////////////////////////////////////////////////////
 
 void ArgsBuilder::build(llvm::StringRef outputPath,
-                        llvm::cl::boolOrDefault fullyStaticFlag) {
+                        const std::vector<std::string> &defaultLibNames) {
   // object files
   for (auto objfile : global.params.objfiles) {
     args.push_back(objfile);
@@ -449,7 +455,7 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
     args.push_back("-shared");
   }
 
-  if (fullyStaticFlag == llvm::cl::BOU_TRUE) {
+  if (linkFullyStatic() == llvm::cl::BOU_TRUE) {
     args.push_back("-static");
   }
 
@@ -472,9 +478,21 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
   addLinker();
   addUserSwitches();
 
+  // default libs
+  for (const auto &name : defaultLibNames) {
+    args.push_back("-l" + name);
+  }
+
   // libs added via pragma(lib, libname)
   for (auto ls : global.params.linkswitches) {
     args.push_back(ls);
+  }
+
+  // -rpath if linking against shared default libs or ldc-jit
+  if (linkAgainstSharedDefaultLibs() || opts::enableDynamicCompile) {
+    llvm::StringRef rpath = ConfigFile::instance.rpath();
+    if (!rpath.empty())
+      addLdFlag("-rpath", rpath);
   }
 
   if (global.params.targetTriple->getOS() == llvm::Triple::Linux) {
@@ -487,7 +505,7 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
     }
   }
 
-  addDefaultLibs();
+  addDefaultPlatformLibs();
 
   addTargetFlags();
 }
@@ -495,8 +513,12 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
 //////////////////////////////////////////////////////////////////////////////
 
 void ArgsBuilder::addLinker() {
-  if (!opts::linker.empty())
+  if (!opts::linker.empty()) {
     args.push_back("-fuse-ld=" + opts::linker);
+  } else if (global.params.isLinux && opts::isUsingThinLTO()) {
+    // default to ld.gold for ThinLTO on Linux due to ld.bfd issues (see #2278)
+    args.push_back("-fuse-ld=gold");
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -534,7 +556,7 @@ void ArgsBuilder::addUserSwitches() {
 
 //////////////////////////////////////////////////////////////////////////////
 
-void ArgsBuilder::addDefaultLibs() {
+void ArgsBuilder::addDefaultPlatformLibs() {
   bool addSoname = false;
 
   const auto &triple = *global.params.targetTriple;
@@ -594,7 +616,7 @@ void ArgsBuilder::addTargetFlags() {
 }
 
 //////////////////////////////////////////////////////////////////////////////
-// (Yet unused) specialization for plain ld.
+// Specialization for plain ld.
 
 class LdArgsBuilder : public ArgsBuilder {
   void addSanitizers(const llvm::Triple &triple) override {}
@@ -626,14 +648,38 @@ class LdArgsBuilder : public ArgsBuilder {
 
 //////////////////////////////////////////////////////////////////////////////
 
-int linkObjToBinaryGcc(llvm::StringRef outputPath, bool useInternalLinker,
-                       llvm::cl::boolOrDefault fullyStaticFlag) {
+int linkObjToBinaryGcc(llvm::StringRef outputPath,
+                       const std::vector<std::string> &defaultLibNames) {
+#if LDC_WITH_LLD && LDC_LLVM_VER >= 600
+  if (useInternalLLDForLinking()) {
+    LdArgsBuilder argsBuilder;
+    argsBuilder.build(outputPath, defaultLibNames);
+
+    const auto fullArgs =
+        getFullArgs("ld.lld", argsBuilder.args, global.params.verbose);
+
+    bool success = false;
+    if (global.params.targetTriple->isOSBinFormatELF()) {
+      success = lld::elf::link(fullArgs, /*CanExitEarly*/ false);
+    } else if (global.params.targetTriple->isOSBinFormatMachO()) {
+      success = lld::mach_o::link(fullArgs);
+    } else {
+      error(Loc(), "unknown target binary format for internal linking");
+    }
+
+    if (!success)
+      error(Loc(), "linking with LLD failed");
+
+    return success ? 0 : 1;
+  }
+#endif
+
   // find gcc for linking
   const std::string tool = getGcc();
 
   // build arguments
   ArgsBuilder argsBuilder;
-  argsBuilder.build(outputPath, fullyStaticFlag);
+  argsBuilder.build(outputPath, defaultLibNames);
 
   Logger::println("Linking with: ");
   Stream logstr = Logger::cout();

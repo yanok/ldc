@@ -2,7 +2,7 @@
  * Compiler implementation of the
  * $(LINK2 http://www.dlang.org, D programming language).
  *
- * Copyright:   Copyright (c) 1999-2017 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2018 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  */
@@ -17,6 +17,8 @@
      * than D's 'uint'
      */
     typedef unsigned d_size_t;
+#elif __APPLE__ && __LP64__ && LDC_HOST_DigitalMars && LDC_HOST_FE_VER >= 2079
+    typedef unsigned long long d_size_t;
 #else
     typedef size_t d_size_t;
 #endif
