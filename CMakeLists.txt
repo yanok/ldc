@@ -62,11 +62,11 @@ endfunction()
 #
 
 # Version information
-set(LDC_VERSION "1.10.0") # May be overridden by git hash tag
+set(LDC_VERSION "1.11.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   80)
-set(DMDFE_FIX_LEVEL       1) # Comment out if not used
+set(DMDFE_PATCH_VERSION   81)
+set(DMDFE_FIX_LEVEL       0) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -158,13 +158,19 @@ if(MSVC)
     if(${LLVM_CXXFLAGS} MATCHES "(^| )/MDd?( |$)")
         message(FATAL_ERROR "LLVM must be built with CMake option LLVM_USE_CRT_<CMAKE_BUILD_TYPE>=MT[d]")
     endif()
+    set(llvm_ob_flag)
+    string(REGEX MATCH "/Ob[0-2]" llvm_ob_flag "${LLVM_CXXFLAGS}")
     foreach(flag_var
             CMAKE_C_FLAGS CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE CMAKE_C_FLAGS_MINSIZEREL CMAKE_C_FLAGS_RELWITHDEBINFO
             CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO)
         string(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
-        # CMake defaults to /W3, LLVM uses /W4 => MS compiler warns about cmdline mismatch.
+        # CMake defaults to /W3, LLVM uses /W4 => MS compiler warns about overridden option.
         # Simply replace with /W4.
         string(REGEX REPLACE "/W[0-3]" "/W4" ${flag_var} "${${flag_var}}")
+        # Some CMake configs default to /Ob1, LLVM uses /Ob2. Replace with LLVM's option.
+        if(NOT llvm_ob_flag STREQUAL "")
+            string(REGEX REPLACE "/Ob[0-2]" "${llvm_ob_flag}" ${flag_var} "${${flag_var}}")
+        endif()
     endforeach()
 endif()
 

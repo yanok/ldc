@@ -141,9 +141,12 @@ nothrow:
     /***************************************
      * Generate deterministic named identifier based on a source location,
      * such that the name is consistent across multiple compilations.
+     * A new unique name is generated. If the prefix+location is already in
+     * the stringtable, an extra suffix is added (starting the count at "_1").
+     *
      * Params:
      *      prefix      = first part of the identifier name.
-     *      loc         = source location to use is the identifier name.
+     *      loc         = source location to use in the identifier name.
      * Returns:
      *      Identifier (inside Identifier.idPool) with deterministic name based
      *      on the source location.
@@ -160,7 +163,9 @@ nothrow:
         uint counter = 1;
         while (stringtable.lookup(buf.peekSlice().ptr, buf.peekSlice().length) !is null)
         {
+            // Strip the extra suffix
             buf.setsize(basesize);
+            // Add new suffix with increased counter
             buf.writestring("_");
             buf.print(counter++);
         }
