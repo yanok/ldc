@@ -66,7 +66,7 @@ set(LDC_VERSION "1.11.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
 set(DMDFE_PATCH_VERSION   81)
-set(DMDFE_FIX_LEVEL       0) # Comment out if not used
+set(DMDFE_FIX_LEVEL       1) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -580,12 +580,12 @@ add_custom_target(${LDMD_EXE} ALL DEPENDS ${LDMD_EXE_FULL})
 # LLVM flags into account.
 set(LDC_LINKERFLAG_LIST ${SANITIZE_LDFLAGS} ${LLVM_LIBRARIES} ${LLVM_LDFLAGS})
 if(LDC_WITH_LLD)
-    # ELF and Mach-O formats supported since LLD 6.0.0, otherwise just Windows COFF
+    # ELF, Mach-O, MinGW and WebAssembly formats supported since LLD 6.0.0, otherwise just Windows COFF
     if(NOT (LDC_LLVM_VER LESS 600))
         if(MSVC)
-            list(APPEND LDC_LINKERFLAG_LIST lldDriver.lib lldCOFF.lib lldELF.lib lldMachO.lib lldYAML.lib lldReaderWriter.lib lldCommon.lib lldCore.lib)
+            list(APPEND LDC_LINKERFLAG_LIST lldDriver.lib lldMinGW.lib lldCOFF.lib lldELF.lib lldMachO.lib lldWasm.lib lldYAML.lib lldReaderWriter.lib lldCommon.lib lldCore.lib)
         else()
-            set(LDC_LINKERFLAG_LIST -llldDriver -llldCOFF -llldELF -llldMachO -llldYAML -llldReaderWriter -llldCommon -llldCore ${LDC_LINKERFLAG_LIST})
+            set(LDC_LINKERFLAG_LIST -llldDriver -llldMinGW -llldCOFF -llldELF -llldMachO -llldWasm -llldYAML -llldReaderWriter -llldCommon -llldCore ${LDC_LINKERFLAG_LIST})
         endif()
         if(APPLE) # bug, should be fixed in LLVM 6.0.1
             list(APPEND LDC_LINKERFLAG_LIST -lxml2)
