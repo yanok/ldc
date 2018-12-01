@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "errors.h"
+#include "dmd/errors.h"
 #include "driver/cl_options.h"
 #include "driver/cl_options_instrumentation.h"
 #include "driver/cl_options_sanitizers.h"
@@ -16,7 +16,6 @@
 #include "driver/linker.h"
 #include "driver/tool.h"
 #include "gen/logger.h"
-
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 
@@ -30,25 +29,21 @@
 
 //////////////////////////////////////////////////////////////////////////////
 
-static llvm::cl::opt<std::string>
-    mscrtlib("mscrtlib", llvm::cl::ZeroOrMore,
-             llvm::cl::desc("MS C runtime library to link with"),
-             llvm::cl::value_desc("libcmt[d]|msvcrt[d]"),
-             llvm::cl::cat(opts::linkingCategory));
-
-//////////////////////////////////////////////////////////////////////////////
-
 namespace {
 
 void addMscrtLibs(std::vector<std::string> &args) {
-  llvm::StringRef mscrtlibName = mscrtlib;
-  if (mscrtlibName.empty()) {
-    // default to static release variant
-    mscrtlibName =
-        linkFullyStatic() != llvm::cl::BOU_FALSE ? "libcmt" : "msvcrt";
-  }
+  const auto mscrtlibName = getMscrtLibName();
 
   args.push_back(("/DEFAULTLIB:" + mscrtlibName).str());
+
+  // We need the vcruntime lib for druntime's exception handling (ldc.eh_msvc).
+  // Pick one of the 4 variants matching the selected main UCRT lib.
+
+#if LDC_LLVM_VER >= 400
+  if (mscrtlibName.contains_lower("vcruntime")) {
+    return;
+  }
+#endif
 
   const bool isStatic = mscrtlibName.startswith_lower("libcmt");
   const bool isDebug =
@@ -90,8 +85,11 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
     fatal();
   }
 
+  const bool useInternalToolchain = useInternalToolchainForMSVC();
+
 #ifdef _WIN32
-  windows::setupMsvcEnvironment();
+  if (!useInternalToolchain)
+    windows::setupMsvcEnvironment();
 #endif
 
   // build arguments
@@ -116,7 +114,9 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
     args.push_back("/OPT:NOREF");
   } else {
     args.push_back("/OPT:REF");
-    args.push_back("/OPT:ICF");
+    // don't fold identical COMDATs (e.g., functions) if debuginfos are enabled,
+    // otherwise breakpoints may not be hit
+    args.push_back(global.params.symdebug ? "/OPT:NOICF" : "/OPT:ICF");
   }
 
   // add C runtime libs
@@ -177,10 +177,16 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
   }
 
   // lib dirs
-  for (const char *dir_c : ConfigFile::instance.libDirs()) {
+  const auto &libDirs = ConfigFile::instance.libDirs();
+  for (const char *dir_c : libDirs) {
     const llvm::StringRef dir(dir_c);
     if (!dir.empty())
       args.push_back(("/LIBPATH:" + dir).str());
+  }
+
+  if (useInternalToolchain && !libDirs.empty()) {
+    args.push_back(
+        (llvm::Twine("/LIBPATH:") + *libDirs.begin() + "/mingw").str());
   }
 
   // default libs
@@ -217,9 +223,9 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
   logstr << "\n"; // FIXME where's flush ?
 
 #if LDC_WITH_LLD
-  if (useInternalLLDForLinking()) {
-    const auto fullArgs =
-        getFullArgs("lld-link", args, global.params.verbose);
+  if (useInternalLLDForLinking() ||
+      (useInternalToolchain && opts::linker.empty() && !opts::isUsingLTO())) {
+    const auto fullArgs = getFullArgs("lld-link", args, global.params.verbose);
 
 #if LDC_LLVM_VER >= 600
     const bool success = lld::coff::link(fullArgs, /*CanExitEarly=*/false);

@@ -9,28 +9,23 @@
 
 #include "driver/codegenerator.h"
 
-#include "id.h"
-#include "mars.h"
-#include "module.h"
-#include "scope.h"
+#include "dmd/compiler.h"
+#include "dmd/id.h"
+#include "dmd/mars.h"
+#include "dmd/module.h"
+#include "dmd/scope.h"
 #include "driver/cl_options.h"
 #include "driver/cl_options_instrumentation.h"
 #include "driver/linker.h"
 #include "driver/toobj.h"
+#include "gen/dynamiccompile.h"
 #include "gen/logger.h"
 #include "gen/modules.h"
 #include "gen/runtime.h"
-#include "gen/dynamiccompile.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/YAMLTraits.h"
-
-/// The module with the frontend-generated C main() definition.
-extern Module *entrypoint; // defined in dmd/mars.d
-
-/// The module that contains the actual D main() (_Dmain) definition.
-extern Module *rootHasMain; // defined in dmd/mars.d
 
 #if LDC_LLVM_VER < 600
 namespace llvm {
@@ -177,12 +172,10 @@ void emitLLVMUsedArray(IRState &irs) {
 namespace ldc {
 CodeGenerator::CodeGenerator(llvm::LLVMContext &context, bool singleObj)
     : context_(context), moduleCount_(0), singleObj_(singleObj), ir_(nullptr) {
-#if LDC_LLVM_VER >= 309
   // Set the context to discard value names when not generating textual IR.
   if (!global.params.output_ll) {
     context_.setDiscardValueNames(true);
   }
-#endif
 }
 
 CodeGenerator::~CodeGenerator() {
@@ -213,11 +206,7 @@ void CodeGenerator::prepareLLModule(Module *m) {
   // module.
   ir_ = new IRState(m->srcfile->toChars(), context_);
   ir_->module.setTargetTriple(global.params.targetTriple->str());
-#if LDC_LLVM_VER >= 308
   ir_->module.setDataLayout(*gDataLayout);
-#else
-  ir_->module.setDataLayout(gDataLayout->getStringRepresentation());
-#endif
 
   // TODO: Make ldc::DIBuilder per-Module to be able to emit several CUs for
   // single-object compilations?
@@ -237,7 +226,7 @@ void CodeGenerator::finishLLModule(Module *m) {
     insertBitcodeFiles(ir_->module, ir_->context(), global.params.bitcodeFiles);
   }
 
-  writeAndFreeLLModule(m->objfile->name->str);
+  writeAndFreeLLModule(m->objfile->name.toChars());
 }
 
 void CodeGenerator::writeAndFreeLLModule(const char *filename) {

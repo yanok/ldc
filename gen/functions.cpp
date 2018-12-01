@@ -9,15 +9,17 @@
 
 #include "gen/functions.h"
 
-#include "aggregate.h"
-#include "declaration.h"
-#include "id.h"
-#include "init.h"
-#include "ldcbindings.h"
-#include "module.h"
-#include "mtype.h"
-#include "statement.h"
-#include "template.h"
+#include "dmd/aggregate.h"
+#include "dmd/declaration.h"
+#include "dmd/id.h"
+#include "dmd/identifier.h"
+#include "dmd/init.h"
+#include "dmd/ldcbindings.h"
+#include "dmd/mangle.h"
+#include "dmd/module.h"
+#include "dmd/mtype.h"
+#include "dmd/statement.h"
+#include "dmd/template.h"
 #include "driver/cl_options.h"
 #include "driver/cl_options_instrumentation.h"
 #include "driver/cl_options_sanitizers.h"
@@ -26,6 +28,7 @@
 #include "gen/classes.h"
 #include "gen/dcompute/target.h"
 #include "gen/dvalue.h"
+#include "gen/dynamiccompile.h"
 #include "gen/funcgenstate.h"
 #include "gen/function-inlining.h"
 #include "gen/inlineir.h"
@@ -40,7 +43,6 @@
 #include "gen/pgo_ASTbased.h"
 #include "gen/pragma.h"
 #include "gen/runtime.h"
-#include "gen/dynamiccompile.h"
 #include "gen/scope_exit.h"
 #include "gen/tollvm.h"
 #include "gen/uda.h"
@@ -373,7 +375,7 @@ void DtoResolveFunction(FuncDeclaration *fdecl) {
         } else if (tempdecl->llvmInternal == LLVMintrinsic) {
           Logger::println("overloaded intrinsic found");
           assert(fdecl->llvmInternal == LLVMintrinsic);
-          assert(fdecl->mangleOverride);
+          assert(fdecl->mangleOverride.length);
         } else if (tempdecl->llvmInternal == LLVMinline_asm) {
           Logger::println("magic inline asm found");
           TypeFunction *tf = static_cast<TypeFunction *>(fdecl->type);
@@ -570,6 +572,13 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
     func->setDLLStorageClass(fdecl->isImportedSymbol()
                                  ? LLGlobalValue::DLLImportStorageClass
                                  : LLGlobalValue::DLLExportStorageClass);
+  }
+
+  // Hide non-exported symbols
+  if (opts::defaultToHiddenVisibility &&
+             !fdecl->isImportedSymbol() &&
+             !fdecl->isExport()) {
+    func->setVisibility(LLGlobalValue::HiddenVisibility);
   }
 
   IF_LOG Logger::cout() << "func = " << *func << std::endl;
@@ -1000,7 +1009,7 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   };
 
   // debug info
-  irFunc->diSubprogram = gIR->DBuilder.EmitSubProgram(fd);
+  gIR->DBuilder.EmitSubProgram(fd);
 
   IF_LOG Logger::println("Doing function body for: %s", fd->toChars());
   gIR->funcGenStates.emplace_back(new FuncGenState(*irFunc, *gIR));
@@ -1056,12 +1065,8 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
     gIR->scopes.pop_back();
   };
 
-// Set the FastMath options for this function scope.
-#if LDC_LLVM_VER >= 308
+  // Set the FastMath options for this function scope.
   gIR->scopes.back().builder.setFastMathFlags(irFunc->FMF);
-#else
-  gIR->scopes.back().builder.SetFastMathFlags(irFunc->FMF);
-#endif
 
   // @naked: emit body and return, no prologue/epilogue
   if (func->hasFnAttribute(llvm::Attribute::Naked)) {
@@ -1097,18 +1102,12 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   // disable frame-pointer-elimination for functions with inline asm
   if (fd->hasReturnExp & 8) // has inline asm
   {
-#if LDC_LLVM_VER >= 309
     func->addAttribute(
         LLAttributeSet::FunctionIndex,
         llvm::Attribute::get(gIR->context(), "no-frame-pointer-elim", "true"));
     func->addAttribute(
         LLAttributeSet::FunctionIndex,
         llvm::Attribute::get(gIR->context(), "no-frame-pointer-elim-non-leaf"));
-#else
-    // hack: emit a call to llvm_eh_unwind_init
-    LLFunction *hack = GET_INTRINSIC_DECL(eh_unwind_init);
-    gIR->ir->CreateCall(hack, {});
-#endif
   }
 
   // give the 'this' parameter (an lvalue) storage and debug info
