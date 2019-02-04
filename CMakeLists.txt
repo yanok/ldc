@@ -16,9 +16,35 @@ include(CheckDSourceCompiles)
 include(CheckLinkFlag)
 include(BuildDExecutable)
 
+# Helper function
+function(append value)
+    foreach(variable ${ARGN})
+        if(${variable} STREQUAL "")
+            set(${variable} "${value}" PARENT_SCOPE)
+        else()
+            set(${variable} "${${variable}} ${value}" PARENT_SCOPE)
+        endif()
+    endforeach(variable)
+endfunction()
+
 # The script currently only supports the DMD-style commandline interface
 if (NOT D_COMPILER_DMD_COMPAT)
     message(FATAL_ERROR "We currently only support building using a D compiler with a DMD-compatible commandline interface. (try 'ldmd2' or 'gdmd')")
+endif()
+
+find_package(PkgConfig)
+if(PkgConfig_FOUND)
+    if(MSVC)
+        # make pkg-config use -LC:\path\to\build\LLVMSPIRVLib.lib not -L-lLLVMSPIRVLib
+        # for MSVC
+        set(PKG_CONFIG_EXECUTABLE "${PKG_CONFIG_EXECUTABLE} --msvc-syntax")
+    endif()
+    pkg_check_modules(LLVM_SPIRV LLVMSPIRVLib)
+    if (LLVM_SPIRV_FOUND)
+        message(STATUS "Building with SPIR-V support")
+        # SPIRV needs LLVMDemangle
+        set(EXTRA_LLVM_MODULES "${EXTRA_LLVM_MODULES}" demangle)
+    endif()
 endif()
 
 #
@@ -42,32 +68,28 @@ foreach(LLVM_SUPPORTED_TARGET ${LLVM_TARGETS_TO_BUILD})
     add_definitions("-DLDC_LLVM_SUPPORTED_TARGET_${LLVM_SUPPORTED_TARGET}=1")
 endforeach()
 
+if (LLVM_SPIRV_FOUND)
+    add_definitions("-DLDC_LLVM_SUPPORTED_TARGET_SPIRV=1")
+    foreach(flag ${LLVM_SPIRV_LDFLAGS})
+        append("${flag}" LLVM_LDFLAGS)
+    endforeach(flag)
+endif()
 #
 # Get info about used Linux distribution.
 #
 include(GetLinuxDistribution)
 
-# Helper function
-function(append value)
-    foreach(variable ${ARGN})
-        if(${variable} STREQUAL "")
-            set(${variable} "${value}" PARENT_SCOPE)
-        else()
-            set(${variable} "${${variable}} ${value}" PARENT_SCOPE)
-        endif()
-    endforeach(variable)
-endfunction()
 
 #
 # Main configuration.
 #
 
 # Version information
-set(LDC_VERSION "1.13.0") # May be overridden by git hash tag
+set(LDC_VERSION "1.14.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   83)
-set(DMDFE_FIX_LEVEL       1) # Comment out if not used
+set(DMDFE_PATCH_VERSION   84)
+set(DMDFE_FIX_LEVEL       0) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -208,6 +230,18 @@ if(CMAKE_COMPILER_IS_GNUCXX OR (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
         append("-Wno-pedantic" LDC_CXXFLAGS)
     endif()
 endif()
+
+if(NOT WIN32 AND NOT CYGWIN)
+    # Unify symbol visibility with LLVM to silence linker warning "direct access in function X to global
+    # weak symbol Y means the weak symbol cannot be overridden at runtime. This was likely caused by
+    # different translation units being compiled with different visibility settings."
+    # See LLVM's cmake/modules/HandleLLVMOptions.cmake.
+    check_cxx_compiler_flag("-fvisibility-inlines-hidden" SUPPORTS_FVISIBILITY_INLINES_HIDDEN_FLAG)
+    if (${SUPPORTS_FVISIBILITY_INLINES_HIDDEN_FLAG})
+        append("-fvisibility-inlines-hidden" LDC_CXXFLAGS)
+    endif()
+endif()
+
 if(MSVC)
     # Remove flags here, for exceptions and RTTI.
     # CL.EXE complains to override flags like "/GR /GR-".
@@ -263,6 +297,13 @@ else()
     separate_arguments(LLVM_LDFLAGS UNIX_COMMAND "${LLVM_LDFLAGS}")
 endif()
 
+# Suppress superfluous randlib warnings about "*.a" having no symbols on MacOSX.
+if (APPLE)
+    set(CMAKE_C_ARCHIVE_CREATE   "<CMAKE_AR> Scr <TARGET> <LINK_FLAGS> <OBJECTS>")
+    set(CMAKE_CXX_ARCHIVE_CREATE "<CMAKE_AR> Scr <TARGET> <LINK_FLAGS> <OBJECTS>")
+    set(CMAKE_C_ARCHIVE_FINISH   "<CMAKE_RANLIB> -no_warning_for_no_symbols -c <TARGET>")
+    set(CMAKE_CXX_ARCHIVE_FINISH "<CMAKE_RANLIB> -no_warning_for_no_symbols -c <TARGET>")
+endif()
 
 #
 # Gather source files.
@@ -779,6 +820,11 @@ if (LDC_INSTALL_LLVM_RUNTIME_LIBS)
             copy_compilerrt_lib("darwin/libclang_rt.fuzzer_osx.a"       "libldc_rt.fuzzer.a"   FALSE)
             copy_compilerrt_lib("darwin/libclang_rt.xray_osx.a"         "libldc_rt.xray.a"     FALSE)
         endif()
+        if(NOT (LDC_LLVM_VER LESS 700))
+            copy_compilerrt_lib("darwin/libclang_rt.xray-basic_osx.a"      "libldc_rt.xray-basic.a"     FALSE)
+            copy_compilerrt_lib("darwin/libclang_rt.xray-fdr_osx.a"        "libldc_rt.xray-fdr.a"       FALSE)
+            copy_compilerrt_lib("darwin/libclang_rt.xray-profiling_osx.a"  "libldc_rt.xray-profiling.a" FALSE)
+        endif()
     elseif(UNIX)
         set(LDC_INSTALL_LLVM_RUNTIME_LIBS_OS   "linux"  CACHE STRING "Non-Mac Posix: OS used as directory name for the compiler-rt source libraries, e.g., 'freebsd'.")
         set(LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH "x86_64" CACHE STRING "Non-Mac Posix: architecture used as libname suffix for the compiler-rt source libraries, e.g., 'aarch64'.")
@@ -792,6 +838,11 @@ if (LDC_INSTALL_LLVM_RUNTIME_LIBS)
         if(NOT (LDC_LLVM_VER LESS 600))
             copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.fuzzer-${LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH}.a" "libldc_rt.fuzzer.a"   FALSE)
         endif()
+        if(NOT (LDC_LLVM_VER LESS 700))
+            copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray-basic-${LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH}.a"      "libldc_rt.xray-basic.a"     FALSE)
+            copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray-fdr-${LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH}.a"        "libldc_rt.xray-fdr.a"       FALSE)
+            copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray-profiling-${LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH}.a"  "libldc_rt.xray-profiling.a" FALSE)
+        endif()
     elseif(WIN32)
         set(compilerrt_arch_suffix "x86_64")
         if(${ptr_size} EQUAL 4)
@@ -803,6 +854,11 @@ if (LDC_INSTALL_LLVM_RUNTIME_LIBS)
         if(NOT (LDC_LLVM_VER LESS 600))
             copy_compilerrt_lib("windows/clang_rt.fuzzer-${compilerrt_arch_suffix}.lib" "ldc_rt.fuzzer.lib"   FALSE)
             copy_compilerrt_lib("windows/clang_rt.xray-${compilerrt_arch_suffix}.lib"   "ldc_rt.xray.lib"     FALSE)
+        endif()
+        if(NOT (LDC_LLVM_VER LESS 700))
+            copy_compilerrt_lib("windows/clang_rt.xray-basic-${compilerrt_arch_suffix}.lib"      "ldc_rt.xray-basic.lib"     FALSE)
+            copy_compilerrt_lib("windows/clang_rt.xray-fdr-${compilerrt_arch_suffix}.lib"        "ldc_rt.xray-fdr.lib"       FALSE)
+            copy_compilerrt_lib("windows/clang_rt.xray-profiling-${compilerrt_arch_suffix}.lib"  "ldc_rt.xray-profiling.lib" FALSE)
         endif()
     endif()
 

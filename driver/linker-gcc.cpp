@@ -61,6 +61,8 @@ private:
   virtual void addCppStdlibLinkFlags(const llvm::Triple &triple);
   virtual void addProfileRuntimeLinkFlags(const llvm::Triple &triple);
   virtual void addXRayLinkFlags(const llvm::Triple &triple);
+  virtual bool addCompilerRTArchiveLinkFlags(llvm::StringRef baseName,
+                                             const llvm::Triple &triple);
 
   virtual void addLinker();
   virtual void addUserSwitches();
@@ -336,23 +338,49 @@ void ArgsBuilder::addFuzzLinkFlags(const llvm::Triple &triple) {
 // Adds all required link flags for -fxray-instrument when the xray library is
 // found.
 void ArgsBuilder::addXRayLinkFlags(const llvm::Triple &triple) {
-  const auto searchPaths = getFullCompilerRTLibPathCandidates("xray", triple);
-
-  bool linkerDarwin = triple.isOSDarwin();
   if (!triple.isOSLinux())
-    warning(Loc(), "XRay is not (fully) supported on non-Linux target OS.");
+    warning(Loc(), "XRay may not be fully supported on non-Linux target OS.");
 
-  for (const auto &filepath : searchPaths) {
-    if (!linkerDarwin)
-      addLdFlag("--whole-archive");
-
-    args.push_back(filepath);
-
-    if (!linkerDarwin)
-      addLdFlag("--no-whole-archive");
-
-    return;
+  bool libraryFoundAndLinked = addCompilerRTArchiveLinkFlags("xray", triple);
+#if LDC_LLVM_VER >= 700
+  // Since LLVM 7, each XRay mode was split into its own library.
+  if (libraryFoundAndLinked) {
+    addCompilerRTArchiveLinkFlags("xray-basic", triple);
+    addCompilerRTArchiveLinkFlags("xray-fdr", triple);
   }
+#else
+  // Before LLVM 7, XRay requires the C++ std library (but not on Darwin).
+  // Only link with the C++ stdlib when the XRay library was found.
+  if (libraryFoundAndLinked && !triple.isOSDarwin())
+    addCppStdlibLinkFlags(triple);
+#endif
+}
+
+// Returns true if library was found and added to link flags.
+bool ArgsBuilder::addCompilerRTArchiveLinkFlags(llvm::StringRef baseName,
+                                                const llvm::Triple &triple) {
+  const bool linkerDarwin = triple.isOSDarwin();
+  const auto searchPaths = getFullCompilerRTLibPathCandidates(baseName, triple);
+  for (const auto &filepath : searchPaths) {
+    IF_LOG Logger::println("Searching runtime library: %s", filepath.c_str());
+
+    if (llvm::sys::fs::exists(filepath) &&
+        !llvm::sys::fs::is_directory(filepath)) {
+      if (!linkerDarwin)
+        addLdFlag("--whole-archive");
+
+      IF_LOG Logger::println("Found, linking with %s",
+                             filepath.c_str());
+      args.push_back(filepath);
+
+      if (!linkerDarwin)
+        addLdFlag("--no-whole-archive");
+
+      return true;
+    }
+  }
+
+  return false;
 }
 
 void ArgsBuilder::addCppStdlibLinkFlags(const llvm::Triple &triple) {
@@ -703,16 +731,28 @@ int linkObjToBinaryGcc(llvm::StringRef outputPath,
   }
 #endif
 
-  // find gcc for linking
-  const std::string tool = getGcc();
+  // build command-line for gcc-compatible linker driver
+  // exception: invoke (ld-compatible) linker directly for WebAssembly targets
+  std::string tool;
+  std::unique_ptr<ArgsBuilder> argsBuilder;
+#if LDC_LLVM_VER >= 500
+  if (global.params.targetTriple->isOSBinFormatWasm()) {
+    tool = getProgram("wasm-ld", &opts::linker);
+    argsBuilder = llvm::make_unique<LdArgsBuilder>();
+  } else {
+#endif
+    tool = getGcc();
+    argsBuilder = llvm::make_unique<ArgsBuilder>();
+#if LDC_LLVM_VER >= 500
+  }
+#endif
 
   // build arguments
-  ArgsBuilder argsBuilder;
-  argsBuilder.build(outputPath, defaultLibNames);
+  argsBuilder->build(outputPath, defaultLibNames);
 
   Logger::println("Linking with: ");
   Stream logstr = Logger::cout();
-  for (const auto &arg : argsBuilder.args) {
+  for (const auto &arg : argsBuilder->args) {
     if (!arg.empty()) {
       logstr << "'" << arg << "' ";
     }
@@ -720,5 +760,5 @@ int linkObjToBinaryGcc(llvm::StringRef outputPath,
   logstr << "\n"; // FIXME where's flush ?
 
   // try to call linker
-  return executeToolAndWait(tool, argsBuilder.args, global.params.verbose);
+  return executeToolAndWait(tool, argsBuilder->args, global.params.verbose);
 }

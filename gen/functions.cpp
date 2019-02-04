@@ -144,7 +144,7 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
 
   // Non-typesafe variadics (both C and D styles) are also variadics on the LLVM
   // level.
-  const bool isLLVMVariadic = (f->varargs == 1);
+  const bool isLLVMVariadic = (f->parameterList.varargs == VarArg::variadic);
   if (isLLVMVariadic && f->linkage == LINKd) {
     // Add extra `_arguments` parameter for D-style variadic functions.
     newIrFty.arg_arguments =
@@ -152,7 +152,7 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
     ++nextLLArgIdx;
   }
 
-  const size_t numExplicitDArgs = Parameter::dim(f->parameters);
+  const size_t numExplicitDArgs = f->parameterList.length();
 
   // if this _Dmain() doesn't have an argument, we force it to have one
   if (isMain && f->linkage != LINKc && numExplicitDArgs == 0) {
@@ -162,7 +162,7 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
   }
 
   for (size_t i = 0; i < numExplicitDArgs; ++i) {
-    Parameter *arg = Parameter::getNth(f->parameters, i);
+    Parameter *arg = Parameter::getNth(f->parameterList.parameters, i);
 
     // Whether the parameter is passed by LLVM value or as a pointer to the
     // alloca/….
@@ -173,7 +173,7 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
     if (arg->storageClass & STClazy) {
       // Lazy arguments are lowered to delegates.
       Logger::println("lazy param");
-      auto ltf = TypeFunction::create(nullptr, arg->type, 0, LINKd);
+      auto ltf = TypeFunction::create(nullptr, arg->type, VarArg::none, LINKd);
       auto ltd = createTypeDelegate(ltf);
       loweredDType = ltd;
     } else if (passPointer) {
@@ -379,7 +379,7 @@ void DtoResolveFunction(FuncDeclaration *fdecl) {
         } else if (tempdecl->llvmInternal == LLVMinline_asm) {
           Logger::println("magic inline asm found");
           TypeFunction *tf = static_cast<TypeFunction *>(fdecl->type);
-          if (tf->varargs != 1 ||
+          if (tf->parameterList.varargs != VarArg::variadic ||
               (fdecl->parameters && fdecl->parameters->dim != 0)) {
             tempdecl->error("invalid `__asm` declaration, must be a D style "
                             "variadic with no explicit parameters");
@@ -444,6 +444,8 @@ void applyTargetMachineAttributes(llvm::Function &func,
 
   // TODO: implement commandline switches to change the default values.
   // TODO: (correctly) apply these for NVPTX (but not for SPIRV).
+  if (gIR->dcomputetarget && gIR->dcomputetarget->target == DComputeTarget::OpenCL)
+    return;
   if (!gIR->dcomputetarget) {
     // Target CPU capabilities
     func.addFnAttr("target-cpu", target.getTargetCPU());
@@ -467,8 +469,24 @@ void applyTargetMachineAttributes(llvm::Function &func,
   func.addFnAttr("no-infs-fp-math", TO.NoInfsFPMath ? "true" : "false");
   func.addFnAttr("no-nans-fp-math", TO.NoNaNsFPMath ? "true" : "false");
 
+#if LDC_LLVM_VER >= 900
+  switch (whichFramePointersToEmit()) {
+    case llvm::FramePointer::None:
+      func.addFnAttr("no-frame-pointer-elim", "false");
+      break;
+    case llvm::FramePointer::NonLeaf:
+      func.addFnAttr("no-frame-pointer-elim", "false");
+      func.addFnAttr("no-frame-pointer-elim-non-leaf");
+      break;
+    case llvm::FramePointer::All:
+      func.addFnAttr("no-frame-pointer-elim", "true");
+      func.addFnAttr("no-frame-pointer-elim-non-leaf");
+      break;
+  }
+#else
   func.addFnAttr("no-frame-pointer-elim",
                  willEliminateFramePointer() ? "false" : "true");
+#endif
 }
 
 void applyXRayAttributes(FuncDeclaration &fdecl, llvm::Function &func) {
@@ -549,9 +567,12 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
   LLFunction *func = vafunc ? vafunc : gIR->module.getFunction(irMangle);
   if (!func) {
     // All function declarations are "external" - any other linkage type
-    // is set when actually defining the function.
-    func = LLFunction::Create(functype, llvm::GlobalValue::ExternalLinkage,
-                              irMangle, &gIR->module);
+    // is set when actually defining the function, except extern_weak.
+    auto linkage = llvm::GlobalValue::ExternalLinkage;
+    // Apply pragma(LDC_extern_weak)
+    if (fdecl->llvmInternal == LLVMextern_weak)
+      linkage = llvm::GlobalValue::ExternalWeakLinkage;
+    func = LLFunction::Create(functype, linkage, irMangle, &gIR->module);
   } else if (func->getFunctionType() != functype) {
     const auto existingTypeString = llvmTypeToString(func->getFunctionType());
     const auto newTypeString = llvmTypeToString(functype);
@@ -622,10 +643,11 @@ void DtoDeclareFunction(FuncDeclaration *fdecl) {
     }
   }
 
-  if (fdecl->llvmInternal == LLVMglobal_crt_ctor ||
-      fdecl->llvmInternal == LLVMglobal_crt_dtor) {
-    AppendFunctionToLLVMGlobalCtorsDtors(
-        func, fdecl->priority, fdecl->llvmInternal == LLVMglobal_crt_ctor);
+  if (fdecl->isCrtCtorDtor & 1) {
+    AppendFunctionToLLVMGlobalCtorsDtors(func, fdecl->priority, true);
+  }
+  if (fdecl->isCrtCtorDtor & 2) {
+    AppendFunctionToLLVMGlobalCtorsDtors(func, fdecl->priority, false);
   }
 
   IrFuncTy &irFty = irFunc->irFty;
@@ -1148,7 +1170,7 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   }
 
   // D varargs: prepare _argptr and _arguments
-  if (f->linkage == LINKd && f->varargs == 1) {
+  if (f->linkage == LINKd && f->parameterList.varargs == VarArg::variadic) {
     // allocate _argptr (of type core.stdc.stdarg.va_list)
     Type *const argptrType = typeSemantic(Type::tvalist, fd->loc, fd->_scope);
     LLValue *argptrMem = DtoAlloca(argptrType, "_argptr_mem");

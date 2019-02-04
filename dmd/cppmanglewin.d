@@ -17,6 +17,7 @@ import core.stdc.stdio;
 import dmd.arraytypes;
 import dmd.cppmangle : isPrimaryDtor, isCppOperator, CppOperator;
 import dmd.declaration;
+import dmd.denum : isSpecialEnumIdent;
 import dmd.dsymbol;
 import dmd.dtemplate;
 import dmd.errors;
@@ -178,7 +179,10 @@ public:
             case Tuns64:
             case Tint128:
             case Tuns128:
+version (IN_LLVM) {} else
+{
             case Tfloat80:
+}
             case Twchar:
                 if (checkTypeSaved(type))
                     return;
@@ -241,10 +245,19 @@ public:
             break;
             // unsigned int
         case Tfloat80:
+version (IN_LLVM)
+{
+            // unlike DMD, LDC uses 64-bit `real` for Windows/MSVC targets,
+            // corresponding to MSVC++ long double
+            buf.writeByte('O');        // Visual C++ long double
+}
+else
+{
             if (flags & IS_DMC)
                 buf.writestring("_Z"); // DigitalMars long double
             else
                 buf.writestring("_T"); // Intel long double
+}
             break;
         case Twchar:
             if (flags & IS_DMC)
@@ -398,43 +411,15 @@ public:
 
     override void visit(TypeStruct type)
     {
-        const id = type.sym.ident;
-        string c;
-        if (id == Id.__c_long_double)
-            c = "O"; // VC++ long double
-        else if (id == Id.__c_long)
-            c = "J"; // VC++ long
-        else if (id == Id.__c_ulong)
-            c = "K"; // VC++ unsigned long
-        else if (id == Id.__c_longlong)
-            c = "_J"; // VC++ long long
-        else if (id == Id.__c_ulonglong)
-            c = "_K"; // VC++ unsigned long long
-        if (c.length)
-        {
-            if (checkImmutableShared(type))
-                return;
-
-            if (type.isConst() && ((flags & IS_NOT_TOP_TYPE) || (flags & IS_DMC)))
-            {
-                if (checkTypeSaved(type))
-                    return;
-            }
-            mangleModifier(type);
-            buf.writestring(c);
-        }
+        if (checkTypeSaved(type))
+            return;
+        //printf("visit(TypeStruct); is_not_top_type = %d\n", (int)(flags & IS_NOT_TOP_TYPE));
+        mangleModifier(type);
+        if (type.sym.isUnionDeclaration())
+            buf.writeByte('T');
         else
-        {
-            if (checkTypeSaved(type))
-                return;
-            //printf("visit(TypeStruct); is_not_top_type = %d\n", (int)(flags & IS_NOT_TOP_TYPE));
-            mangleModifier(type);
-            if (type.sym.isUnionDeclaration())
-                buf.writeByte('T');
-            else
-                buf.writeByte(type.cppmangle == CPPMANGLE.asClass ? 'V' : 'U');
-            mangleIdent(type.sym);
-        }
+            buf.writeByte(type.cppmangle == CPPMANGLE.asClass ? 'V' : 'U');
+        mangleIdent(type.sym);
         flags &= ~IS_NOT_TOP_TYPE;
         flags &= ~IGNORE_CONST;
     }
@@ -454,6 +439,11 @@ public:
             c = "_J"; // VC++ long long
         else if (id == Id.__c_ulonglong)
             c = "_K"; // VC++ unsigned long long
+        else if (id == Id.__c_wchar_t)
+        {
+            c = (flags & IS_DMC) ? "_Y" : "_W";
+        }
+
         if (c.length)
         {
             if (checkImmutableShared(type))
@@ -643,10 +633,10 @@ private:
         buf.writeByte('?');
         mangleIdent(d);
         assert((d.storage_class & STC.field) || !d.needThis());
-        Dsymbol parent = d.toParent();
+        Dsymbol parent = d.toParent3();
         while (parent && parent.isNspace())
         {
-            parent = parent.toParent();
+            parent = parent.toParent3();
         }
         if (parent && parent.isModule()) // static member
         {
@@ -1104,17 +1094,17 @@ private:
         //                ::= $0<encoded integral number>
         //printf("mangleIdent('%s')\n", sym.toChars());
         Dsymbol p = sym;
-        if (p.toParent() && p.toParent().isTemplateInstance())
+        if (p.toParent3() && p.toParent3().isTemplateInstance())
         {
-            p = p.toParent();
+            p = p.toParent3();
         }
         while (p && !p.isModule())
         {
             mangleName(p, dont_use_back_reference);
-            p = p.toParent();
-            if (p.toParent() && p.toParent().isTemplateInstance())
+            p = p.toParent3();
+            if (p.toParent3() && p.toParent3().isTemplateInstance())
             {
-                p = p.toParent();
+                p = p.toParent3();
             }
         }
         if (!dont_use_back_reference)
@@ -1234,7 +1224,7 @@ private:
                 tmp.buf.writeByte('A');
                 break;
             case LINK.cpp:
-                if (needthis && type.varargs != 1)
+                if (needthis && type.parameterList.varargs != VarArg.variadic)
                     tmp.buf.writeByte('E'); // thiscall
                 else
                     tmp.buf.writeByte('A'); // cdecl
@@ -1264,11 +1254,15 @@ private:
             if (type.isref)
                 rettype = rettype.referenceTo();
             flags &= ~IGNORE_CONST;
-            if (rettype.ty == Tstruct || rettype.ty == Tenum)
+            if (rettype.ty == Tstruct)
+            {
+                tmp.buf.writeByte('?');
+                tmp.buf.writeByte('A');
+            }
+            else if (rettype.ty == Tenum)
             {
                 const id = rettype.toDsymbol(null).ident;
-                if (id != Id.__c_long_double && id != Id.__c_long && id != Id.__c_ulong &&
-                    id != Id.__c_longlong && id != Id.__c_ulonglong)
+                if (!isSpecialEnumIdent(id))
                 {
                     tmp.buf.writeByte('?');
                     tmp.buf.writeByte('A');
@@ -1278,9 +1272,9 @@ private:
             rettype.accept(tmp);
             tmp.flags &= ~MANGLE_RETURN_TYPE;
         }
-        if (!type.parameters || !type.parameters.dim)
+        if (!type.parameterList.parameters || !type.parameterList.parameters.dim)
         {
-            if (type.varargs == 1)
+            if (type.parameterList.varargs == VarArg.variadic)
                 tmp.buf.writeByte('Z');
             else
                 tmp.buf.writeByte('X');
@@ -1297,7 +1291,7 @@ private:
                 else if (p.storageClass & STC.lazy_)
                 {
                     // Mangle as delegate
-                    Type td = new TypeFunction(null, t, 0, LINK.d);
+                    Type td = new TypeFunction(ParameterList(), t, LINK.d);
                     td = new TypeDelegate(td);
                     t = merge(t);
                 }
@@ -1313,8 +1307,8 @@ private:
                 return 0;
             }
 
-            Parameter._foreach(type.parameters, &mangleParameterDg);
-            if (type.varargs == 1)
+            Parameter._foreach(type.parameterList.parameters, &mangleParameterDg);
+            if (type.parameterList.varargs == VarArg.variadic)
             {
                 tmp.buf.writeByte('Z');
             }
