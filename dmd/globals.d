@@ -287,6 +287,7 @@ struct Param
         version (IN_WEKA)
         {
             bool enableWekaMods; // Enable specific Weka mods like the template instantiation mods
+            uint templateCodegenDepth; // Don't codegen templates beyond this recusion depth.
         }
     }
 }

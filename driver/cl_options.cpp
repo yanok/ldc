@@ -432,6 +432,10 @@ static cl::opt<bool, true, FlagParser<bool>> wekaMods(
     cl::desc(
         "(*) Enable specific Weka mods like the template instantiation mods"),
     cl::location(global.params.enableWekaMods), cl::init(true));
+static cl::opt<uint32_t, true>
+    templateCodegenDepth("template-codegen-depth",
+             cl::desc("Don't codegen templates beyond this recusion depth (0 = off)."),
+             cl::location(global.params.templateCodegenDepth), cl::init(0));
 #endif
 
 cl::opt<LTOKind> ltoMode(
