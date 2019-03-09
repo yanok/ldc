@@ -6258,6 +6258,16 @@ extern (C++) class TemplateInstance : ScopeDsymbol
      */
     final bool needsCodegen()
     {
+        version (IN_WEKA)
+        {
+            static uint callDepth;
+            callDepth++;
+            scope(exit) callDepth--;
+
+            if (global.params.templateCodegenDepth && (callDepth > global.params.templateCodegenDepth))
+                return false;
+        }
+
         // Now -allInst is just for the backward compatibility.
         if (global.params.allInst)
         {

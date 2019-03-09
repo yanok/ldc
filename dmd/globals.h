@@ -277,6 +277,7 @@ struct Param
 
 #if IN_WEKA
     bool enableWekaMods; // Enable specific Weka mods like the template instantiation mods
+    uint32_t templateCodegenDepth;
 #endif
 #endif
 };
