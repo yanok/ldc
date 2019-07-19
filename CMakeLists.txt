@@ -106,7 +106,7 @@ set(LDC_VERSION "1.15.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
 set(DMDFE_PATCH_VERSION   85)
-set(DMDFE_FIX_LEVEL       0) # Comment out if not used
+set(DMDFE_FIX_LEVEL       1) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -343,7 +343,7 @@ else()
     if(NOT HASH STREQUAL "GITDIR-NOTFOUND")
         # Append git hash to LDC_VERSION
         string(SUBSTRING "${HASH}" 0 7 LDC_VERSION_HASH)
-        set(LDC_VERSION "${LDC_VERSION}git-${LDC_VERSION_HASH}")
+        set(LDC_VERSION "${LDC_VERSION}-git-${LDC_VERSION_HASH}")
 
         # Append "-dirty" when the working copy is dirty
         git_describe(GIT_DIRTY --dirty)

@@ -86,7 +86,7 @@ public:
     }
 
     if (decl->type->ty == Terror) {
-      error(decl->loc, "had semantic errors when compiling");
+      decl->error("had semantic errors when compiling");
       decl->ir->setDefined();
       return;
     }
@@ -124,7 +124,7 @@ public:
     }
 
     if (decl->type->ty == Terror) {
-      error(decl->loc, "had semantic errors when compiling");
+      decl->error("had semantic errors when compiling");
       decl->ir->setDefined();
       return;
     }
@@ -182,7 +182,7 @@ public:
     }
 
     if (decl->type->ty == Terror) {
-      error(decl->loc, "had semantic errors when compiling");
+      decl->error("had semantic errors when compiling");
       decl->ir->setDefined();
       return;
     }
@@ -252,7 +252,7 @@ public:
     }
 
     if (decl->type->ty == Terror) {
-      error(decl->loc, "had semantic errors when compiling");
+      decl->error("had semantic errors when compiling");
       decl->ir->setDefined();
       return;
     }
@@ -336,7 +336,7 @@ public:
                            decl->toPrettyChars());
 
     if (decl->type->ty == Terror) {
-      error(decl->loc, "had semantic errors when compiling");
+      decl->error("had semantic errors when compiling");
       return;
     }
   }
@@ -384,6 +384,15 @@ public:
       // FIXME: This is #673 all over again.
       if (!decl->needsCodegen()) {
         Logger::println("Does not need codegen, skipping.");
+        return;
+      }
+
+      if (irs->dcomputetarget && (decl->tempdecl == Type::rtinfo ||
+                                  decl->tempdecl == Type::rtinfoImpl)) {
+        // Emitting object.RTInfo(Impl) template instantiations in dcompute
+        // modules would require dcompute support for global variables.
+        Logger::println("Skipping object.RTInfo(Impl) template instantiations "
+                        "in dcompute modules.");
         return;
       }
     }

@@ -2468,6 +2468,8 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         {
             if (tempdecl.ident == Id.RTInfo)
                 Type.rtinfo = tempdecl;
+            version (IN_LLVM) if (tempdecl.ident == Id.RTInfoImpl)
+                Type.rtinfoImpl = tempdecl;
         }
 
         /* Remember Scope for later instantiations, but make
@@ -4540,7 +4542,6 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         }
         else if (cldec.symtab && !scx)
         {
-            cldec.semanticRun = PASS.semanticdone;
             return;
         }
         cldec.semanticRun = PASS.semantic;

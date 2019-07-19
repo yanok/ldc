@@ -1,14 +1,11 @@
 variables:
-  LLVM_VERSION: 6d501ba0
+  LLVM_VERSION: 8.0.0
   HOST_LDC_VERSION: 1.14.0
 
 # Although tags are supposed to trigger builds by default, they don't.
 trigger:
-  branches:
-    include: ['*']
-  tags:
-    include:
-      - v*
+- '*'
+- refs/tags/v*
 
 jobs:
 - job: Windows
@@ -16,7 +13,7 @@ jobs:
   pool:
     vmImage: 'vs2017-win2016'
   variables:
-    CLANG_VERSION: 7.0.1
+    CLANG_VERSION: 8.0.0
     VSINSTALLDIR: C:\Program Files (x86)\Microsoft Visual Studio\2017\Enterprise\
     EXTRA_CMAKE_FLAGS: -DBUILD_LTO_LIBS=ON
   strategy:
@@ -110,7 +107,10 @@ jobs:
     vmImage: 'ubuntu-16.04'
   variables:
     CI_OS: linux
-    EXTRA_CMAKE_FLAGS: -DMULTILIB=ON -DBUILD_LTO_LIBS=ON -DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -DLDC_INSTALL_LTOPLUGIN=ON -DLDC_INSTALL_LLVM_RUNTIME_LIBS=ON
+    # To improve portability of the generated binaries, link the C++ standard library statically.
+    # Also don't use relax relocations for the C(++) parts of the default libraries in order to
+    # support older user binutils (e.g., Ubuntu 14.04).
+    EXTRA_CMAKE_FLAGS: -DMULTILIB=ON -DBUILD_LTO_LIBS=ON -DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -DRT_CFLAGS=-Wa,-mrelax-relocations=no -DLDC_INSTALL_LTOPLUGIN=ON -DLDC_INSTALL_LLVM_RUNTIME_LIBS=ON
   steps:
     - template: .azure-pipelines/posix.yml
 
