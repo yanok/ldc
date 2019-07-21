@@ -102,10 +102,10 @@ include(GetLinuxDistribution)
 #
 
 # Version information
-set(LDC_VERSION "1.15.0") # May be overridden by git hash tag
+set(LDC_VERSION "1.16.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   85)
+set(DMDFE_PATCH_VERSION   86)
 set(DMDFE_FIX_LEVEL       1) # Comment out if not used
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
@@ -465,11 +465,9 @@ include_directories(. dmd)
 append("-I${PROJECT_SOURCE_DIR}" DDMD_DFLAGS)
 append("-I${PROJECT_BINARY_DIR}" DDMD_DFLAGS)
 
-if(MSVC)
-    append("-version=IN_LLVM_MSVC" DDMD_DFLAGS)
-endif()
 append("-version=IN_WEKA" DDMD_DFLAGS)  # Define to enable the Weka modifications
 append("-DIN_WEKA" CMAKE_CXX_FLAGS)     # Define to enable the Weka modifications
+
 append("-version=IN_LLVM" DDMD_DFLAGS)
 append("-DIN_LLVM" LDC_CXXFLAGS)
 append("-DOPAQUE_VTBLS" LDC_CXXFLAGS)

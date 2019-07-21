@@ -31,6 +31,7 @@ import dmd.tokens : TOK;
 import dmd.utils : toDString;
 import dmd.root.ctfloat;
 import dmd.root.outbuffer;
+
 version (IN_LLVM) import gen.llvmhelpers;
 
 /**
@@ -63,8 +64,8 @@ struct Target
     bool twoDtorInVtable;     /// target C++ ABI puts deleting and non-deleting destructor into vtable
 
     /**
-    * Values representing all properties for floating point types
-    */
+     * Values representing all properties for floating point types
+     */
     extern (C++) struct FPTypeProperties(T)
     {
         real_t max;                         /// largest representable value that's not infinity
@@ -96,39 +97,31 @@ struct Target
     FPTypeProperties!double DoubleProperties;   ///
     FPTypeProperties!real_t RealProperties;     ///
 
-  version (IN_LLVM)
-  {
+version (IN_LLVM)
+{
     extern (C++):
 
     // implemented in gen/target.cpp:
     void _init(ref const Param params);
+    // unused: void deinitialize();
     uint alignsize(Type type);
     uint fieldalign(Type type);
-    uint critsecsize();
+
+    uint critsecsize()
+    {
+        if (criticalSectionSize == 0)
+        {
+            import dmd.errors;
+            error(Loc.initial, "Unknown critical section size");
+            fatal();
+        }
+        return criticalSectionSize;
+    }
+
     Type va_listType();
-    int isVectorTypeSupported(int sz, Type type);
-    bool isVectorOpSupported(Type type, TOK op, Type t2 = null);
-
-    const(char)* toCppMangle(Dsymbol s)
-    {
-        if (isTargetWindowsMSVC())
-            return toCppMangleMSVC(s);
-        else
-            return toCppMangleItanium(s);
-    }
-
-    const(char)* cppTypeInfoMangle(ClassDeclaration cd)
-    {
-        if (isTargetWindowsMSVC())
-            return cppTypeInfoMangleMSVC(cd);
-        else
-            return cppTypeInfoMangleItanium(cd);
-    }
-
-    const(char)* cppTypeMangle(Type t);
-  }
-  else // !IN_LLVM
-  {
+}
+else // !IN_LLVM
+{
     /**
      * Initialize the Target
      */
@@ -361,6 +354,7 @@ struct Target
             assert(0);
         }
     }
+} // !IN_LLVM
 
     /**
      * Checks whether the target supports a vector type.
@@ -375,7 +369,8 @@ struct Target
      */
     extern (C++) int isVectorTypeSupported(int sz, Type type)
     {
-        if (!global.params.is64bit && !global.params.isOSX)
+        // LDC_FIXME: Is it possible to query the LLVM target about supported vectors?
+        if (!IN_LLVM && !global.params.is64bit && !global.params.isOSX)
             return 1; // not supported
         switch (type.ty)
         {
@@ -394,7 +389,7 @@ struct Target
         default:
             return 2; // wrong base type
         }
-        if (sz != 16 && !(global.params.cpu >= CPU.avx && sz == 32))
+        if (!IN_LLVM && sz != 16 && !(global.params.cpu >= CPU.avx && sz == 32))
             return 3; // wrong size
         return 0;
     }
@@ -408,7 +403,7 @@ struct Target
      * Returns:
      *      true if the operation is supported or type is not a vector
      */
-    extern (C++) bool isVectorOpSupported(Type type, ubyte op, Type t2 = null)
+    extern (C++) bool isVectorOpSupported(Type type, TOK op, Type t2 = null)
     {
         import dmd.tokens;
 
@@ -416,6 +411,11 @@ struct Target
             return true; // not a vector op
         auto tvec = cast(TypeVector) type;
 
+        // LDC_FIXME:
+        // Most of the binops only work with `t2` being the same IR type as `tvec`
+        // (LLVM restriction). We'd need to be more strict here and/or convert
+        // the rhs to a matching type during codegen (e.g., promote scalars to
+        // vectors).
         bool supported;
         switch (op)
         {
@@ -423,12 +423,24 @@ struct Target
             supported = tvec.isscalar();
             break;
 
+version (IN_LLVM)
+{
+        case TOK.lessThan, TOK.greaterThan, TOK.lessOrEqual, TOK.greaterOrEqual:
+            supported = false;
+            break;
+        case TOK.equal, TOK.notEqual, TOK.identity, TOK.notIdentity:
+            supported = true;
+            break;
+}
+else
+{
         case TOK.lessThan, TOK.greaterThan, TOK.lessOrEqual, TOK.greaterOrEqual, TOK.equal, TOK.notEqual, TOK.identity, TOK.notIdentity:
             supported = false;
             break;
+}
 
         case TOK.leftShift, TOK.leftShiftAssign, TOK.rightShift, TOK.rightShiftAssign, TOK.unsignedRightShift, TOK.unsignedRightShiftAssign:
-            supported = false;
+            supported = IN_LLVM && tvec.isintegral();
             break;
 
         case TOK.add, TOK.addAssign, TOK.min, TOK.minAssign:
@@ -436,6 +448,12 @@ struct Target
             break;
 
         case TOK.mul, TOK.mulAssign:
+version (IN_LLVM)
+{
+            supported = tvec.isscalar();
+}
+else
+{
             // only floats and short[8]/ushort[8] (PMULLW)
             if (tvec.isfloating() || tvec.elementType().size(Loc.initial) == 2 ||
                 // int[4]/uint[4] with SSE4.1 (PMULLD)
@@ -443,14 +461,15 @@ struct Target
                 supported = true;
             else
                 supported = false;
+}
             break;
 
         case TOK.div, TOK.divAssign:
-            supported = tvec.isfloating();
+            supported = IN_LLVM ? tvec.isscalar() : tvec.isfloating();
             break;
 
         case TOK.mod, TOK.modAssign:
-            supported = false;
+            supported = IN_LLVM && tvec.isscalar();
             break;
 
         case TOK.and, TOK.andAssign, TOK.or, TOK.orAssign, TOK.xor, TOK.xorAssign:
@@ -486,12 +505,22 @@ struct Target
      */
     extern (C++) const(char)* toCppMangle(Dsymbol s)
     {
+version (IN_LLVM)
+{
+        if (isTargetWindowsMSVC())
+            return toCppMangleMSVC(s);
+        else
+            return toCppMangleItanium(s);
+}
+else
+{
         static if (TARGET.Linux || TARGET.OSX || TARGET.FreeBSD || TARGET.OpenBSD || TARGET.DragonFlyBSD || TARGET.Solaris)
             return toCppMangleItanium(s);
         else static if (TARGET.Windows)
             return toCppMangleMSVC(s);
         else
             static assert(0, "fix this");
+}
     }
 
     /**
@@ -503,12 +532,22 @@ struct Target
      */
     extern (C++) const(char)* cppTypeInfoMangle(ClassDeclaration cd)
     {
+version (IN_LLVM)
+{
+        if (isTargetWindowsMSVC())
+            return cppTypeInfoMangleMSVC(cd);
+        else
+            return cppTypeInfoMangleItanium(cd);
+}
+else
+{
         static if (TARGET.Linux || TARGET.OSX || TARGET.FreeBSD || TARGET.OpenBSD || TARGET.Solaris || TARGET.DragonFlyBSD)
             return cppTypeInfoMangleItanium(cd);
         else static if (TARGET.Windows)
             return cppTypeInfoMangleMSVC(cd);
         else
             static assert(0, "fix this");
+}
     }
 
     /**
@@ -519,11 +558,17 @@ struct Target
      *      string if type is mangled specially on target
      *      null if unhandled
      */
+version (IN_LLVM)
+{
+    extern (C++) const(char)* cppTypeMangle(Type t);
+}
+else
+{
     extern (C++) const(char)* cppTypeMangle(Type t)
     {
         return null;
     }
-  } // !IN_LLVM
+}
 
     /**
      * Get the type that will really be used for passing the given argument
@@ -571,17 +616,17 @@ struct Target
         return global.params.isWindows ? LINK.windows : LINK.c;
     }
 
-  version (IN_LLVM)
-  {
+version (IN_LLVM)
+{
     extern (C++):
 
     TypeTuple toArgTypes(Type t);
     bool isReturnOnStack(TypeFunction tf, bool needsThis);
     // unused: ulong parameterSize(const ref Loc loc, Type t);
     Expression getTargetInfo(const(char)* name, const ref Loc loc);
-  }
-  else // !IN_LLVM
-  {
+}
+else // !IN_LLVM
+{
     /**
      * Describes how an argument type is passed to a function on target.
      * Params:
@@ -829,7 +874,7 @@ struct Target
                 return null;
         }
     }
-  } // !IN_LLVM
+} // !IN_LLVM
 }
 
 extern (C++) __gshared Target target;

@@ -21,7 +21,6 @@ template <typename TYPE> struct Array;
 
 #if IN_LLVM
 #include "llvm/ADT/Triple.h"
-#include <cstdint>
 
 enum OUTPUTFLAG
 {
@@ -29,10 +28,7 @@ enum OUTPUTFLAG
     OUTPUTFLAGdefault, // for the .o default
     OUTPUTFLAGset      // for -output
 };
-
-using ubyte = uint8_t;
 #endif
-
 
 typedef unsigned char Diagnostic;
 enum
@@ -80,6 +76,15 @@ enum CPU
     native              // the machine the compiler is being run on
 };
 
+enum JsonFieldFlags
+{
+    none         = 0,
+    compilerInfo = (1 << 0),
+    buildInfo    = (1 << 1),
+    modules      = (1 << 2),
+    semantics    = (1 << 3)
+};
+
 enum CppStdRevision
 {
     CppStdRevisionCpp98 = 199711,
@@ -106,11 +111,7 @@ struct Param
     bool vgc;           // identify gc usage
     bool vfield;        // identify non-mutable field variables
     bool vcomplex;      // identify complex/imaginary type usage
-#if !IN_LLVM
-    char symdebug;      // insert debug symbolic information
-#else
-    ubyte symdebug;     // insert debug symbolic information
-#endif
+    unsigned char symdebug;  // insert debug symbolic information
     bool symdebugref;   // insert debug information for all referenced types, too
     bool alwaysframe;   // always emit standard stack frame
     bool optimize;      // run optimizer
@@ -250,7 +251,7 @@ struct Param
 #if IN_LLVM
     Array<const char *> bitcodeFiles; // LLVM bitcode files passed on cmdline
 
-    uint32_t nestedTmpl; // maximum nested template instantiations
+    unsigned nestedTmpl; // maximum nested template instantiations
 
     // LDC stuff
     OUTPUTFLAG output_ll;
@@ -266,12 +267,13 @@ struct Param
     const char *datafileInstrProf; // Either the input or output file for PGO data
 
     const llvm::Triple *targetTriple;
+    bool isUClibcEnvironment; // not directly supported by LLVM
 
     // Codegen cl options
     bool disableRedZone;
-    uint32_t dwarfVersion;
+    unsigned dwarfVersion;
 
-    uint32_t hashThreshold; // MD5 hash symbols larger than this threshold (0 = no hashing)
+    unsigned hashThreshold; // MD5 hash symbols larger than this threshold (0 = no hashing)
 
     bool outputSourceLocations; // if true, output line tables.
 
@@ -316,8 +318,8 @@ struct Global
     Array<const char *> *path;        // Array of char*'s which form the import lookup path
     Array<const char *> *filePath;    // Array of char*'s which form the file import lookup path
 
-    const char *version;     // Compiler version string
-    const char *vendor;      // Compiler backend name
+    DArray<const char> version;     // Compiler version string
+    const char *vendor;             // Compiler backend name
 
     Param params;
     unsigned errors;         // number of errors reported so far
@@ -404,7 +406,7 @@ struct Loc
     Loc(const char *filename, unsigned linnum, unsigned charnum);
 #endif
 
-    const char *toChars() const;
+    const char *toChars(bool showColumns = global.params.showColumns) const;
     bool equals(const Loc& loc) const;
 };
 

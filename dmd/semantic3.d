@@ -294,7 +294,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
             funcdecl.localsymtab = new DsymbolTable();
 
             // Establish function scope
-            auto ss = new ScopeDsymbol();
+            auto ss = new ScopeDsymbol(funcdecl.loc, null);
             // find enclosing scope symbol, might skip symbol-less CTFE and/or FuncExp scopes
             for (auto scx = sc; ; scx = scx.enclosing)
             {
@@ -304,7 +304,6 @@ private extern(C++) final class Semantic3Visitor : Visitor
                     break;
                 }
             }
-            ss.loc = funcdecl.loc;
             ss.endlinnum = funcdecl.endloc.linnum;
             Scope* sc2 = sc.push(ss);
             sc2.func = funcdecl;
@@ -315,7 +314,9 @@ private extern(C++) final class Semantic3Visitor : Visitor
             sc2.sw = null;
             sc2.fes = funcdecl.fes;
             sc2.linkage = LINK.d;
-            sc2.stc &= ~(STC.auto_ | STC.scope_ | STC.static_ | STC.abstract_ | STC.deprecated_ | STC.override_ | STC.TYPECTOR | STC.final_ | STC.tls | STC.gshared | STC.ref_ | STC.return_ | STC.property | STC.nothrow_ | STC.pure_ | STC.safe | STC.trusted | STC.system);
+            sc2.stc &= ~(STC.auto_ | STC.scope_ | STC.static_ | STC.extern_ | STC.abstract_ | STC.deprecated_ | STC.override_ |
+                         STC.TYPECTOR | STC.final_ | STC.tls | STC.gshared | STC.ref_ | STC.return_ | STC.property |
+                         STC.nothrow_ | STC.pure_ | STC.safe | STC.trusted | STC.system);
             sc2.protection = Prot(Prot.Kind.public_);
             sc2.explicitProtection = 0;
             sc2.aligndecl = null;
@@ -376,6 +377,18 @@ private extern(C++) final class Semantic3Visitor : Visitor
             {
                 if (f.linkage == LINK.d)
                 {
+                    // Variadic arguments depend on Typeinfo being defined.
+                    if (!global.params.useTypeInfo || !Type.dtypeinfo || !Type.typeinfotypelist)
+                    {
+                        if (!global.params.useTypeInfo)
+                            funcdecl.error("D-style variadic functions cannot be used with -betterC");
+                        else if (!Type.typeinfotypelist)
+                            funcdecl.error("`object.TypeInfo_Tuple` could not be found, but is implicitly used in D-style variadic functions");
+                        else
+                            funcdecl.error("`object.TypeInfo` could not be found, but is implicitly used in D-style variadic functions");
+                        fatal();
+                    }
+
                     // Declare _arguments[]
                     funcdecl.v_arguments = new VarDeclaration(funcdecl.loc, Type.typeinfotypelist.type, Id._arguments_typeinfo, null);
                     funcdecl.v_arguments.storage_class |= STC.temp | STC.parameter;
@@ -383,7 +396,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                     sc2.insert(funcdecl.v_arguments);
                     funcdecl.v_arguments.parent = funcdecl;
 
-                    //Type *t = Type::typeinfo.type.constOf().arrayOf();
+                    //Type t = Type.dtypeinfo.type.constOf().arrayOf();
                     Type t = Type.dtypeinfo.type.arrayOf();
                     _arguments = new VarDeclaration(funcdecl.loc, t, Id._arguments, null);
                     _arguments.storage_class |= STC.temp;
@@ -394,10 +407,14 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 if (f.linkage == LINK.d || f.parameterList.length)
                 {
                     // Declare _argptr
-                    version (IN_LLVM)
-                        Type t = Type.tvalist.typeSemantic(funcdecl.loc, sc);
-                    else
-                        Type t = Type.tvalist;
+version (IN_LLVM)
+{
+                    Type t = Type.tvalist.typeSemantic(funcdecl.loc, sc);
+}
+else
+{
+                    Type t = Type.tvalist;
+}
                     // Init is handled in FuncDeclaration_toObjFile
                     funcdecl.v_argptr = new VarDeclaration(funcdecl.loc, t, Id._argptr, new VoidInitializer(funcdecl.loc));
                     funcdecl.v_argptr.storage_class |= STC.temp;
@@ -407,28 +424,28 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 }
             }
 
-            version (IN_LLVM)
+version (IN_LLVM)
+{
+            // Make sure semantic analysis has been run on argument types. This is
+            // e.g. needed for TypeTuple!(int, int) to be picked up as two int
+            // parameters by the Parameter functions.
+            for (size_t i = 0; i < f.parameterList.length; i++)
             {
-                // Make sure semantic analysis has been run on argument types. This is
-                // e.g. needed for TypeTuple!(int, int) to be picked up as two int
-                // parameters by the Parameter functions.
-                for (size_t i = 0; i < f.parameterList.length; i++)
+                Parameter arg = f.parameterList[i];
+                Type nw = arg.type.typeSemantic(Loc.initial, sc);
+                if (arg.type != nw)
                 {
-                    Parameter arg = f.parameterList[i];
-                    Type nw = arg.type.typeSemantic(Loc.initial, sc);
-                    if (arg.type != nw)
-                    {
-                        arg.type = nw;
-                        // Examine this index again.
-                        // This is important if it turned into a tuple.
-                        // In particular, the empty tuple should be handled or the
-                        // next parameter will be skipped.
-                        // LDC_FIXME: Maybe we only need to do this for tuples,
-                        //            and can add tuple.length after decrement?
-                        i--;
-                    }
+                    arg.type = nw;
+                    // Examine this index again.
+                    // This is important if it turned into a tuple.
+                    // In particular, the empty tuple should be handled or the
+                    // next parameter will be skipped.
+                    // LDC_FIXME: Maybe we only need to do this for tuples,
+                    //            and can add tuple.length after decrement?
+                    i--;
                 }
             }
+}
 
             /* Declare all the function parameters as variables
              * and install them in parameters[]
@@ -563,18 +580,16 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 }
 
                 // scope of out contract (need for vresult.semantic)
-                auto sym = new ScopeDsymbol();
+                auto sym = new ScopeDsymbol(funcdecl.loc, null);
                 sym.parent = sc2.scopesym;
-                sym.loc = funcdecl.loc;
                 sym.endlinnum = fensure_endlin;
                 scout = sc2.push(sym);
             }
 
             if (funcdecl.fbody)
             {
-                auto sym = new ScopeDsymbol();
+                auto sym = new ScopeDsymbol(funcdecl.loc, null);
                 sym.parent = sc2.scopesym;
-                sym.loc = funcdecl.loc;
                 sym.endlinnum = funcdecl.endloc.linnum;
                 sc2 = sc2.push(sym);
 
@@ -786,7 +801,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                     // For foreach(){} body, append a return 0;
                     if (blockexit & BE.fallthru)
                     {
-                        Expression e = new IntegerExp(0);
+                        Expression e = IntegerExp.literal!0;
                         Statement s = new ReturnStatement(Loc.initial, e);
                         funcdecl.fbody = new CompoundStatement(Loc.initial, funcdecl.fbody, s);
                         funcdecl.hasReturnExp |= (funcdecl.hasReturnExp & 1 ? 16 : 1);
@@ -808,7 +823,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                             /* Add an assert(0, msg); where the missing return
                              * should be.
                              */
-                            e = new AssertExp(funcdecl.endloc, new IntegerExp(0), new StringExp(funcdecl.loc, cast(char*)"missing return expression"));
+                            e = new AssertExp(funcdecl.endloc, IntegerExp.literal!0, new StringExp(funcdecl.loc, cast(char*)"missing return expression"));
                         }
                         else
                             e = new HaltExp(funcdecl.endloc);
@@ -850,7 +865,11 @@ private extern(C++) final class Semantic3Visitor : Visitor
                             else if (exp.type.wildOf().implicitConvTo(tret))
                                 exp = exp.castTo(sc2, exp.type.wildOf());
                         }
-                        exp = exp.implicitCastTo(sc2, tret);
+
+                        const hasCopyCtor = exp.type.ty == Tstruct && (cast(TypeStruct)exp.type).sym.hasCopyCtor;
+                        // if a copy constructor is present, the return type conversion will be handled by it
+                        if (!hasCopyCtor)
+                            exp = exp.implicitCastTo(sc2, tret);
 
                         if (f.isref)
                         {
@@ -866,7 +885,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                              * If NRVO is not possible, all returned lvalues should call their postblits.
                              */
                             if (!funcdecl.nrvo_can)
-                                exp = doCopyOrMove(sc2, exp);
+                                exp = doCopyOrMove(sc2, exp, f.next);
 
                             if (tret.hasPointers())
                                 checkReturnEscape(sc2, exp, false);
@@ -901,8 +920,8 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 sc2 = sc2.pop();
             }
 
-            funcdecl.frequire = funcdecl.mergeFrequire(funcdecl.frequire);
-            funcdecl.fensure = funcdecl.mergeFensure(funcdecl.fensure, Id.result);
+            funcdecl.frequire = funcdecl.mergeFrequire(funcdecl.frequire, funcdecl.fdrequireParams);
+            funcdecl.fensure = funcdecl.mergeFensure(funcdecl.fensure, Id.result, funcdecl.fdensureParams);
 
             Statement freq = funcdecl.frequire;
             Statement fens = funcdecl.fensure;
@@ -914,9 +933,8 @@ private extern(C++) final class Semantic3Visitor : Visitor
             {
                 /* frequire is composed of the [in] contracts
                  */
-                auto sym = new ScopeDsymbol();
+                auto sym = new ScopeDsymbol(funcdecl.loc, null);
                 sym.parent = sc2.scopesym;
-                sym.loc = funcdecl.loc;
                 sym.endlinnum = funcdecl.endloc.linnum;
                 sc2 = sc2.push(sym);
                 sc2.flags = (sc2.flags & ~SCOPE.contract) | SCOPE.require;
@@ -1075,7 +1093,7 @@ else
                 if (addReturn0())
                 {
                     // Add a return 0; statement
-                    Statement s = new ReturnStatement(Loc.initial, new IntegerExp(0));
+                    Statement s = new ReturnStatement(Loc.initial, IntegerExp.literal!0);
                     a.push(s);
                 }
 
@@ -1123,8 +1141,7 @@ else
                     ClassDeclaration cd = funcdecl.isThis() ? funcdecl.isThis().isClassDeclaration() : funcdecl.parent.isClassDeclaration();
                     if (cd)
                     {
-                        // IN_LLVM: disabled via leading `false &&`
-                        if (false && !global.params.is64bit && global.params.isWindows && !funcdecl.isStatic() && !sbody.usesEH() && !global.params.trace)
+                        if (!IN_LLVM && !global.params.is64bit && global.params.isWindows && !funcdecl.isStatic() && !sbody.usesEH() && !global.params.trace)
                         {
                             /* The back end uses the "jmonitor" hack for syncing;
                              * no need to do the sync at this level.
@@ -1215,6 +1232,8 @@ else
                 if (funcdecl.type == f)
                     f = cast(TypeFunction)f.copy();
                 f.isreturn = true;
+                if (funcdecl.storage_class & STC.returninferred)
+                    f.isreturninferred = true;
             }
         }
 
@@ -1431,7 +1450,7 @@ else
 
         // don't do it for unused deprecated types
         // or error ypes
-        if (!ad.getRTInfo && Type.rtinfo && (!ad.isDeprecated() || global.params.useDeprecated != Diagnostic.error) && (ad.type && ad.type.ty != Terror))
+        if (!ad.getRTInfo && Type.rtinfo && (!ad.isDeprecated() || global.params.useDeprecated != DiagnosticReporting.error) && (ad.type && ad.type.ty != Terror))
         {
             // Evaluate: RTinfo!type
             auto tiargs = new Objects();

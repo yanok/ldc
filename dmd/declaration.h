@@ -29,9 +29,6 @@ class StructDeclaration;
 struct CompiledCtfeFunction;
 struct ObjcSelector;
 struct IntRange;
-#if IN_LLVM
-struct Symbol;
-#endif
 
 #define STCundefined    0LL
 #define STCstatic       1LL
@@ -90,6 +87,7 @@ struct Symbol;
 #define STCscopeinferred 0x2000000000000LL // 'scope' has been inferred and should not be part of mangling
 #define STCfuture        0x4000000000000LL // introducing new base class function
 #define STClocal         0x8000000000000LL // do not forward (see dmd.dsymbol.ForwardingScopeDsymbol).
+#define STCreturninferred 0x10000000000000LL   // 'return' has been inferred and should not be part of mangling
 
 void ObjectNotFound(Identifier *id);
 
@@ -161,10 +159,6 @@ public:
 
     TupleDeclaration *isTupleDeclaration() { return this; }
     void accept(Visitor *v) { v->visit(this); }
-
-#if IN_LLVM
-    void semantic3(Scope *sc);
-#endif
 };
 
 /**************************************************************/
@@ -224,6 +218,9 @@ public:
     bool ctorinit;              // it has been initialized in a ctor
     bool iscatchvar;            // this is the exception object variable in catch() clause
     bool onstack;               // it is a class that was allocated on the stack
+#if IN_LLVM
+    bool onstackWithDtor;       // it is a class that was allocated on the stack and needs destruction
+#endif
     bool mynew;                 // it is a class new'd with custom operator new
     int canassign;              // it can be assigned to
     bool overlapped;            // if it is a field and has overlapping
@@ -239,10 +236,6 @@ public:
     int ctfeAdrOnStack;
     Expression *edtor;          // if !=NULL, does the destruction of the variable
     IntRange *range;            // if !NULL, the variable is known to be within the range
-
-#if IN_LLVM
-    TypeClass *scopeClassType;  // real (dynamic) type if onstack == true (stack-allocated class)
-#endif
 
     VarDeclarations *maybes;    // STCmaybescope variables that are assigned to this STCmaybescope variable
 
@@ -473,7 +466,6 @@ public:
         VarDeclaration *selector;
     };
 
-    Types *fthrows;                     // Array of Type's of exceptions (not used)
     Statements *frequires;              // in contracts
     Ensures *fensures;                  // out contracts
     Statement *frequire;                // lowered in contract
@@ -484,14 +476,12 @@ public:
     FuncDeclaration *fdrequire;         // function that does the in contract
     FuncDeclaration *fdensure;          // function that does the out contract
 
+    Expressions *fdrequireParams;       // argument list for __require
+    Expressions *fdensureParams;        // argument list for __ensure
+
     const char *mangleString;           // mangled symbol created from mangleExact()
 
 #if IN_LLVM
-    // Argument lists for the __require/__ensure calls. NULL if not a virtual
-    // function with contracts.
-    Expressions *fdrequireParams;
-    Expressions *fdensureParams;
-
     const char *intrinsicName;
     uint32_t priority;
 
@@ -602,7 +592,8 @@ public:
     bool inUnittest();
     MATCH leastAsSpecialized(FuncDeclaration *g);
     LabelDsymbol *searchLabel(Identifier *ident);
-    int getLevel(const Loc &loc, Scope *sc, FuncDeclaration *fd); // lexical nesting level difference
+    int getLevel(FuncDeclaration *fd, int intypeof); // lexical nesting level difference
+    int getLevelAndCheck(const Loc &loc, Scope *sc, FuncDeclaration *fd);
     const char *toPrettyChars(bool QualifyTypes = false);
     const char *toFullSignature();  // for diagnostics, e.g. 'int foo(int x, int y) pure'
     bool isMain() const;
@@ -638,17 +629,12 @@ public:
     virtual bool addPreInvariant();
     virtual bool addPostInvariant();
     const char *kind() const;
-    FuncDeclaration *isUnique();
+    bool isUnique();
     bool needsClosure();
     bool hasNestedFrameRefs();
     void buildResultVar(Scope *sc, Type *tret);
-#if IN_LLVM
-    Statement *mergeFrequire(Statement *, Expressions *params = nullptr);
-    Statement *mergeFensure(Statement *, Identifier *oid, Expressions *params = nullptr);
-#else
-    Statement *mergeFrequire(Statement *);
-    Statement *mergeFensure(Statement *, Identifier *oid);
-#endif
+    Statement *mergeFrequire(Statement *, Expressions *);
+    Statement *mergeFensure(Statement *, Identifier *oid, Expressions *);
     ParameterList getParameterList();
 
     static FuncDeclaration *genCfunc(Parameters *args, Type *treturn, const char *name, StorageClass stc=0);
@@ -700,6 +686,7 @@ public:
 class CtorDeclaration : public FuncDeclaration
 {
 public:
+    bool isCpCtor;
     Dsymbol *syntaxCopy(Dsymbol *);
     const char *kind() const;
     const char *toChars();

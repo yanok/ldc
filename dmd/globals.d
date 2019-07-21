@@ -24,7 +24,7 @@ template xversion(string s)
 }
 
 enum IN_LLVM    = xversion!`IN_LLVM`;
-enum IN_LLVM_MSVC = xversion!`IN_LLVM_MSVC`;
+
 version(IN_WEKA)
 {
     bool IN_WEKA() { return global.params.enableWekaMods; }
@@ -58,7 +58,7 @@ version (IN_LLVM)
     alias OUTPUTFLAGset     = OUTPUTFLAG.OUTPUTFLAGset;
 }
 
-enum Diagnostic : ubyte
+enum DiagnosticReporting : ubyte
 {
     error,        // generate an error
     inform,       // generate a warning
@@ -105,7 +105,7 @@ Each flag represents a field that can be included in the JSON output.
 
 NOTE: set type to uint so its size matches C++ unsigned type
 */
-enum JsonFieldFlags : uint
+enum JsonFieldFlags : int // IN_LLVM: changed from uint to int due to https://issues.dlang.org/show_bug.cgi?id=19658
 {
     none         = 0,
     compilerInfo = (1 << 0),
@@ -156,7 +156,7 @@ struct Param
     bool isSolaris;         // generate code for Solaris
     bool hasObjectiveC;     // target supports Objective-C
     bool mscoff = false;    // for Win32: write MsCoff object files instead of OMF
-    Diagnostic useDeprecated = Diagnostic.inform;  // how use of deprecated features are handled
+    DiagnosticReporting useDeprecated = DiagnosticReporting.inform;  // how use of deprecated features are handled
     bool stackstomp;            // add stack stomping code
     bool useUnitTests;          // generate unittest code
     bool useInline = false;     // inline expand functions
@@ -164,7 +164,7 @@ struct Param
     bool noDIP25;           // revert to pre-DIP25 behavior
     bool release;           // build release version
     bool preservePaths;     // true means don't strip path from source file
-    Diagnostic warnings = Diagnostic.off;  // how compiler warnings are handled
+    DiagnosticReporting warnings = DiagnosticReporting.off;  // how compiler warnings are handled
     bool pic;               // generate position-independent-code for shared libs
     bool color;             // use ANSI colors in console output
     bool cov;               // generate code coverage data
@@ -285,42 +285,58 @@ struct Param
     const(char)* exefile;
     const(char)* mapfile;
 
-    version (IN_LLVM)
+    /* LDC: unused function featuring syntax not supported by ltsmaster
+    // generate code for POSIX
+    @property bool isPOSIX() scope const pure nothrow @nogc @safe
+    out(result) { assert(result || isWindows); }
+    do
     {
-        Array!(const(char)*) bitcodeFiles; // LLVM bitcode files passed on cmdline
-
-        uint nestedTmpl; // maximum nested template instantiations
-
-        // LDC stuff
-        OUTPUTFLAG output_ll;
-        OUTPUTFLAG output_bc;
-        OUTPUTFLAG output_s;
-        OUTPUTFLAG output_o;
-        bool useInlineAsm;
-        bool verbose_cg;
-        bool fullyQualifiedObjectFiles;
-        bool cleanupObjectFiles;
-
-        // Profile-guided optimization:
-        const(char)* datafileInstrProf; // Either the input or output file for PGO data
-
-        // target stuff
-        const(void)* targetTriple; // const llvm::Triple*
-
-        // Codegen cl options
-        bool disableRedZone;
-        uint dwarfVersion;
-
-        uint hashThreshold; // MD5 hash symbols larger than this threshold (0 = no hashing)
-
-        bool outputSourceLocations; // if true, output line tables.
-
-        version (IN_WEKA)
-        {
-            bool enableWekaMods; // Enable specific Weka mods like the template instantiation mods
-            uint templateCodegenDepth; // Don't codegen templates beyond this recusion depth.
-        }
+        return isLinux
+            || isOSX
+            || isFreeBSD
+            || isOpenBSD
+            || isDragonFlyBSD
+            || isSolaris;
     }
+    */
+
+version (IN_LLVM)
+{
+    Array!(const(char)*) bitcodeFiles; // LLVM bitcode files passed on cmdline
+
+    uint nestedTmpl; // maximum nested template instantiations
+
+    // LDC stuff
+    OUTPUTFLAG output_ll;
+    OUTPUTFLAG output_bc;
+    OUTPUTFLAG output_s;
+    OUTPUTFLAG output_o;
+    bool useInlineAsm;
+    bool verbose_cg;
+    bool fullyQualifiedObjectFiles;
+    bool cleanupObjectFiles;
+
+    // Profile-guided optimization:
+    const(char)* datafileInstrProf; // Either the input or output file for PGO data
+
+    // target stuff
+    const(void)* targetTriple; // const llvm::Triple*
+    bool isUClibcEnvironment;
+
+    // Codegen cl options
+    bool disableRedZone;
+    uint dwarfVersion;
+
+    uint hashThreshold; // MD5 hash symbols larger than this threshold (0 = no hashing)
+
+    bool outputSourceLocations; // if true, output line tables.
+
+    version (IN_WEKA)
+    {
+        bool enableWekaMods; // Enable specific Weka mods like the template instantiation mods
+        uint templateCodegenDepth; // Don't codegen templates beyond this recusion depth.
+    }
+} // IN_LLVM
 }
 
 alias structalign_t = uint;
@@ -334,16 +350,16 @@ struct Global
     const(char)* inifilename;
     const(char)* mars_ext = "d";
     const(char)* obj_ext;
-    version (IN_LLVM)
-    {
-        const(char)* ll_ext;
-        const(char)* bc_ext;
-        const(char)* s_ext;
-        const(char)* ldc_version;
-        const(char)* llvm_version;
+version (IN_LLVM)
+{
+    const(char)* ll_ext;
+    const(char)* bc_ext;
+    const(char)* s_ext;
+    const(char)* ldc_version;
+    const(char)* llvm_version;
 
-        bool gaggedForInlining; // Set for functionSemantic3 for external inlining candidates
-    }
+    bool gaggedForInlining; // Set for functionSemantic3 for external inlining candidates
+}
     const(char)* lib_ext;
     const(char)* dll_ext;
     const(char)* doc_ext = "html";      // for Ddoc generated files
@@ -359,7 +375,7 @@ struct Global
     Array!(const(char)*)* path;         // Array of char*'s which form the import lookup path
     Array!(const(char)*)* filePath;     // Array of char*'s which form the file import lookup path
 
-    const(char)* _version;
+    string _version;
     const(char)* vendor;    // Compiler backend name
 
     Param params;
@@ -476,14 +492,14 @@ else
         {
             params.mscoff = params.is64bit;
         }
-}
+} // !IN_LLVM
 version (IN_LLVM)
 {
         vendor = "LDC";
 }
 else
 {
-        _version = (import("VERSION") ~ '\0').ptr;
+        _version = import("VERSION") ~ '\0';
         vendor = "Digital Mars D";
 }
 
@@ -518,7 +534,7 @@ else
             uint major = 0;
             uint minor = 0;
             bool point = false;
-            for (const(char)* p = _version + 1;; p++)
+            for (const(char)* p = _version.ptr + 1;; p++)
             {
                 const c = *p;
                 if (isdigit(cast(char)c))
@@ -580,7 +596,7 @@ nothrow:
         this.filename = filename;
     }
 
-    extern (C++) const(char)* toChars() const
+    extern (C++) const(char)* toChars(bool showColumns = global.params.showColumns) const pure nothrow
     {
         OutBuffer buf;
         if (filename)
@@ -591,7 +607,7 @@ nothrow:
         {
             buf.writeByte('(');
             buf.print(linnum);
-            if (global.params.showColumns && charnum)
+            if (showColumns && charnum)
             {
                 buf.writeByte(',');
                 buf.print(charnum);
@@ -601,11 +617,43 @@ nothrow:
         return buf.extractString();
     }
 
+    /* Checks for equivalence,
+     * a) comparing the filename contents (not the pointer), case-
+     *    insensitively on Windows, and
+     * b) ignoring charnum if `global.params.showColumns` is false.
+     */
     extern (C++) bool equals(ref const(Loc) loc) const
     {
         return (!global.params.showColumns || charnum == loc.charnum) &&
                linnum == loc.linnum &&
                FileName.equals(filename, loc.filename);
+    }
+
+    /* opEquals() / toHash() for AA key usage:
+     *
+     * Compare filename contents (case-sensitively on Windows too), not
+     * the pointer - a static foreach loop repeatedly mixing in a mixin
+     * may lead to multiple equivalent filenames (`foo.d-mixin-<line>`),
+     * e.g., for test/runnable/test18880.d.
+     */
+    extern (D) bool opEquals(ref const(Loc) loc) const @trusted pure nothrow @nogc
+    {
+        import core.stdc.string : strcmp;
+
+        return charnum == loc.charnum &&
+               linnum == loc.linnum &&
+               (filename == loc.filename ||
+                (filename && loc.filename && strcmp(filename, loc.filename) == 0));
+    }
+
+    extern (D) size_t toHash() const @trusted pure nothrow
+    {
+        import dmd.utils : toDString;
+
+        auto hash = hashOf(linnum);
+        hash = hashOf(charnum, hash);
+        hash = hashOf(filename.toDString, hash);
+        return hash;
     }
 
     /******************

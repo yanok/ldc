@@ -13,6 +13,7 @@
 #include "root/rmem.h" // for d_size_t
 
 #include "arraytypes.h"
+#include "ast_node.h"
 #include "globals.h"
 #include "visitor.h"
 
@@ -21,6 +22,7 @@
 #endif
 
 struct Scope;
+class AggregateDeclaration;
 class Identifier;
 class Expression;
 class StructDeclaration;
@@ -43,9 +45,13 @@ typedef class IrType type;
 typedef struct TYPE type;
 #endif
 
+void semanticTypeInfo(Scope *sc, Type *t);
+
+#if IN_LLVM
+// in typesem.d:
 Type *typeSemantic(Type *t, Loc loc, Scope *sc);
 Type *merge(Type *type);
-void semanticTypeInfo(Scope *sc, Type *t);
+#endif
 
 enum ENUMTY
 {
@@ -140,7 +146,7 @@ enum VarArg
                          ///   or https://dlang.org/spec/function.html#typesafe_variadic_functions
 };
 
-class Type : public RootObject
+class Type : public ASTNode
 {
 public:
     TY ty;
@@ -238,7 +244,7 @@ public:
     static Type *basic[TMAX];
 
     virtual const char *kind();
-    Type *copy();
+    Type *copy() const;
     virtual Type *syntaxCopy();
     bool equals(RootObject *o);
     bool equivalent(Type *t);
@@ -254,8 +260,8 @@ public:
     virtual unsigned alignsize();
     Type *trySemantic(const Loc &loc, Scope *sc);
     Type *merge2();
-    void modToBuffer(OutBuffer *buf);
-    char *modToChars();
+    void modToBuffer(OutBuffer *buf) const;
+    char *modToChars() const;
 
     virtual bool isintegral();
     virtual bool isfloating();   // real, imaginary, or complex
@@ -278,7 +284,7 @@ public:
     bool isWildConst() const   { return (mod & MODwildconst) == MODwildconst; }
     bool isSharedWild() const  { return (mod & (MODshared | MODwild)) == (MODshared | MODwild); }
     bool isNaked() const       { return mod == 0; }
-    Type *nullAttributes();
+    Type *nullAttributes() const;
     Type *constOf();
     Type *immutableOf();
     Type *mutableOf();
@@ -356,7 +362,7 @@ public:
     TypeSlice *isTypeSlice();
     TypeNull *isTypeNull();
 
-    virtual void accept(Visitor *v) { v->visit(this); }
+    void accept(Visitor *v) { v->visit(this); }
 };
 
 class TypeError : public Type
@@ -402,9 +408,6 @@ public:
     Type *syntaxCopy();
     d_uns64 size(const Loc &loc) /*const*/;
     unsigned alignsize();
-#if IN_LLVM
-    structalign_t alignment();
-#endif
     bool isintegral();
     bool isfloating() /*const*/;
     bool isreal() /*const*/;
@@ -446,7 +449,6 @@ public:
 class TypeArray : public TypeNext
 {
 public:
-    Expression *dotExp(Scope *sc, Expression *e, Identifier *ident, int flag);
     void accept(Visitor *v) { v->visit(this); }
 };
 
@@ -589,6 +591,7 @@ public:
     bool isref;         // true: returns a reference
     bool isreturn;      // true: 'this' is returned by ref
     bool isscope;       // true: 'this' is scope
+    bool isreturninferred;      // true: 'this' is return from inference
     bool isscopeinferred; // true: 'this' is scope from inference
     LINK linkage;  // calling convention
     TRUST trust;   // level of trust
@@ -855,7 +858,7 @@ public:
 
 //enum InOut { None, In, Out, InOut, Lazy };
 
-class Parameter : public RootObject
+class Parameter : public ASTNode
 {
 public:
     //enum InOut inout;
@@ -871,7 +874,7 @@ public:
     Type *isLazyArray();
     // kludge for template.isType()
     DYNCAST dyncast() const { return DYNCAST_PARAMETER; }
-    virtual void accept(Visitor *v) { v->visit(this); }
+    void accept(Visitor *v) { v->visit(this); }
 
     static size_t dim(Parameters *parameters);
     static Parameter *getNth(Parameters *parameters, d_size_t nth, d_size_t *pn = NULL);
@@ -881,3 +884,6 @@ public:
 
 bool arrayTypeCompatible(Loc loc, Type *t1, Type *t2);
 bool arrayTypeCompatibleWithoutCasting(Type *t1, Type *t2);
+
+// If the type is a class or struct, returns the symbol for it, else null.
+AggregateDeclaration *isAggregate(Type *t);

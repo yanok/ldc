@@ -34,11 +34,7 @@ import dmd.target;
 import dmd.tokens;
 import dmd.visitor;
 
-version (IN_LLVM)
-{
-    import gen.dpragma;
-}
-
+version (IN_LLVM) import gen.dpragma;
 
 /***********************************************************
  */
@@ -48,6 +44,12 @@ extern (C++) abstract class AttribDeclaration : Dsymbol
 
     extern (D) this(Dsymbols* decl)
     {
+        this.decl = decl;
+    }
+
+    extern (D) this(const ref Loc loc, Identifier ident, Dsymbols* decl)
+    {
+        super(loc, ident);
         this.decl = decl;
     }
 
@@ -370,11 +372,11 @@ extern (C++) final class LinkDeclaration : AttribDeclaration
 {
     LINK linkage;
 
-    extern (D) this(LINK p, Dsymbols* decl)
+    extern (D) this(LINK linkage, Dsymbols* decl)
     {
         super(decl);
-        //printf("LinkDeclaration(linkage = %d, decl = %p)\n", p, decl);
-        linkage = (p == LINK.system) ? target.systemLinkage() : p;
+        //printf("LinkDeclaration(linkage = %d, decl = %p)\n", linkage, decl);
+        this.linkage = (linkage == LINK.system) ? target.systemLinkage() : linkage;
     }
 
     static LinkDeclaration create(LINK p, Dsymbols* decl)
@@ -411,11 +413,11 @@ extern (C++) final class CPPMangleDeclaration : AttribDeclaration
 {
     CPPMANGLE cppmangle;
 
-    extern (D) this(CPPMANGLE p, Dsymbols* decl)
+    extern (D) this(CPPMANGLE cppmangle, Dsymbols* decl)
     {
         super(decl);
-        //printf("CPPMangleDeclaration(cppmangle = %d, decl = %p)\n", p, decl);
-        cppmangle = p;
+        //printf("CPPMangleDeclaration(cppmangle = %d, decl = %p)\n", cppmangle, decl);
+        this.cppmangle = cppmangle;
     }
 
     override Dsymbol syntaxCopy(Dsymbol s)
@@ -451,14 +453,13 @@ extern (C++) final class ProtDeclaration : AttribDeclaration
     /**
      * Params:
      *  loc = source location of attribute token
-     *  p = protection attribute data
+     *  protection = protection attribute data
      *  decl = declarations which are affected by this protection attribute
      */
-    extern (D) this(const ref Loc loc, Prot p, Dsymbols* decl)
+    extern (D) this(const ref Loc loc, Prot protection, Dsymbols* decl)
     {
-        super(decl);
-        this.loc = loc;
-        this.protection = p;
+        super(loc, null, decl);
+        this.protection = protection;
         //printf("decl = %p\n", decl);
     }
 
@@ -470,8 +471,7 @@ extern (C++) final class ProtDeclaration : AttribDeclaration
      */
     extern (D) this(const ref Loc loc, Identifiers* pkg_identifiers, Dsymbols* decl)
     {
-        super(decl);
-        this.loc = loc;
+        super(loc, null, decl);
         this.protection.kind = Prot.Kind.package_;
         this.pkg_identifiers = pkg_identifiers;
         if (pkg_identifiers !is null && pkg_identifiers.dim > 0)
@@ -552,8 +552,7 @@ extern (C++) final class AlignDeclaration : AttribDeclaration
 
     extern (D) this(const ref Loc loc, Expression ealign, Dsymbols* decl)
     {
-        super(decl);
-        this.loc = loc;
+        super(loc, null, decl);
         this.ealign = ealign;
     }
 
@@ -561,7 +560,8 @@ extern (C++) final class AlignDeclaration : AttribDeclaration
     {
         assert(!s);
         return new AlignDeclaration(loc,
-            ealign.syntaxCopy(), Dsymbol.arraySyntaxCopy(decl));
+            ealign ? ealign.syntaxCopy() : null,
+            Dsymbol.arraySyntaxCopy(decl));
     }
 
     override Scope* newScope(Scope* sc)
@@ -587,8 +587,7 @@ extern (C++) final class AnonDeclaration : AttribDeclaration
 
     extern (D) this(const ref Loc loc, bool isunion, Dsymbols* decl)
     {
-        super(decl);
-        this.loc = loc;
+        super(loc, null, decl);
         this.isunion = isunion;
     }
 
@@ -704,9 +703,7 @@ extern (C++) final class PragmaDeclaration : AttribDeclaration
 
     extern (D) this(const ref Loc loc, Identifier ident, Expressions* args, Dsymbols* decl)
     {
-        super(decl);
-        this.loc = loc;
-        this.ident = ident;
+        super(loc, ident, decl);
         this.args = args;
     }
 
@@ -748,14 +745,19 @@ extern (C++) final class PragmaDeclaration : AttribDeclaration
             }
             return createNewScope(sc, sc.stc, sc.linkage, sc.cppmangle, sc.protection, sc.explicitProtection, sc.aligndecl, inlining);
         }
-        else if (IN_LLVM && ident == Id.LDC_profile_instr) {
+        else if (IN_LLVM && ident == Id.LDC_profile_instr)
+        {
             bool emitInstr = true;
-            if (!args || args.dim != 1 || !DtoCheckProfileInstrPragma((*args)[0], emitInstr)) {
+            if (!args || args.dim != 1 || !DtoCheckProfileInstrPragma((*args)[0], emitInstr))
+            {
                 error("pragma(LDC_profile_instr, true or false) expected");
                 (*args)[0] = new ErrorExp();
-            } else {
+            }
+            else
+            {
                 // Only create a new scope if the emitInstrumentation flag is changed
-                if (sc.emitInstrumentation != emitInstr) {
+                if (sc.emitInstrumentation != emitInstr)
+                {
                     auto newscope = sc.copy();
                     newscope.emitInstrumentation = emitInstr;
                     return newscope;
@@ -1143,9 +1145,8 @@ extern (C++) final class CompileDeclaration : AttribDeclaration
 
     extern (D) this(const ref Loc loc, Expressions* exps)
     {
-        super(null);
+        super(loc, null, null);
         //printf("CompileDeclaration(loc = %d)\n", loc.linnum);
-        this.loc = loc;
         this.exps = exps;
     }
 

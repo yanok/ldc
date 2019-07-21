@@ -82,6 +82,7 @@ DValue *DtoNewClass(Loc &loc, TypeClass *tc, NewExp *newexp) {
 
   // allocate
   LLValue *mem;
+  bool doInit = true;
   if (newexp->onstack) {
     unsigned alignment = tc->sym->alignsize;
     if (alignment == STRUCTALIGN_DEFAULT)
@@ -98,17 +99,23 @@ DValue *DtoNewClass(Loc &loc, TypeClass *tc, NewExp *newexp) {
   }
   // default allocator
   else {
-    llvm::Function *fn =
-        getRuntimeFunction(loc, gIR->module, "_d_allocclass");
+    const bool useEHAlloc = global.params.ehnogc && newexp->thrownew;
+    llvm::Function *fn = getRuntimeFunction(
+        loc, gIR->module, useEHAlloc ? "_d_newThrowable" : "_d_allocclass");
     LLConstant *ci = DtoBitCast(getIrAggr(tc->sym)->getClassInfoSymbol(),
                                 DtoType(getClassInfoType()));
-    mem =
-        gIR->CreateCallOrInvoke(fn, ci, ".newclass_gc_alloc").getInstruction();
-    mem = DtoBitCast(mem, DtoType(tc), ".newclass_gc");
+    mem = gIR->CreateCallOrInvoke(fn, ci,
+                                  useEHAlloc ? ".newthrowable_alloc"
+                                             : ".newclass_gc_alloc")
+              .getInstruction();
+    mem = DtoBitCast(mem, DtoType(tc),
+                     useEHAlloc ? ".newthrowable" : ".newclass_gc");
+    doInit = !useEHAlloc;
   }
 
   // init
-  DtoInitClass(tc, mem);
+  if (doInit)
+    DtoInitClass(tc, mem);
 
   // init inner-class outer reference
   if (newexp->thisexp) {
@@ -197,26 +204,8 @@ void DtoFinalizeClass(Loc &loc, LLValue *inst) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void DtoFinalizeScopeClass(Loc &loc, LLValue *inst, ClassDeclaration *cd) {
-  if (!isOptimizationEnabled()) {
-    DtoFinalizeClass(loc, inst);
-    return;
-  }
-
-  assert(cd);
-  // As of 2.077, the front-end doesn't emit the implicit delete() for C++
-  // classes, so this code assumes D classes.
-  assert(!cd->isCPPclass());
-
-  bool hasDtor = false;
-  for (; cd; cd = cd->baseClass) {
-    if (cd->dtor) {
-      hasDtor = true;
-      break;
-    }
-  }
-
-  if (hasDtor) {
+void DtoFinalizeScopeClass(Loc &loc, LLValue *inst, bool hasDtor) {
+  if (!isOptimizationEnabled() || hasDtor) {
     DtoFinalizeClass(loc, inst);
     return;
   }

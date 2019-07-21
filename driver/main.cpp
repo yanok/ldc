@@ -100,7 +100,7 @@ static cl::opt<bool> enableGC(
 // This function exits the program.
 void printVersion(llvm::raw_ostream &OS) {
   OS << "LDC - the LLVM D compiler (" << global.ldc_version << "):\n";
-  OS << "  based on DMD " << global.version << " and LLVM "
+  OS << "  based on DMD " << global.version.ptr << " and LLVM "
      << global.llvm_version << "\n";
   OS << "  built with " << ldc::built_with_Dcompiler_version << "\n";
 #if IN_WEKA
@@ -143,9 +143,6 @@ void printVersionStdout() {
 }
 
 namespace {
-
-// True when target triple has an uClibc environment
-bool isUClibc = false;
 
 // Helper function to handle -d-debug=* and -d-version=*
 void processVersions(std::vector<std::string> &list, const char *type,
@@ -309,7 +306,7 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
   if (global.params.verbose) {
     message("binary    %s", exe_path::getExePath().c_str());
     message("version   %s (DMD %s, LLVM %s)", global.ldc_version,
-            global.version, global.llvm_version);
+            global.version.ptr, global.llvm_version);
     if (global.inifilename) {
       message("config    %s (%s)", global.inifilename, cfg_triple.c_str());
     }
@@ -544,7 +541,7 @@ void fixupUClibcEnv() {
   envName.replace(0, 6, "gnu");
   triple.setEnvironmentName(envName);
   mTargetTriple = triple.normalize();
-  isUClibc = true;
+  global.params.isUClibcEnvironment = true;
 }
 
 /// Register the float ABI.
@@ -738,9 +735,9 @@ void registerPredefinedTargetVersions() {
     if (triple.getEnvironment() == llvm::Triple::Android) {
       VersionCondition::addPredefinedGlobalIdent("Android");
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Bionic");
-    } else if (isMusl()) {
+    } else if (triple.isMusl()) {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Musl");
-    } else if (isUClibc) {
+    } else if (global.params.isUClibcEnvironment) {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_UClibc");
     } else {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Glibc");
@@ -913,7 +910,7 @@ int cppmain(int argc, char **argv) {
 
   // Older host druntime versions need druntime to be initialized before
   // disabling the GC, so we cannot disable it in C main above.
-  if (!mem.isGCEnabled)
+  if (!mem.isGCEnabled())
     gc_disable();
 
   exe_path::initialize(argv[0]);
@@ -930,7 +927,8 @@ int cppmain(int argc, char **argv) {
   argv = filteredArgs.data();
 
   global._init();
-  global.version = ldc::dmd_version;
+  // global.version includes the terminating null
+  global.version = {strlen(ldc::dmd_version) + 1, ldc::dmd_version};
   global.ldc_version = ldc::ldc_version;
   global.llvm_version = ldc::llvm_version;
 
@@ -1081,9 +1079,9 @@ void codegenModules(Modules &modules) {
     if (!computeModules.empty()) {
       for (auto &mod : computeModules)
         dccg.emit(mod);
-
-      dccg.writeModules();
     }
+    dccg.writeModules();
+
     // We may have removed all object files, if so don't link.
     if (global.params.objfiles.dim == 0)
       global.params.link = false;

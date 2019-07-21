@@ -55,6 +55,7 @@ import dmd.target;
 import dmd.tokens;
 import dmd.typesem;
 import dmd.visitor;
+
 version (IN_LLVM) import gen.dpragma;
 
 /*****************************************
@@ -386,8 +387,7 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
             }
         }
 
-        // IN_LLVM replaced: if (cs.statements.length == 1)
-        if (cs.statements.length == 1 && !cs.isCompoundAsmBlockStatement())
+        if (cs.statements.length == 1 && (!IN_LLVM || !cs.isCompoundAsmBlockStatement()))
         {
             result = (*cs.statements)[0];
             return;
@@ -1496,12 +1496,53 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                 e = new VarExp(loc, r);
                 Expression einit = new DotIdExp(loc, e, idfront);
                 Statement makeargs, forbody;
+                bool ignoreRef = false; // If a range returns a non-ref front we ignore ref on foreach
+
+                Type tfront;
+                if (auto fd = sfront.isFuncDeclaration())
+                {
+                    if (!fd.functionSemantic())
+                        goto Lrangeerr;
+                    tfront = fd.type;
+                }
+                else if (auto td = sfront.isTemplateDeclaration())
+                {
+                    Expressions a;
+                    if (auto f = resolveFuncCall(loc, sc, td, null, tab, &a, FuncResolveFlag.quiet))
+                        tfront = f.type;
+                }
+                else if (auto d = sfront.isDeclaration())
+                {
+                    tfront = d.type;
+                }
+                if (!tfront || tfront.ty == Terror)
+                    goto Lrangeerr;
+                if (tfront.toBasetype().ty == Tfunction)
+                {
+                    auto ftt = cast(TypeFunction)tfront.toBasetype();
+                    tfront = tfront.toBasetype().nextOf();
+                    if (!ftt.isref)
+                    {
+                        // .front() does not return a ref. We ignore ref on foreach arg.
+                        // see https://issues.dlang.org/show_bug.cgi?id=11934
+                        if (tfront.needsDestruction()) ignoreRef = true;
+                    }
+                }
+                if (tfront.ty == Tvoid)
+                {
+                    fs.error("`%s.front` is `void` and has no value", oaggr.toChars());
+                    goto case Terror;
+                }
+
                 if (dim == 1)
                 {
                     auto p = (*fs.parameters)[0];
                     auto ve = new VarDeclaration(loc, p.type, p.ident, new ExpInitializer(loc, einit));
                     ve.storage_class |= STC.foreach_;
                     ve.storage_class |= p.storageClass & (STC.in_ | STC.out_ | STC.ref_ | STC.TYPECTOR);
+
+                    if (ignoreRef)
+                        ve.storage_class &= ~STC.ref_;
 
                     makeargs = new ExpStatement(loc, ve);
                 }
@@ -1510,33 +1551,6 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                     auto vd = copyToTemp(STC.ref_, "__front", einit);
                     vd.dsymbolSemantic(sc);
                     makeargs = new ExpStatement(loc, vd);
-
-                    Type tfront;
-                    if (auto fd = sfront.isFuncDeclaration())
-                    {
-                        if (!fd.functionSemantic())
-                            goto Lrangeerr;
-                        tfront = fd.type;
-                    }
-                    else if (auto td = sfront.isTemplateDeclaration())
-                    {
-                        Expressions a;
-                        if (auto f = resolveFuncCall(loc, sc, td, null, tab, &a, FuncResolveFlag.quiet))
-                            tfront = f.type;
-                    }
-                    else if (auto d = sfront.isDeclaration())
-                    {
-                        tfront = d.type;
-                    }
-                    if (!tfront || tfront.ty == Terror)
-                        goto Lrangeerr;
-                    if (tfront.toBasetype().ty == Tfunction)
-                        tfront = tfront.toBasetype().nextOf();
-                    if (tfront.ty == Tvoid)
-                    {
-                        fs.error("`%s.front` is `void` and has no value", oaggr.toChars());
-                        goto case Terror;
-                    }
 
                     // Resolve inout qualifier of front type
                     tfront = tfront.substWildTo(tab.mod);
@@ -1573,7 +1587,10 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                         }
                         if (!p.type)
                             p.type = exp.type;
-                        p.type = p.type.addStorageClass(p.storageClass).typeSemantic(loc, sc2);
+
+                        auto sc = p.storageClass;
+                        if (ignoreRef) sc &= ~STC.ref_;
+                        p.type = p.type.addStorageClass(sc).typeSemantic(loc, sc2);
                         if (!exp.implicitConvTo(p.type))
                             goto Lrangeerr;
 
@@ -1985,10 +2002,7 @@ else
                 Statement s = new ExpStatement(fs.loc, v);
                 fs._body = new CompoundStatement(fs.loc, s, fs._body);
             }
-version (IN_LLVM)
-            params.push(new Parameter(stc, para_type, id, null, null));
-else
-            params.push(new Parameter(stc, p.type, id, null, null));
+            params.push(new Parameter(stc, IN_LLVM ? para_type : p.type, id, null, null));
         }
         // https://issues.dlang.org/show_bug.cgi?id=13840
         // Throwable nested function inside nothrow function is acceptable.
@@ -2044,7 +2058,7 @@ else
             else
             {
                 // See if upr-1 fits in prm.type
-                Expression limit = new MinExp(loc, fs.upr, new IntegerExp(1));
+                Expression limit = new MinExp(loc, fs.upr, IntegerExp.literal!1);
                 limit = limit.expressionSemantic(sc);
                 limit = limit.optimize(WANTvalue);
                 if (!limit.implicitConvTo(fs.prm.type))
@@ -2155,7 +2169,7 @@ else
         if (fs.op == TOK.foreach_)
         {
             // key += 1
-            //increment = new AddAssignExp(loc, new VarExp(loc, fs.key), new IntegerExp(1));
+            //increment = new AddAssignExp(loc, new VarExp(loc, fs.key), IntegerExp.literal!1);
             increment = new PreExp(TOK.prePlusPlus, loc, new VarExp(loc, fs.key));
         }
         if ((fs.prm.storageClass & STC.ref_) && fs.prm.type.equals(fs.key.type))
@@ -2226,6 +2240,14 @@ else
                 sdtor = new ScopeGuardStatement(ifs.loc, TOK.onScopeExit, sdtor);
                 ifs.ifbody = new CompoundStatement(ifs.loc, sdtor, ifs.ifbody);
                 ifs.match.storage_class |= STC.nodtor;
+
+                // the destructor is always called
+                // whether the 'ifbody' is executed or not
+                Statement sdtor2 = new DtorExpStatement(ifs.loc, ifs.match.edtor, ifs.match);
+                if (ifs.elsebody)
+                    ifs.elsebody = new CompoundStatement(ifs.loc, sdtor2, ifs.elsebody);
+                else
+                    ifs.elsebody = sdtor2;
             }
         }
         else
@@ -2577,7 +2599,7 @@ else
         ss._body = ss._body.statementSemantic(sc);
         sc.inLoop = inLoopSave;
 
-        if (conditionError || ss._body.isErrorStatement())
+        if (conditionError || (ss._body && ss._body.isErrorStatement()))
         {
             sc.pop();
             return setError();
@@ -2652,7 +2674,7 @@ version (IN_LLVM)
         {
             ss.hasNoDefault = 1;
 
-            if (!ss.isFinal && !ss._body.isErrorStatement())
+            if (!ss.isFinal && (!ss._body || !ss._body.isErrorStatement()))
                 ss.error("`switch` statement without a `default`; use `final switch` or add `default: assert(0);` or add `default: break;`");
 
             // Generate runtime error if the default is hit
@@ -2711,7 +2733,8 @@ version (IN_LLVM)
          + at which point sdefault may still be null, therefore
          + set sdefault.gototarget here.
          +/
-        if (ss.hasGotoDefault) {
+        if (ss.hasGotoDefault)
+        {
             assert(ss.sdefault);
             ss.sdefault.gototarget = true;
         }
@@ -3086,10 +3109,11 @@ version (IN_LLVM)
             gcs.error("`goto case` not in `switch` statement");
             return setError();
         }
-        version (IN_LLVM)
-        {
-            gcs.sw = sc.sw;
-        }
+
+version (IN_LLVM)
+{
+        gcs.sw = sc.sw;
+}
 
         if (gcs.exp)
         {
@@ -3372,7 +3396,7 @@ version (IN_LLVM)
             else if (fd.isMain())
             {
                 // main() returns 0, even if it returns void
-                rs.exp = new IntegerExp(0);
+                rs.exp = IntegerExp.literal!0;
             }
         }
 
@@ -3448,8 +3472,15 @@ version (IN_LLVM)
         }
         if (e0)
         {
-            result = new CompoundStatement(rs.loc, new ExpStatement(rs.loc, e0), rs);
-            return;
+            if (e0.op == TOK.declaration || e0.op == TOK.comma)
+            {
+                rs.exp = Expression.combine(e0, rs.exp);
+            }
+            else
+            {
+                result = new CompoundStatement(rs.loc, new ExpStatement(rs.loc, e0), rs);
+                return;
+            }
         }
         result = rs;
     }
@@ -3499,9 +3530,10 @@ version (IN_LLVM)
                         bs.error("cannot break out of `finally` block");
                     else
                     {
-                        version (IN_LLVM)
-                            bs.target = ls;
-
+version (IN_LLVM)
+{
+                        bs.target = ls;
+}
                         ls.breaks = true;
                         result = bs;
                         return;
@@ -3521,7 +3553,7 @@ version (IN_LLVM)
             else if (sc.fes)
             {
                 // Replace break; with return 1;
-                result = new ReturnStatement(Loc.initial, new IntegerExp(1));
+                result = new ReturnStatement(Loc.initial, IntegerExp.literal!1);
                 return;
             }
             else
@@ -3561,7 +3593,7 @@ version (IN_LLVM)
                             if (ls && ls.ident == cs.ident && ls.statement == sc.fes)
                             {
                                 // Replace continue ident; with return 0;
-                                result = new ReturnStatement(Loc.initial, new IntegerExp(0));
+                                result = new ReturnStatement(Loc.initial, IntegerExp.literal!0);
                                 return;
                             }
                         }
@@ -3590,9 +3622,10 @@ version (IN_LLVM)
                         cs.error("cannot continue out of `finally` block");
                     else
                     {
-                        version (IN_LLVM)
-                            cs.target = ls;
-
+version (IN_LLVM)
+{
+                        cs.target = ls;
+}
                         result = cs;
                         return;
                     }
@@ -3611,7 +3644,7 @@ version (IN_LLVM)
             else if (sc.fes)
             {
                 // Replace continue; with return 0;
-                result = new ReturnStatement(Loc.initial, new IntegerExp(0));
+                result = new ReturnStatement(Loc.initial, IntegerExp.literal!0);
                 return;
             }
             else
@@ -4229,12 +4262,19 @@ version (IN_LLVM)
             }
 
             s.dsymbolSemantic(sc);
-            Module.addDeferredSemantic2(s);     // https://issues.dlang.org/show_bug.cgi?id=14666
-            sc.insert(s);
 
-            foreach (aliasdecl; s.aliasdecls)
+            // https://issues.dlang.org/show_bug.cgi?id=19942
+            // If the module that's being imported doesn't exist, don't add it to the symbol table
+            // for the current scope.
+            if (s.mod !is null)
             {
-                sc.insert(aliasdecl);
+                Module.addDeferredSemantic2(s);     // https://issues.dlang.org/show_bug.cgi?id=14666
+                sc.insert(s);
+
+                foreach (aliasdecl; s.aliasdecls)
+                {
+                    sc.insert(aliasdecl);
+                }
             }
         }
         result = imps;

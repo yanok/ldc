@@ -48,20 +48,20 @@ const(char)* toCppMangleMSVC(Dsymbol s)
 const(char)* cppTypeInfoMangleMSVC(Dsymbol s)
 {
     //printf("cppTypeInfoMangle(%s)\n", s.toChars());
-    version (IN_LLVM)
-    {
-        // Return the mangled name of the RTTI Type Descriptor.
-        // Reverse-engineered using a few C++ exception classes.
-        scope VisualCPPMangler v = new VisualCPPMangler(!global.params.mscoff);
-        v.buf.writestring("\1??_R0?AV");
-        v.mangleIdent(s);
-        v.buf.writestring("@8");
-        return v.buf.extractString();
-    }
-    else
-    {
-        assert(0);
-    }
+version (IN_LLVM)
+{
+    // Return the mangled name of the RTTI Type Descriptor.
+    // Reverse-engineered using a few C++ exception classes.
+    scope VisualCPPMangler v = new VisualCPPMangler(!global.params.mscoff);
+    v.buf.writestring("\1??_R0?AV");
+    v.mangleIdent(s);
+    v.buf.writestring("@8");
+    return v.buf.extractString();
+}
+else
+{
+    assert(0);
+}
 }
 
 /**
@@ -464,38 +464,7 @@ else
             if (checkTypeSaved(type))
                 return;
             mangleModifier(type);
-            buf.writeByte('W');
-            switch (type.sym.memtype.ty)
-            {
-            case Tchar:
-            case Tint8:
-                buf.writeByte('0');
-                break;
-            case Tuns8:
-                buf.writeByte('1');
-                break;
-            case Tint16:
-                buf.writeByte('2');
-                break;
-            case Tuns16:
-                buf.writeByte('3');
-                break;
-            case Tint32:
-                buf.writeByte('4');
-                break;
-            case Tuns32:
-                buf.writeByte('5');
-                break;
-            case Tint64:
-                buf.writeByte('6');
-                break;
-            case Tuns64:
-                buf.writeByte('7');
-                break;
-            default:
-                visit(cast(Type)type);
-                break;
-            }
+            buf.writestring("W4");
             mangleIdent(type.sym);
         }
         flags &= ~IS_NOT_TOP_TYPE;

@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "ast_node.h"
 #include "complex_t.h"
 #include "globals.h"
 #include "arraytypes.h"
@@ -45,9 +46,7 @@ struct Symbol;          // back end symbol
 #endif
 
 #if IN_LLVM
-class SymbolDeclaration;
 namespace llvm {
-    class Constant;
     class Value;
 }
 
@@ -81,7 +80,7 @@ enum
 #define WANTexpand 1    // expand const/immutable variables if possible
 #endif
 
-class Expression : public RootObject
+class Expression : public ASTNode
 {
 public:
     TOK op;                     // to minimize use of dynamic_cast
@@ -241,7 +240,7 @@ public:
     FuncInitExp* isFuncInitExp();
     PrettyFuncInitExp* isPrettyFuncInitExp();
 
-    virtual void accept(Visitor *v) { v->visit(this); }
+    void accept(Visitor *v) { v->visit(this); }
 };
 
 class IntegerExp : public Expression
@@ -251,6 +250,8 @@ public:
 
     static IntegerExp *create(Loc loc, dinteger_t value, Type *type);
     static IntegerExp *createi(Loc loc, int value, Type *type);
+    static void emplace(UnionExp *pue, Loc loc, dinteger_t value, Type *type);
+    static void emplacei(UnionExp *pue, Loc loc, int value, Type *type);
     bool equals(RootObject *o);
     dinteger_t toInteger();
     real_t toReal();
@@ -262,6 +263,8 @@ public:
     dinteger_t getInteger() { return value; }
     void setInteger(dinteger_t value);
     void normalize();
+    template<int v>
+    static IntegerExp literal();
 };
 
 class ErrorExp : public Expression
@@ -279,6 +282,7 @@ public:
     real_t value;
 
     static RealExp *create(Loc loc, real_t value, Type *type);
+    static void emplace(UnionExp *pue, Loc loc, real_t value, Type *type);
     bool equals(RootObject *o);
     dinteger_t toInteger();
     uinteger_t toUInteger();
@@ -295,6 +299,7 @@ public:
     complex_t value;
 
     static ComplexExp *create(Loc loc, complex_t value, Type *type);
+    static void emplace(UnionExp *pue, Loc loc, complex_t value, Type *type);
     bool equals(RootObject *o);
     dinteger_t toInteger();
     uinteger_t toUInteger();
@@ -328,6 +333,7 @@ public:
     Dsymbol *s;
     bool hasOverloads;
 
+    Expression *syntaxCopy();
     bool isLvalue();
     Expression *toLvalue(Scope *sc, Expression *e);
     void accept(Visitor *v) { v->visit(this); }
@@ -338,6 +344,7 @@ class ThisExp : public Expression
 public:
     VarDeclaration *var;
 
+    Expression *syntaxCopy();
     bool isBool(bool result);
     bool isLvalue();
     Expression *toLvalue(Scope *sc, Expression *e);
@@ -375,6 +382,8 @@ public:
 
     static StringExp *create(Loc loc, char *s);
     static StringExp *create(Loc loc, void *s, size_t len);
+    static void emplace(UnionExp *pue, Loc loc, char *s);
+    static void emplace(UnionExp *pue, Loc loc, void *s, size_t len);
     bool equals(RootObject *o);
     StringExp *toStringExp();
     StringExp *toUTF8(Scope *sc);
@@ -390,7 +399,7 @@ public:
     const char *toStringz() const
     {
         auto nbytes = len * sz;
-        char* s = (char*)mem.xmalloc(nbytes + sz);
+        char *s = (char *)mem.xmalloc(nbytes + sz);
         writeTo(s, true);
         return s;
     }
@@ -415,6 +424,7 @@ public:
      */
     Expressions *exps;
 
+    static TupleExp *create(Loc loc, Expressions *exps);
     TupleExp *toTupleExp();
     Expression *syntaxCopy();
     bool equals(RootObject *o);
@@ -430,6 +440,7 @@ public:
     OwnedBy ownedByCtfe;
 
     static ArrayLiteralExp *create(Loc loc, Expressions *elements);
+    static void emplace(UnionExp *pue, Loc loc, Expressions *elements);
     Expression *syntaxCopy();
     bool equals(RootObject *o);
     Expression *getElement(d_size_t i);
@@ -464,7 +475,7 @@ public:
     // With the introduction of pointers returned from CTFE, struct literals can
     // now contain pointers to themselves. While in toElem, contains a pointer
     // to the memory used to build the literal for resolving such references.
-    llvm::Value* inProgressMemory;
+    llvm::Value *inProgressMemory;
 #endif
 
     Symbol *sym;                // back end symbol to initialize with literal
@@ -914,6 +925,7 @@ public:
     OwnedBy ownedByCtfe;
 
     static VectorExp *create(Loc loc, Expression *e, Type *t);
+    static void emplace(UnionExp *pue, Loc loc, Expression *e, Type *t);
     Expression *syntaxCopy();
     void accept(Visitor *v) { v->visit(this); }
 };
