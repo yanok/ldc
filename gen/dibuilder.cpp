@@ -9,7 +9,9 @@
 
 #include "gen/dibuilder.h"
 
+#include "dmd/declaration.h"
 #include "dmd/enum.h"
+#include "dmd/errors.h"
 #include "dmd/identifier.h"
 #include "dmd/import.h"
 #include "dmd/ldcbindings.h"
@@ -137,9 +139,13 @@ DIScope DIBuilder::GetSymbolScope(Dsymbol *s) {
     return EmitNamespace(ns, ns->toChars());
   } else if (auto fwd = parent->isForwardingScopeDsymbol()) {
     return GetSymbolScope(fwd);
+  } else if (auto ed = parent->isEnumDeclaration()) {
+    return CreateEnumType(ed->getType());
+  } else {
+    error(parent->loc, "unknown debuginfo scope `%s`; please file an LDC issue",
+          parent->toChars());
+    fatal();
   }
-
-  llvm_unreachable("Unhandled parent");
 }
 
 DIScope DIBuilder::GetCurrentScope() {
@@ -201,7 +207,7 @@ void DIBuilder::SetValue(const Loc &loc, llvm::Value *value,
 DIFile DIBuilder::CreateFile(Loc &loc) {
   const char *filename = loc.filename;
   if (!filename)
-    filename = IR->dmodule->srcfile->toChars();
+    filename = IR->dmodule->srcfile.toChars();
   llvm::SmallString<128> path(filename);
   llvm::sys::fs::make_absolute(path);
 
@@ -210,7 +216,7 @@ DIFile DIBuilder::CreateFile(Loc &loc) {
 }
 
 DIFile DIBuilder::CreateFile() {
-  Loc loc(IR->dmodule->srcfile->toChars(), 0, 0);
+  Loc loc(IR->dmodule->srcfile.toChars(), 0, 0);
   return CreateFile(loc);
 }
 
@@ -312,33 +318,37 @@ DIType DIBuilder::CreateBasicType(Type *type) {
 DIType DIBuilder::CreateEnumType(Type *type) {
   assert(type->ty == Tenum);
 
-  llvm::Type *T = DtoType(type);
-  TypeEnum *te = static_cast<TypeEnum *>(type);
+  llvm::Type *const T = DtoType(type);
+  EnumDeclaration *const ed = static_cast<TypeEnum *>(type)->sym;
+  assert(ed->memtype);
 
-  if (te->sym->isSpecial()) {
-    return CreateBasicType(te->sym->memtype);
+  if (ed->isSpecial()) {
+    return CreateBasicType(ed->memtype);
   }
 
   llvm::SmallVector<LLMetadata *, 8> subscripts;
-  for (auto m : *te->sym->members) {
+  for (auto m : *ed->members) {
     EnumMember *em = m->isEnumMember();
-    llvm::StringRef Name(em->toChars());
-    uint64_t Val = em->value()->toInteger();
-    auto Subscript = DBuilder.createEnumerator(Name, Val);
-    subscripts.push_back(Subscript);
+    if (auto ie = em->value()->isIntegerExp()) {
+      subscripts.push_back(
+          DBuilder.createEnumerator(em->toChars(), ie->toInteger()));
+    } else {
+      subscripts.clear();
+      break;
+    }
   }
 
   DIScope scope = nullptr;
-  const auto name = GetNameAndScope(te->sym, scope);
-  const auto lineNumber = te->sym->loc.linnum;
-  const auto file = CreateFile(te->sym);
+  const auto name = GetNameAndScope(ed, scope);
+  const auto lineNumber = ed->loc.linnum;
+  const auto file = CreateFile(ed);
 
   return DBuilder.createEnumerationType(
       scope, name, file, lineNumber,
       getTypeAllocSize(T) * 8,               // size (bits)
       getABITypeAlign(T) * 8,                // align (bits)
       DBuilder.getOrCreateArray(subscripts), // subscripts
-      CreateTypeDescription(te->sym->memtype));
+      CreateTypeDescription(ed->memtype));
 }
 
 DIType DIBuilder::CreatePointerType(Type *type) {
@@ -492,7 +502,7 @@ DIType DIBuilder::CreateMemberType(unsigned linnum, Type *type, DIFile file,
 
 void DIBuilder::AddFields(AggregateDeclaration *ad, DIFile file,
                           llvm::SmallVector<LLMetadata *, 16> &elems) {
-  size_t narr = ad->fields.dim;
+  size_t narr = ad->fields.length;
   elems.reserve(narr);
   for (auto vd : ad->fields) {
     elems.push_back(CreateMemberType(vd->loc.linnum, vd->type, file,
@@ -503,6 +513,10 @@ void DIBuilder::AddFields(AggregateDeclaration *ad, DIFile file,
 
 void DIBuilder::AddStaticMembers(AggregateDeclaration *ad, DIFile file,
                                  llvm::SmallVector<LLMetadata *, 16> &elems) {
+  auto members = ad->members;
+  if (!members)
+    return;
+
   auto scope = CreateCompositeTypeDescription(ad->getType());
 
   std::function<void(Dsymbols *)> visitMembers = [&](Dsymbols *members) {
@@ -531,7 +545,7 @@ void DIBuilder::AddStaticMembers(AggregateDeclaration *ad, DIFile file,
                                                      // already work without
                                                      // adding them.
   };
-  visitMembers(ad->members);
+  visitMembers(members);
 }
 
 DIType DIBuilder::CreateCompositeType(Type *type) {
@@ -576,8 +590,8 @@ DIType DIBuilder::CreateCompositeType(Type *type) {
   // defaults
   const auto file = CreateFile(ad);
   const auto lineNum = ad->loc.linnum;
-  const auto sizeInBits = getTypeAllocSize(T) * 8;
-  const auto alignmentInBits = getABITypeAlign(T) * 8;
+  const auto sizeInBits = T->isSized() ? getTypeAllocSize(T) * 8 : 0;
+  const auto alignmentInBits = T->isSized() ? getABITypeAlign(T) * 8 : 0;
   const auto classOffsetInBits = 0;
   auto derivedFrom = getNullDIType();
   const auto vtableHolder = getNullDIType();
@@ -753,10 +767,11 @@ DISubroutineType DIBuilder::CreateEmptyFunctionType() {
 }
 
 DIType DIBuilder::CreateDelegateType(Type *type) {
-  assert(type->toBasetype()->ty == Tdelegate);
+  Type *const tb = type->toBasetype();
+  assert(tb->ty == Tdelegate);
+  auto t = static_cast<TypeDelegate *>(tb);
 
   llvm::Type *T = DtoType(type);
-  auto t = static_cast<TypeDelegate *>(type);
 
   const auto scope = GetCU();
   const auto name = processDIName(type->toPrettyChars(true));
@@ -776,7 +791,7 @@ DIType DIBuilder::CreateDelegateType(Type *type) {
                                    DBuilder.getOrCreateArray(elems),
                                    0,               // RunTimeLang
                                    getNullDIType(), // VTableHolder
-                                   uniqueIdent(t)); // UniqueIdentifier
+                                   uniqueIdent(type)); // UniqueIdentifier
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -876,7 +891,7 @@ void DIBuilder::EmitCompileUnit(Module *m) {
   assert(!CUNode && "Already created compile unit for this DIBuilder instance");
 
   // prepare srcpath
-  llvm::SmallString<128> srcpath(m->srcfile->name.toChars());
+  llvm::SmallString<128> srcpath(m->srcfile.toChars());
   llvm::sys::fs::make_absolute(srcpath);
 
   // prepare producer name string
@@ -1366,15 +1381,18 @@ void DIBuilder::EmitGlobalVariable(llvm::GlobalVariable *llVar,
 #endif
       scope,                                 // context
       vd->toChars(),                         // name
-      mangleBuf.peekString(),                // linkage name
+      mangleBuf.peekChars(),                 // linkage name
       CreateFile(vd),                        // file
       vd->loc.linnum,                        // line num
       CreateTypeDescription(vd->type),       // type
       vd->protection.kind == Prot::private_, // is local to unit
+#if LDC_LLVM_VER >= 1000
+      !(vd->storage_class & STCextern),      // bool isDefined
+#endif
 #if LDC_LLVM_VER >= 400
-      nullptr, // relative location of field
+      nullptr,                               // DIExpression *Expr
 #else
-      llVar, // value
+      llVar,                                 // llvm::Constant *Val
 #endif
       Decl // declaration
   );

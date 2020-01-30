@@ -26,12 +26,12 @@
 #include "dmd/attrib.h"
 #include "dmd/declaration.h"
 #include "dmd/enum.h"
+#include "dmd/errors.h"
 #include "dmd/expression.h"
 #include "dmd/id.h"
 #include "dmd/import.h"
 #include "dmd/init.h"
 #include "dmd/mangle.h"
-#include "dmd/mars.h"
 #include "dmd/module.h"
 #include "dmd/mtype.h"
 #include "dmd/scope.h"
@@ -44,7 +44,7 @@
 #include "gen/llvmhelpers.h"
 #include "gen/logger.h"
 #include "gen/mangling.h"
-#include "gen/metadata.h"
+#include "gen/passes/metadata.h"
 #include "gen/pragma.h"
 #include "gen/rttibuilder.h"
 #include "gen/runtime.h"
@@ -92,7 +92,7 @@ static void emitTypeMetadata(TypeInfoDeclaration *tid) {
     OutBuffer buf;
     buf.writestring(TD_PREFIX);
     mangleToBuffer(tid, &buf);
-    const char *metaname = buf.peekString();
+    const char *metaname = buf.peekChars();
 
     llvm::NamedMDNode *meta = gIR->module.getNamedMetadata(metaname);
 
@@ -316,7 +316,7 @@ public:
         global.params.targetTriple->getArch() == llvm::Triple::x86_64;
     const unsigned expectedFields = 11 + (isX86_64 ? 2 : 0);
     const unsigned actualFields =
-        structTypeInfoDecl->fields.dim -
+        structTypeInfoDecl->fields.length -
         1; // union of xdtor/xdtorti counts as 2 overlapping fields
     if (actualFields != expectedFields) {
       error(Loc(), "Unexpected number of `object.TypeInfo_Struct` fields; "
@@ -510,7 +510,7 @@ public:
     assert(decl->tinfo->ty == Ttuple);
     TypeTuple *tu = static_cast<TypeTuple *>(decl->tinfo);
 
-    size_t dim = tu->arguments->dim;
+    size_t dim = tu->arguments->length;
     std::vector<LLConstant *> arrInits;
     arrInits.reserve(dim);
 
@@ -621,7 +621,7 @@ void TypeInfoDeclaration_codegen(TypeInfoDeclaration *decl, IRState *p) {
 
   OutBuffer mangleBuf;
   mangleToBuffer(decl, &mangleBuf);
-  const char *mangled = mangleBuf.peekString();
+  const char *mangled = mangleBuf.peekChars();
 
   IF_LOG {
     Logger::println("type = '%s'", decl->tinfo->toChars());
@@ -666,6 +666,8 @@ void TypeInfoDeclaration_codegen(TypeInfoDeclaration *decl, IRState *p) {
   decl->accept(&v);
 
   setLinkage({TYPEINFO_LINKAGE_TYPE, supportsCOMDAT()}, gvar);
+  if (auto forStructType = forType->isTypeStruct())
+    setVisibility(forStructType->sym, gvar);
 }
 
 /* ========================================================================= */

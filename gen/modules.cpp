@@ -7,16 +7,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "dmd/module.h"
 #include "dmd/aggregate.h"
 #include "dmd/attrib.h"
 #include "dmd/declaration.h"
 #include "dmd/enum.h"
+#include "dmd/errors.h"
 #include "dmd/id.h"
 #include "dmd/import.h"
 #include "dmd/init.h"
 #include "dmd/mangle.h"
-#include "dmd/mars.h"
 #include "dmd/module.h"
 #include "dmd/mtype.h"
 #include "dmd/scope.h"
@@ -65,10 +64,10 @@ static llvm::cl::opt<bool, true>
              llvm::cl::desc("Write object files with fully qualified names"),
              llvm::cl::location(global.params.fullyQualifiedObjectFiles));
 
-void Module::checkAndAddOutputFile(File *file) {
+void Module::checkAndAddOutputFile(const FileName &file) {
   static std::map<std::string, Module *> files;
 
-  std::string key(file->name.toChars());
+  std::string key(file.toChars());
   auto i = files.find(key);
   if (i != files.end()) {
     Module *previousMod = i->second;
@@ -83,16 +82,16 @@ void Module::checkAndAddOutputFile(File *file) {
 }
 
 void Module::makeObjectFilenameUnique() {
-  assert(objfile);
+  assert(objfile.toChars());
 
-  const char *ext = FileName::ext(objfile->name.toChars());
-  const char *stem = FileName::removeExt(objfile->name.toChars());
+  const char *ext = FileName::ext(objfile.toChars());
+  const char *stem = FileName::removeExt(objfile.toChars());
 
   llvm::SmallString<128> unique;
   auto EC = llvm::sys::fs::createUniqueFile(
       llvm::Twine(stem) + "-%%%%%%%." + ext, unique);
   if (!EC) // success
-    objfile->name.reset(unique.c_str());
+    objfile.reset(unique.c_str());
 }
 
 namespace {
@@ -125,7 +124,7 @@ RegistryStyle getModuleRegistryStyle() {
     return RegistryStyle::sectionMSVC;
   }
 
-  if (t->isMacOSX()) {
+  if (t->isOSDarwin()) {
     return RegistryStyle::sectionDarwin;
   }
 
@@ -241,7 +240,7 @@ llvm::Function *buildGetTLSAnchor() {
   const auto one = llvm::ConstantInt::get(LLType::getInt8Ty(gIR->context()), 1);
   const auto anchor =
       defineDSOGlobal("ldc.tls_anchor", one, /*isThreadLocal=*/true);
-  anchor->setAlignment(16);
+  anchor->setAlignment(LLMaybeAlign(16));
 
   const auto getAnchor = createDSOFunction(
       "ldc.get_tls_anchor", LLFunctionType::get(getVoidPtrType(), false));
@@ -395,7 +394,7 @@ void emitModuleRefToSection(RegistryStyle style, std::string moduleMangle,
 void addCoverageAnalysis(Module *m) {
   IF_LOG {
     Logger::println("Adding coverage analysis for module %s (%d lines)",
-                    m->srcfile->toChars(), m->numlines);
+                    m->srcfile.toChars(), m->numlines);
     Logger::indent();
   }
 
@@ -463,7 +462,7 @@ void addCoverageAnalysis(Module *m) {
   mangleBuf.writestring("_D");
   mangleToBuffer(m, &mangleBuf);
   mangleBuf.writestring("12_coverageanalysisCtor1FZv");
-  const char *ctorname = mangleBuf.peekString();
+  const char *ctorname = mangleBuf.peekChars();
 
   {
     IF_LOG Logger::println("Build Coverage Analysis constructor: %s", ctorname);
@@ -485,7 +484,7 @@ void addCoverageAnalysis(Module *m) {
     // Set up call to _d_cover_register2
     llvm::Function *fn =
         getRuntimeFunction(Loc(), gIR->module, "_d_cover_register2");
-    LLValue *args[] = {DtoConstString(m->srcfile->name.toChars()),
+    LLValue *args[] = {DtoConstString(m->srcfile.toChars()),
                        d_cover_valid_slice, d_cover_data_slice,
                        DtoConstUbyte(global.params.covPercent)};
     // Check if argument types are correct
@@ -543,12 +542,23 @@ void loadInstrProfileData(IRState *irs) {
     }
     irs->PGOReader = std::move(readerOrErr.get());
 
-    if (!irs->module.getProfileSummary()) {
+    if (!irs->module.getProfileSummary(
+#if LDC_LLVM_VER >= 900
+            /*is context sensitive profile=*/false
+#endif
+            )) {
       // Don't reset the summary. There is only one profile data file per LDC
       // invocation so the summary must be the same as the one that is already
       // set.
       irs->module.setProfileSummary(
-          irs->PGOReader->getSummary().getMD(irs->context()));
+#if LDC_LLVM_VER >= 900
+          irs->PGOReader->getSummary(/*is context sensitive profile=*/false)
+              .getMD(irs->context()),
+          llvm::ProfileSummary::PSK_Instr
+#else
+          irs->PGOReader->getSummary().getMD(irs->context())
+#endif
+      );
     }
   }
 }
@@ -559,7 +569,7 @@ void registerModuleInfo(Module *m) {
 
   OutBuffer mangleBuf;
   mangleToBuffer(m, &mangleBuf);
-  const char *mangle = mangleBuf.peekString();
+  const char *mangle = mangleBuf.peekChars();
 
   if (style == RegistryStyle::legacyLinkedList) {
     const auto miCtor = build_module_reference_and_ctor(mangle, moduleInfoSym);
@@ -594,7 +604,7 @@ void codegenModule(IRState *irs, Module *m) {
 
   // process module members
   // NOTE: m->members may grow during codegen
-  for (unsigned k = 0; k < m->members->dim; k++) {
+  for (unsigned k = 0; k < m->members->length; k++) {
     Dsymbol *dsym = (*m->members)[k];
     assert(dsym);
     Declaration_codegen(dsym);

@@ -9,6 +9,7 @@
 
 #include "dmd/aggregate.h"
 #include "dmd/declaration.h"
+#include "dmd/errors.h"
 #include "dmd/hdrgen.h" // for parametersTypeToChars()
 #include "dmd/identifier.h"
 #include "dmd/mangle.h"
@@ -22,7 +23,7 @@
 #include "gen/logger.h"
 #include "gen/llvmhelpers.h"
 #include "gen/mangling.h"
-#include "gen/metadata.h"
+#include "gen/passes/metadata.h"
 #include "gen/pragma.h"
 #include "gen/runtime.h"
 #include "gen/tollvm.h"
@@ -113,7 +114,7 @@ LLGlobalVariable *IrAggr::getClassInfoSymbol() {
       debugName.write(irMangle.data(), irMangle.length());
     }
     llvm::NamedMDNode *node =
-        gIR->module.getOrInsertNamedMetadata(debugName.peekString());
+        gIR->module.getOrInsertNamedMetadata(debugName.peekChars());
     node->addOperand(llvm::MDNode::get(
         gIR->context(), llvm::makeArrayRef(mdVals, CD_NumFields)));
   }
@@ -166,7 +167,7 @@ LLConstant *IrAggr::getVtblInit() {
   assert(cd && "not class");
 
   std::vector<llvm::Constant *> constants;
-  constants.reserve(cd->vtbl.dim);
+  constants.reserve(cd->vtbl.length);
 
   const auto voidPtrType = getVoidPtrType();
 
@@ -184,7 +185,7 @@ LLConstant *IrAggr::getVtblInit() {
   }
 
   // add virtual function pointers
-  size_t n = cd->vtbl.dim;
+  size_t n = cd->vtbl.length;
   for (size_t i = cd->vtblOffset(); i < n; i++) {
     Dsymbol *dsym = cd->vtbl[i];
     assert(dsym && "null vtbl member");
@@ -280,7 +281,8 @@ llvm::GlobalVariable *IrAggr::getInterfaceVtblSymbol(BaseClass *b,
   ClassDeclaration *cd = aggrdecl->isClassDeclaration();
   assert(cd && "not a class aggregate");
 
-  llvm::Type *vtblType = LLArrayType::get(getVoidPtrType(), b->sym->vtbl.dim);
+  llvm::Type *vtblType =
+      LLArrayType::get(getVoidPtrType(), b->sym->vtbl.length);
 
   // Thunk prefix
   char thunkPrefix[16];
@@ -297,7 +299,7 @@ llvm::GlobalVariable *IrAggr::getInterfaceVtblSymbol(BaseClass *b,
   mangledName.writestring(thunkPrefix);
   mangledName.writestring("6__vtblZ");
 
-  const auto irMangle = getIRMangledVarName(mangledName.peekString(), LINKd);
+  const auto irMangle = getIRMangledVarName(mangledName.peekChars(), LINKd);
 
   LLGlobalVariable *gvar =
       declareGlobal(cd->loc, gIR->module, vtblType, irMangle, /*isConstant=*/true);
@@ -322,7 +324,7 @@ void IrAggr::defineInterfaceVtbl(BaseClass *b, bool new_instance,
   b->fillVtbl(cd, &vtbl_array, new_instance);
 
   std::vector<llvm::Constant *> constants;
-  constants.reserve(vtbl_array.dim);
+  constants.reserve(vtbl_array.length);
 
   char thunkPrefix[16];
   sprintf(thunkPrefix, "Thn%d_", b->offset);
@@ -348,7 +350,7 @@ void IrAggr::defineInterfaceVtbl(BaseClass *b, bool new_instance,
   }
 
   // add virtual function pointers
-  size_t n = vtbl_array.dim;
+  size_t n = vtbl_array.length;
   for (size_t i = b->sym->vtblOffset(); i < n; i++) {
     FuncDeclaration *fd = vtbl_array[i];
     if (!fd) {
@@ -386,7 +388,7 @@ void IrAggr::defineInterfaceVtbl(BaseClass *b, bool new_instance,
     nameBuf.writestring(mangledTargetName + 2);
 
     const auto thunkIRMangle =
-        getIRMangledFuncName(nameBuf.peekString(), fd->linkage);
+        getIRMangledFuncName(nameBuf.peekChars(), fd->linkage);
 
     llvm::Function *thunk = gIR->module.getFunction(thunkIRMangle);
     if (!thunk) {
@@ -451,7 +453,7 @@ void IrAggr::defineInterfaceVtbl(BaseClass *b, bool new_instance,
       LLValue *&thisArg = args[thisArgIndex];
       LLType *targetThisType = thisArg->getType();
       thisArg = DtoBitCast(thisArg, getVoidPtrType());
-      thisArg = DtoGEP1(thisArg, DtoConstInt(-thunkOffset), true);
+      thisArg = DtoGEP1(thisArg, DtoConstInt(-thunkOffset));
       thisArg = DtoBitCast(thisArg, targetThisType);
 
       // all calls that might be subject to inlining into a caller with debug
@@ -539,7 +541,7 @@ LLConstant *IrAggr::getClassInfoInterfaces() {
   // }
 
   LLSmallVector<LLConstant *, 6> constants;
-  constants.reserve(cd->vtblInterfaces->dim);
+  constants.reserve(cd->vtblInterfaces->length);
 
   LLType *classinfo_type = DtoType(getClassInfoType());
   LLType *voidptrptr_type = DtoType(Type::tvoid->pointerTo()->pointerTo());
@@ -594,20 +596,20 @@ LLConstant *IrAggr::getClassInfoInterfaces() {
   defineGlobal(ciarr, arr, cd);
 
   // return null, only baseclass provide interfaces
-  if (cd->vtblInterfaces->dim == 0) {
+  if (cd->vtblInterfaces->length == 0) {
     return getNullValue(DtoType(interfacesArrayType));
   }
 
   // only the interface explicitly implemented by this class
   // (not super classes) should show in ClassInfo
   LLConstant *idxs[2] = {DtoConstSize_t(0),
-                         DtoConstSize_t(n - cd->vtblInterfaces->dim)};
+                         DtoConstSize_t(n - cd->vtblInterfaces->length)};
 
   LLConstant *ptr = llvm::ConstantExpr::getGetElementPtr(
       isaPointer(ciarr)->getElementType(), ciarr, idxs, true);
 
   // return as a slice
-  return DtoConstSlice(DtoConstSize_t(cd->vtblInterfaces->dim), ptr);
+  return DtoConstSlice(DtoConstSize_t(cd->vtblInterfaces->length), ptr);
 }
 
 //////////////////////////////////////////////////////////////////////////////

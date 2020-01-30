@@ -21,6 +21,7 @@
 #include "dmd/root/root.h"
 #include "dmd/scope.h"
 #include "dmd/target.h"
+#include "driver/args.h"
 #include "driver/cache.h"
 #include "driver/cl_options.h"
 #include "driver/cl_options_instrumentation.h"
@@ -41,10 +42,10 @@
 #include "gen/llvm.h"
 #include "gen/llvmhelpers.h"
 #include "gen/logger.h"
-#include "gen/metadata.h"
 #include "gen/modules.h"
 #include "gen/objcgen.h"
 #include "gen/optimizer.h"
+#include "gen/passes/metadata.h"
 #include "gen/passes/Passes.h"
 #include "gen/runtime.h"
 #include "gen/uda.h"
@@ -72,6 +73,7 @@
 #endif
 
 #if _WIN32
+#include "llvm/Support/ConvertUTF.h"
 #include <windows.h>
 #endif
 
@@ -82,8 +84,6 @@ void gendocfile(Module *m);
 void generateJson(Modules *modules);
 
 using namespace opts;
-
-extern void getenv_setargv(const char *envvar, int *pargc, char ***pargv);
 
 static StringsAdapter impPathsStore("I", global.params.imppath);
 static cl::list<std::string, StringsAdapter>
@@ -99,9 +99,9 @@ static cl::opt<bool> enableGC(
 
 // This function exits the program.
 void printVersion(llvm::raw_ostream &OS) {
-  OS << "LDC - the LLVM D compiler (" << global.ldc_version << "):\n";
-  OS << "  based on DMD " << global.version.ptr << " and LLVM "
-     << global.llvm_version << "\n";
+  OS << "LDC - the LLVM D compiler (" << ldc::ldc_version << "):\n";
+  OS << "  based on DMD " << ldc::dmd_version << " and LLVM "
+     << ldc::llvm_version << "\n";
   OS << "  built with " << ldc::built_with_Dcompiler_version << "\n";
 #if IN_WEKA
   OS << "  with Weka.io modifications\n";
@@ -113,7 +113,7 @@ void printVersion(llvm::raw_ostream &OS) {
 #endif
   OS << "  Default target: " << llvm::sys::getDefaultTargetTriple() << "\n";
   std::string CPU = llvm::sys::getHostCPUName();
-  if (CPU == "generic" || getenv("SOURCE_DATE_EPOCH")) {
+  if (CPU == "generic" || env::has("SOURCE_DATE_EPOCH")) {
     // Env variable SOURCE_DATE_EPOCH indicates that a reproducible build is
     // wanted. Don't print the actual host CPU in such an environment to aid
     // in man page generation etc.
@@ -172,26 +172,52 @@ void processVersions(std::vector<std::string> &list, const char *type,
   }
 }
 
+// Tries to parse the value of `-[-]<option>{=, }<value>` at `args[i]`.
 template <int N> // option length incl. terminating null
 void tryParse(const llvm::SmallVectorImpl<const char *> &args, size_t i,
-              const char *&output, const char (&option)[N]) {
-  if (strncmp(args[i], option, N - 1) != 0)
+              const char *&value, const char (&option)[N]) {
+  const char *arg = args[i];
+  if (arg[0] != '-')
     return;
 
-  char nextChar = args[i][N - 1];
+  const char *start = arg + (arg[1] == '-' ? 2 : 1);
+  if (strncmp(start, option, N - 1) != 0)
+    return;
+
+  const char nextChar = start[N - 1];
   if (nextChar == '=')
-    output = args[i] + N;
+    value = start + N;
   else if (nextChar == 0 && i < args.size() - 1)
-    output = args[i + 1];
+    value = args[i + 1];
+}
+
+bool tryParseLowmem(const llvm::SmallVectorImpl<const char *> &args) {
+  bool lowmem = false;
+  for (size_t i = 1; i < args.size(); ++i) {
+    if (args::isRunArg(args[i]))
+      break;
+
+    llvm::StringRef arg = args[i];
+    if (arg.startswith("-lowmem") || arg.startswith("--lowmem")) {
+      auto remainder = arg.substr(arg[1] == '-' ? 8 : 7);
+      if (remainder.empty()) {
+        lowmem = true;
+      } else if (remainder[0] == '=') {
+        auto value = remainder.substr(1);
+        lowmem = (value == "true" || value == "TRUE");
+      }
+    }
+  }
+  return lowmem;
 }
 
 const char *
 tryGetExplicitConfFile(const llvm::SmallVectorImpl<const char *> &args) {
   const char *conf = nullptr;
-  // begin at the back => use latest -conf specification
-  assert(args.size() >= 1);
-  for (size_t i = args.size() - 1; !conf && i >= 1; --i) {
-    tryParse(args, i, conf, "-conf");
+  for (size_t i = 1; i < args.size(); ++i) {
+    if (args::isRunArg(args[i]))
+      break;
+    tryParse(args, i, conf, "conf");
   }
   return conf;
 }
@@ -201,22 +227,36 @@ tryGetExplicitTriple(const llvm::SmallVectorImpl<const char *> &args) {
   // most combinations of flags are illegal, this mimicks command line
   //  behaviour for legal ones only
   llvm::Triple triple(llvm::sys::getDefaultTargetTriple());
+  unsigned explicitBitness = 0;
   const char *mtriple = nullptr;
   const char *march = nullptr;
   for (size_t i = 1; i < args.size(); ++i) {
-    if (sizeof(void *) != 4 && strcmp(args[i], "-m32") == 0) {
+    if (args::isRunArg(args[i]))
+      break;
+
+    const llvm::StringRef arg = args[i];
+    if (arg == "-m32" || arg == "--m32") {
+      explicitBitness = 32;
+    } else if (arg == "-m64" || arg == "--m64") {
+      explicitBitness = 64;
+    } else {
+      tryParse(args, i, mtriple, "mtriple");
+      tryParse(args, i, march, "march");
+    }
+  }
+
+  // -m{32,64} and -mtriple/-march are mutually exclusive (checked later on)
+  if (explicitBitness) {
+    if (!triple.isArch32Bit() && explicitBitness == 32) {
       triple = triple.get32BitArchVariant();
       if (triple.getArch() == llvm::Triple::ArchType::x86)
         triple.setArchName("i686"); // instead of i386
-      return triple;
+    } else if (!triple.isArch64Bit() && explicitBitness == 64) {
+      triple = triple.get64BitArchVariant();
     }
-
-    if (sizeof(void *) != 8 && strcmp(args[i], "-m64") == 0)
-      return triple.get64BitArchVariant();
-
-    tryParse(args, i, mtriple, "-mtriple");
-    tryParse(args, i, march, "-march");
+    return triple;
   }
+
   if (mtriple)
     triple = llvm::Triple(llvm::Triple::normalize(mtriple));
   if (march) {
@@ -226,36 +266,13 @@ tryGetExplicitTriple(const llvm::SmallVectorImpl<const char *> &args) {
   return triple;
 }
 
-void expandResponseFiles(llvm::BumpPtrAllocator &A,
-                         llvm::SmallVectorImpl<const char *> &args) {
-  llvm::StringSaver Saver(A);
-  cl::ExpandResponseFiles(Saver,
-#ifdef _WIN32
-                          cl::TokenizeWindowsCommandLine
-#else
-                          cl::TokenizeGNUCommandLine
-#endif
-                          ,
-                          args);
-}
-
 /// Parses switches from the command line, any response files and the global
 /// config file and sets up global.params accordingly.
 ///
 /// Returns a list of source file names.
-void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
+void parseCommandLine(Strings &sourceFiles) {
   const auto &exePath = exe_path::getExePath();
   global.params.argv0 = {exePath.length(), exePath.data()};
-
-  // Set up `opts::allArguments`, the combined list of command line arguments.
-  using opts::allArguments;
-
-  // initialize with the actual command line
-  allArguments.insert(allArguments.end(), argv, argv + argc);
-
-  // expand response files (`@<file>`) in-place
-  llvm::BumpPtrAllocator allocator;
-  expandResponseFiles(allocator, allArguments);
 
   // read config file
   ConfigFile &cfg_file = ConfigFile::instance;
@@ -267,7 +284,7 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
   cfg_file.extendCommandLine(allArguments);
 
   // finalize by expanding response files specified in config file
-  expandResponseFiles(allocator, allArguments);
+  args::expandResponseFiles(allArguments);
 
 #if LDC_LLVM_VER >= 600
   cl::SetVersionPrinter(&printVersion);
@@ -278,8 +295,22 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
   opts::hideLLVMOptions();
   opts::createClashingOptions();
 
-  cl::ParseCommandLineOptions(allArguments.size(),
-                              const_cast<char **>(allArguments.data()),
+  // Filter out druntime options in the cmdline, e.g., to configure the GC.
+  std::vector<const char *> filteredArgs;
+  filteredArgs.reserve(allArguments.size());
+  for (size_t i = 0; i < allArguments.size(); ++i) {
+    const char *arg = allArguments[i];
+    if (args::isRunArg(arg)) {
+      filteredArgs.insert(filteredArgs.end(), allArguments.begin() + i,
+                          allArguments.end());
+      break;
+    }
+    if (strncmp(arg, "--DRT-", 6) != 0)
+      filteredArgs.push_back(arg);
+  }
+
+  cl::ParseCommandLineOptions(filteredArgs.size(),
+                              const_cast<char **>(filteredArgs.data()),
                               "LDC - the LLVM D compiler\n");
 
   if (opts::printTargetFeaturesHelp()) {
@@ -305,10 +336,11 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
   // - used config file
   if (global.params.verbose) {
     message("binary    %s", exe_path::getExePath().c_str());
-    message("version   %s (DMD %s, LLVM %s)", global.ldc_version,
-            global.version.ptr, global.llvm_version);
-    if (global.inifilename) {
-      message("config    %s (%s)", global.inifilename, cfg_triple.c_str());
+    message("version   %s (DMD %s, LLVM %s)", ldc::ldc_version,
+            ldc::dmd_version, ldc::llvm_version);
+    if (global.inifilename.length) {
+      message("config    %.*s (%s)", (int)global.inifilename.length,
+              global.inifilename.ptr, cfg_triple.c_str());
     }
   }
 
@@ -317,25 +349,25 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
   global.params.obj = !dontWriteObj;
   global.params.useInlineAsm = !noAsm;
 
-  // String options: std::string --> char*
-  opts::initFromPathString(global.params.objname, objectFile);
-  opts::initFromPathString(global.params.objdir, objectDir);
+  // String options
+  global.params.objname = opts::fromPathString(objectFile);
+  global.params.objdir = opts::fromPathString(objectDir);
 
-  opts::initFromPathString(global.params.docdir, ddocDir);
-  opts::initFromPathString(global.params.docname, ddocFile);
+  global.params.docdir = opts::fromPathString(ddocDir).ptr;
+  global.params.docname = opts::fromPathString(ddocFile).ptr;
   global.params.doDocComments |= global.params.docdir || global.params.docname;
 
-  opts::initFromPathString(global.params.jsonfilename, jsonFile);
-  if (global.params.jsonfilename) {
+  global.params.jsonfilename = opts::fromPathString(jsonFile);
+  if (global.params.jsonfilename.length) {
     global.params.doJsonGeneration = true;
   }
 
-  opts::initFromPathString(global.params.hdrdir, hdrDir);
-  opts::initFromPathString(global.params.hdrname, hdrFile);
+  global.params.hdrdir = opts::fromPathString(hdrDir);
+  global.params.hdrname = opts::fromPathString(hdrFile);
   global.params.doHdrGeneration |=
-      global.params.hdrdir || global.params.hdrname;
+      global.params.hdrdir.length || global.params.hdrname.length;
 
-  opts::initFromPathString(global.params.mixinFile, mixinFile);
+  global.params.mixinFile = opts::fromPathString(mixinFile).ptr;
 
   if (moduleDeps.getNumOccurrences() != 0) {
     global.params.moduleDeps = new OutBuffer;
@@ -348,7 +380,7 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
     if (!paths)
       return;
     for (auto &path : *paths)
-      path = opts::dupPathString(path);
+      path = opts::dupPathString(path).ptr;
   };
   toWinPaths(global.params.imppath);
   toWinPaths(global.params.fileImppath);
@@ -394,8 +426,9 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
   for (const auto &id : reverts)
     parseRevertOption(global.params, id.c_str());
 
-  // -preview=dip1000 implies -preview=dip25 too
-  if (global.params.vsafe)
+  if (global.params.useDIP1021) // DIP1021 implies DIP1000
+    global.params.vsafe = true;
+  if (global.params.vsafe) // DIP1000 implies DIP25
     global.params.useDIP25 = true;
   if (global.params.noDIP25)
     global.params.useDIP25 = false;
@@ -445,12 +478,8 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
   sourceFiles.reserve(fileList.size());
   for (const auto &file : fileList) {
     if (!file.empty()) {
-      if (file == "-") {
-        sourceFiles.push("__stdin.d");
-      } else {
-        char *copy = opts::dupPathString(file);
-        sourceFiles.push(copy);
-      }
+      sourceFiles.push(file == "-" ? "__stdin.d"
+                                   : opts::dupPathString(file).ptr);
     }
   }
 
@@ -458,21 +487,22 @@ void parseCommandLine(int argc, char **argv, Strings &sourceFiles) {
 
   // if we don't link and there's no `-output-*` switch but an `-of` one,
   // autodetect type of desired 'object' file from file extension
-  if (!global.params.link && !global.params.lib && global.params.objname &&
+  if (!global.params.link && !global.params.lib &&
+      global.params.objname.length &&
       global.params.output_o == OUTPUTFLAGdefault) {
-    const char *ext = FileName::ext(global.params.objname);
+    const char *ext = FileName::ext(global.params.objname.ptr);
     if (!ext) {
       // keep things as they are
     } else if (opts::output_ll.getNumOccurrences() == 0 &&
-               strcmp(ext, global.ll_ext) == 0) {
+               strcmp(ext, global.ll_ext.ptr) == 0) {
       global.params.output_ll = OUTPUTFLAGset;
       global.params.output_o = OUTPUTFLAGno;
     } else if (opts::output_bc.getNumOccurrences() == 0 &&
-               strcmp(ext, global.bc_ext) == 0) {
+               strcmp(ext, global.bc_ext.ptr) == 0) {
       global.params.output_bc = OUTPUTFLAGset;
       global.params.output_o = OUTPUTFLAGno;
     } else if (opts::output_s.getNumOccurrences() == 0 &&
-               strcmp(ext, global.s_ext) == 0) {
+               strcmp(ext, global.s_ext.ptr) == 0) {
       global.params.output_s = OUTPUTFLAGset;
       global.params.output_o = OUTPUTFLAGno;
     }
@@ -784,6 +814,21 @@ void registerPredefinedTargetVersions() {
     VersionCondition::addPredefinedGlobalIdent("AIX");
     VersionCondition::addPredefinedGlobalIdent("Posix");
     break;
+  case llvm::Triple::IOS:
+    VersionCondition::addPredefinedGlobalIdent("iOS");
+    VersionCondition::addPredefinedGlobalIdent("Posix");
+    VersionCondition::addPredefinedGlobalIdent("CppRuntime_Clang");
+    break;
+  case llvm::Triple::TvOS:
+    VersionCondition::addPredefinedGlobalIdent("TVOS");
+    VersionCondition::addPredefinedGlobalIdent("Posix");
+    VersionCondition::addPredefinedGlobalIdent("CppRuntime_Clang");
+    break;
+  case llvm::Triple::WatchOS:
+    VersionCondition::addPredefinedGlobalIdent("WatchOS");
+    VersionCondition::addPredefinedGlobalIdent("Posix");
+    VersionCondition::addPredefinedGlobalIdent("CppRuntime_Clang");
+    break;
   default:
     if (triple.getEnvironment() == llvm::Triple::Android) {
       VersionCondition::addPredefinedGlobalIdent("Android");
@@ -870,67 +915,68 @@ void registerPredefinedVersions() {
 #undef STR
 }
 
-extern "C" {
-// in driver/main.d:
-int _Dmain(/*string[] args*/);
-
 // in druntime:
-int _d_run_main(int argc, char **argv, int (*dMain)());
-void gc_disable();
-}
+extern "C" void gc_disable();
 
 /// LDC's entry point, C main.
 /// Without `-lowmem`, we need to switch to the bump-pointer allocation scheme
 /// right from the start, before any module ctors are run, so we need this hook
 /// before druntime is initialized and `_Dmain` is called.
-int main(int argc, char **argv) {
-  bool lowmem = false;
-  for (int i = 1; i < argc; ++i) {
-    if (strncmp(argv[i], "-lowmem", 7) == 0) {
-      auto remainder = argv[i] + 7;
-      if (remainder[0] == 0) {
-        lowmem = true;
-      } else if (remainder[0] == '=') {
-        lowmem = strcmp(remainder + 1, "true") == 0 ||
-                 strcmp(remainder + 1, "TRUE") == 0;
-      }
+#if LDC_WINDOWS_WMAIN
+int wmain(int argc, const wchar_t **originalArgv)
+#else
+int main(int argc, const char **originalArgv)
+#endif
+{
+  // initialize `opts::allArguments` with the UTF-8 command-line args
+  args::getCommandLineArguments(argc, originalArgv, allArguments);
+
+  llvm::sys::PrintStackTraceOnErrorSignal(allArguments[0]);
+
+  // expand response files (`@<file>`, e.g., used by dub) in-place
+  args::expandResponseFiles(allArguments);
+
+  if (!tryParseLowmem(allArguments))
+    mem.disableGC();
+
+  // Only pass --DRT-* options (before a first potential -run) to _d_run_main;
+  // we don't need any args for _Dmain.
+  llvm::SmallVector<const args::CArgChar *, 4> drunmainArgs;
+  drunmainArgs.push_back(originalArgv[0]);
+  for (size_t i = 1; i < allArguments.size(); ++i) {
+    const char *arg = allArguments[i];
+    if (args::isRunArg(arg))
+      break;
+    if (strncmp(arg, "--DRT-", 6) == 0) {
+#if LDC_WINDOWS_WMAIN
+      // cannot use originalArgv, as the arg may originate from a response file
+      llvm::SmallVector<wchar_t, 64> warg;
+      llvm::sys::windows::UTF8ToUTF16(arg, warg);
+      warg.push_back(0);
+      drunmainArgs.push_back(wcsdup(warg.data()));
+#else
+      drunmainArgs.push_back(arg);
+#endif
     }
   }
 
-  if (!lowmem)
-    mem.disableGC();
-
-  // Initialize druntime; _Dmain() just calls cppmain() below with the original
-  // C args.
-  return _d_run_main(argc, argv, _Dmain);
+  // move on to _d_run_main, _Dmain, and finally cppmain below
+  return args::forwardToDruntime(drunmainArgs.size(), drunmainArgs.data());
 }
 
-int cppmain(int argc, char **argv) {
-  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-
+int cppmain() {
   // Older host druntime versions need druntime to be initialized before
   // disabling the GC, so we cannot disable it in C main above.
   if (!mem.isGCEnabled())
     gc_disable();
 
-  exe_path::initialize(argv[0]);
-
-  // Filter out druntime options in the cmdline, e.g., to configure the GC.
-  std::vector<char *> filteredArgs;
-  filteredArgs.reserve(argc);
-  for (int i = 0; i < argc; ++i) {
-    if (strncmp(argv[i], "--DRT-", 6) != 0)
-      filteredArgs.push_back(argv[i]);
-  }
-
-  argc = static_cast<int>(filteredArgs.size());
-  argv = filteredArgs.data();
+  exe_path::initialize(allArguments[0]);
 
   global._init();
   // global.version includes the terminating null
   global.version = {strlen(ldc::dmd_version) + 1, ldc::dmd_version};
-  global.ldc_version = ldc::ldc_version;
-  global.llvm_version = ldc::llvm_version;
+  global.ldc_version = {strlen(ldc::ldc_version), ldc::ldc_version};
+  global.llvm_version = {strlen(ldc::llvm_version), ldc::llvm_version};
 
   // Initialize LLVM before parsing the command line so that --version shows
   // registered targets.
@@ -943,9 +989,9 @@ int cppmain(int argc, char **argv) {
   initializePasses();
 
   Strings files;
-  parseCommandLine(argc, argv, files);
+  parseCommandLine(files);
 
-  if (argc == 1) {
+  if (allArguments.size() == 1) {
     cl::PrintHelpMessage(/*Hidden=*/false, /*Categorized=*/true);
     exit(EXIT_FAILURE);
   }
@@ -1008,18 +1054,26 @@ int cppmain(int argc, char **argv) {
     // in the front end
     global.params.mscoff = triple->isKnownWindowsMSVCEnvironment();
     if (global.params.mscoff)
-      global.obj_ext = "obj";
+      global.obj_ext = {3, "obj"};
   }
 
   // allocate the target abi
   gABI = TargetABI::getTarget();
 
   if (global.params.targetTriple->isOSWindows()) {
-    global.dll_ext = "dll";
-    global.lib_ext = (global.params.mscoff ? "lib" : "a");
+    global.dll_ext = {3, "dll"};
+    if (global.params.mscoff) {
+      global.lib_ext = {3, "lib"};
+    } else {
+      global.lib_ext = {1, "a"};
+    }
   } else {
-    global.dll_ext = global.params.targetTriple->isOSDarwin() ? "dylib" : "so";
-    global.lib_ext = "a";
+    if (global.params.targetTriple->isOSDarwin()) {
+      global.dll_ext = {5, "dylib"};
+    } else {
+      global.dll_ext = {2, "so"};
+    }
+    global.lib_ext = {1, "a"};
   }
 
   opts::initializeInstrumentationOptionsFromCmdline(
@@ -1045,7 +1099,7 @@ void codegenModules(Modules &modules) {
     // Therefore, codegen is done in reverse order with members[0] last, to make
     // sure these functions (added to members[0] by members[x>0]) are
     // codegenned.
-    for (d_size_t i = modules.dim; i-- > 0;) {
+    for (d_size_t i = modules.length; i-- > 0;) {
       Module *const m = modules[i];
 
       if (m->isHdrFile)
@@ -1063,8 +1117,8 @@ void codegenModules(Modules &modules) {
         computeModules.push_back(m);
         if (atCompute == DComputeCompileFor::deviceOnly) {
           // Remove m's object file from list of object files
-          auto s = m->objfile->name.toChars();
-          for (size_t j = 0; j < global.params.objfiles.dim; j++) {
+          auto s = m->objfile.toChars();
+          for (size_t j = 0; j < global.params.objfiles.length; j++) {
             if (s == global.params.objfiles[j]) {
               global.params.objfiles.remove(j);
               break;
@@ -1083,7 +1137,7 @@ void codegenModules(Modules &modules) {
     dccg.writeModules();
 
     // We may have removed all object files, if so don't link.
-    if (global.params.objfiles.dim == 0)
+    if (global.params.objfiles.length == 0)
       global.params.link = false;
   }
 

@@ -135,10 +135,10 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
   }
 
   // .res/.def files
-  if (global.params.resfile)
-    args.push_back(global.params.resfile);
-  if (global.params.deffile)
-    args.push_back(std::string("/DEF:") + global.params.deffile);
+  if (global.params.resfile.length)
+    args.push_back(global.params.resfile.ptr);
+  if (global.params.deffile.length)
+    args.push_back(std::string("/DEF:") + global.params.deffile.ptr);
 
   if (opts::enableDynamicCompile) {
     args.push_back("ldc-jit-rt.lib");
@@ -247,8 +247,12 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
   // try to call linker
   std::string linker = opts::linker;
   if (linker.empty()) {
+#ifdef _WIN32
     // default to lld-link.exe for LTO
     linker = opts::isUsingLTO() ? "lld-link.exe" : "link.exe";
+#else
+    linker = "lld-link";
+#endif
   }
 
   return executeToolAndWait(linker, args, global.params.verbose);

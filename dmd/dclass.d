@@ -41,7 +41,7 @@ enum Abstract : int
 
 /***********************************************************
  */
-struct BaseClass
+extern (C++) struct BaseClass
 {
     Type type;          // (before semantic processing)
 
@@ -123,7 +123,7 @@ struct BaseClass
         return result;
     }
 
-    extern (C++) void copyBaseInterfaces(BaseClasses* vtblInterfaces)
+    extern (D) void copyBaseInterfaces(BaseClasses* vtblInterfaces)
     {
         //printf("+copyBaseInterfaces(), %s\n", sym.toChars());
         //    if (baseInterfaces.length)
@@ -511,7 +511,9 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
 
         if (!members || !symtab) // opaque or addMember is not yet done
         {
-            error("is forward referenced when looking for `%s`", ident.toChars());
+            // .stringof is always defined (but may be hidden by some other symbol)
+            if (ident != Id.stringof)
+                error("is forward referenced when looking for `%s`", ident.toChars());
             //*(char*)0=0;
             return null;
         }
@@ -603,7 +605,7 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
         {
             alignsize = target.ptrsize;
             structsize = target.ptrsize;      // allow room for __vptr
-            if (classKind != ClassKind.cpp)
+            if (hasMonitor())
                 structsize += target.ptrsize; // allow room for __monitor
         }
 
@@ -683,6 +685,14 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
         checkOverlappedFields();
     }
 
+    /**************
+     * Returns: true if there's a __monitor field
+     */
+    final bool hasMonitor()
+    {
+        return classKind == ClassKind.d;
+    }
+
     override bool isAnonymous()
     {
         return isActuallyAnonymous;
@@ -738,6 +748,13 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
         FuncDeclaration fdmatch = null;
         FuncDeclaration fdambig = null;
 
+        void updateBestMatch(FuncDeclaration fd)
+        {
+            fdmatch = fd;
+            fdambig = null;
+            //printf("Lfd fdmatch = %s %s [%s]\n", fdmatch.toChars(), fdmatch.type.toChars(), fdmatch.loc.toChars());
+        }
+
         void searchVtbl(ref Dsymbols vtbl)
         {
             foreach (s; vtbl)
@@ -752,49 +769,51 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
                 {
                     //printf("fd.parent.isClassDeclaration() = %p\n", fd.parent.isClassDeclaration());
                     if (!fdmatch)
-                        goto Lfd;
+                    {
+                        updateBestMatch(fd);
+                        continue;
+                    }
                     if (fd == fdmatch)
-                        goto Lfdmatch;
+                        continue;
 
                     {
                     // Function type matching: exact > covariant
                     MATCH m1 = tf.equals(fd.type) ? MATCH.exact : MATCH.nomatch;
                     MATCH m2 = tf.equals(fdmatch.type) ? MATCH.exact : MATCH.nomatch;
                     if (m1 > m2)
-                        goto Lfd;
+                    {
+                        updateBestMatch(fd);
+                        continue;
+                    }
                     else if (m1 < m2)
-                        goto Lfdmatch;
+                        continue;
                     }
                     {
                     MATCH m1 = (tf.mod == fd.type.mod) ? MATCH.exact : MATCH.nomatch;
                     MATCH m2 = (tf.mod == fdmatch.type.mod) ? MATCH.exact : MATCH.nomatch;
                     if (m1 > m2)
-                        goto Lfd;
+                    {
+                        updateBestMatch(fd);
+                        continue;
+                    }
                     else if (m1 < m2)
-                        goto Lfdmatch;
+                        continue;
                     }
                     {
                     // The way of definition: non-mixin > mixin
                     MATCH m1 = fd.parent.isClassDeclaration() ? MATCH.exact : MATCH.nomatch;
                     MATCH m2 = fdmatch.parent.isClassDeclaration() ? MATCH.exact : MATCH.nomatch;
                     if (m1 > m2)
-                        goto Lfd;
+                    {
+                        updateBestMatch(fd);
+                        continue;
+                    }
                     else if (m1 < m2)
-                        goto Lfdmatch;
+                        continue;
                     }
 
                     fdambig = fd;
                     //printf("Lambig fdambig = %s %s [%s]\n", fdambig.toChars(), fdambig.type.toChars(), fdambig.loc.toChars());
-                    continue;
-
-                Lfd:
-                    fdmatch = fd;
-                    fdambig = null;
-                    //printf("Lfd fdmatch = %s %s [%s]\n", fdmatch.toChars(), fdmatch.type.toChars(), fdmatch.loc.toChars());
-                    continue;
-
-                Lfdmatch:
-                    continue;
                 }
                 //else printf("\t\t%d\n", fd.type.covariant(tf));
             }

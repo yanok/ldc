@@ -37,8 +37,6 @@ version (IN_LLVM)
 }
 else version (NoBackend)
 {
-    import dmd.lib : Library;
-
     struct Symbol;
     struct code;
     struct block;
@@ -49,18 +47,27 @@ else version (NoBackend)
 
     extern (C++)
     {
-        // glue
-        void obj_write_deferred(Library library)        {}
-        void obj_start(const(char)* srcfile)            {}
-        void obj_end(Library library, File* objfile)    {}
-        void genObjFile(Module m, bool multiobj)        {}
+        version (NoMain) {} else
+        {
+            import dmd.lib : Library;
 
-        // msc
-        void backend_init() {}
-        void backend_term() {}
+            // glue
+            void obj_write_deferred(Library library)        {}
+            void obj_start(const(char)* srcfile)            {}
+            void obj_end(Library library, const(char)* objfilename) {}
+            void genObjFile(Module m, bool multiobj)        {}
+
+            // msc
+            void backend_init() {}
+            void backend_term() {}
+        }
 
         // iasm
-        Statement asmSemantic(AsmStatement s, Scope* sc) { assert(0); }
+        Statement asmSemantic(AsmStatement s, Scope* sc)
+        {
+            sc.func.hasReturnExp = 8;
+            return null;
+        }
 
         // toir
         void toObjFile(Dsymbol ds, bool multiobj)   {}
@@ -84,7 +91,7 @@ else version (MARS)
     {
         void obj_write_deferred(Library library);
         void obj_start(const(char)* srcfile);
-        void obj_end(Library library, File* objfile);
+        void obj_end(Library library, const(char)* objfilename);
         void genObjFile(Module m, bool multiobj);
 
         void backend_init();
@@ -102,7 +109,7 @@ else version (MARS)
 }
 else version (IN_GCC)
 {
-    union tree_node;
+    extern (C++) union tree_node;
 
     alias Symbol = tree_node;
     alias code = tree_node;

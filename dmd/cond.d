@@ -316,11 +316,11 @@ extern (C++) final class StaticForeach : RootObject
         {
             foreach (i; 0 .. 2)
             {
-                auto e = new Expressions();
-                foreach (j; 0 .. pparams[0].dim)
+                auto e = new Expressions(pparams[0].dim);
+                foreach (j, ref elem; *e)
                 {
                     auto p = (*pparams[i])[j];
-                    e.push(new IdentifierExp(aloc, p.ident));
+                    elem = new IdentifierExp(aloc, p.ident);
                 }
                 if (!tplty)
                 {
@@ -546,7 +546,7 @@ extern (C++) final class DebugCondition : DVCondition
         v.visit(this);
     }
 
-    override const(char)* toChars()
+    override const(char)* toChars() const
     {
         return ident ? ident.toChars() : "debug".ptr;
     }
@@ -742,7 +742,7 @@ extern (C++) final class VersionCondition : DVCondition
     deprecated("Kept for C++ compat - Use the string overload instead")
     static void addPredefinedGlobalIdent(const(char)* ident)
     {
-        addPredefinedGlobalIdent(ident[0 .. ident.strlen]);
+        addPredefinedGlobalIdent(ident.toDString());
     }
 
     /// Ditto
@@ -821,7 +821,7 @@ extern (C++) final class VersionCondition : DVCondition
         v.visit(this);
     }
 
-    override const(char)* toChars()
+    override const(char)* toChars() const
     {
         return ident ? ident.toChars() : "version".ptr;
     }
@@ -887,7 +887,7 @@ extern (C++) final class StaticIfCondition : Condition
         v.visit(this);
     }
 
-    override const(char)* toChars()
+    override const(char)* toChars() const
     {
         return exp ? exp.toChars() : "static if".ptr;
     }
@@ -902,7 +902,7 @@ extern (C++) final class StaticIfCondition : Condition
  * Returns:
  *      true if found
  */
-extern (C++) bool findCondition(Identifiers* ids, Identifier ident)
+bool findCondition(Identifiers* ids, Identifier ident)
 {
     if (ids)
     {

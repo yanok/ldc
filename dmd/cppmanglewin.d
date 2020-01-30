@@ -56,7 +56,7 @@ version (IN_LLVM)
     v.buf.writestring("\1??_R0?AV");
     v.mangleIdent(s);
     v.buf.writestring("@8");
-    return v.buf.extractString();
+    return v.buf.extractChars();
 }
 else
 {
@@ -78,7 +78,7 @@ private bool checkImmutableShared(Type type)
 {
     if (type.isImmutable() || type.isShared())
     {
-        error(Loc.initial, "Internal Compiler Error: `shared` or `immutable` types can not be mapped to C++ (%s)", type.toChars());
+        error(Loc.initial, "Internal Compiler Error: `shared` or `immutable` types cannot be mapped to C++ (%s)", type.toChars());
         fatal();
         return true;
     }
@@ -142,7 +142,7 @@ public:
         if (checkImmutableShared(type))
             return;
 
-        error(Loc.initial, "Internal Compiler Error: type `%s` can not be mapped to C++\n", type.toChars());
+        error(Loc.initial, "Internal Compiler Error: type `%s` cannot be mapped to C++\n", type.toChars());
         fatal(); //Fatal, because this error should be handled in frontend
     }
 
@@ -236,16 +236,6 @@ version (IN_LLVM) {} else
         case Tfloat64:
             buf.writeByte('N');
             break;
-        case Tbool:
-            buf.writestring("_N");
-            break;
-        case Tchar:
-            buf.writeByte('D');
-            break;
-        case Tdchar:
-            buf.writeByte('I');
-            break;
-            // unsigned int
         case Tfloat80:
 version (IN_LLVM)
 {
@@ -261,11 +251,17 @@ else
                 buf.writestring("_T"); // Intel long double
 }
             break;
+        case Tbool:
+            buf.writestring("_N");
+            break;
+        case Tchar:
+            buf.writeByte('D');
+            break;
         case Twchar:
-            if (flags & IS_DMC)
-                buf.writestring("_Y"); // DigitalMars wchar_t
-            else
-                buf.writestring("_W"); // Visual C++ wchar_t
+            buf.writestring("_S"); // Visual C++ char16_t (since C++11)
+            break;
+        case Tdchar:
+            buf.writestring("_U"); // Visual C++ char32_t (since C++11)
             break;
         default:
             visit(cast(Type)type);
@@ -510,7 +506,7 @@ else
         {
             assert(0);
         }
-        return buf.extractString();
+        return buf.extractChars();
     }
 
 private:
@@ -604,10 +600,10 @@ private:
         buf.writeByte('?');
         mangleIdent(d);
         assert((d.storage_class & STC.field) || !d.needThis());
-        Dsymbol parent = d.toParent3();
+        Dsymbol parent = d.toParent();
         while (parent && parent.isNspace())
         {
-            parent = parent.toParent3();
+            parent = parent.toParent();
         }
         if (parent && parent.isModule()) // static member
         {
@@ -734,7 +730,7 @@ private:
             switch (whichOp)
             {
             case CppOperator.Unary:
-                switch (str.peekSlice())
+                switch (str.peekString())
                 {
                     case "*":   symName = "?D";     goto continue_template;
                     case "++":  symName = "?E";     goto continue_template;
@@ -745,7 +741,7 @@ private:
                     default:    return false;
                 }
             case CppOperator.Binary:
-                switch (str.peekSlice())
+                switch (str.peekString())
                 {
                     case ">>":  symName = "?5";     goto continue_template;
                     case "<<":  symName = "?6";     goto continue_template;
@@ -760,7 +756,7 @@ private:
                     default:    return false;
                     }
             case CppOperator.OpAssign:
-                switch (str.peekSlice())
+                switch (str.peekString())
                 {
                     case "*":   symName = "?X";     goto continue_template;
                     case "+":   symName = "?Y";     goto continue_template;
@@ -986,7 +982,7 @@ private:
                     fatal();
                 }
             }
-            name = tmp.buf.extractString();
+            name = tmp.buf.extractChars();
         }
         else
         {
@@ -1065,17 +1061,20 @@ private:
         //                ::= $0<encoded integral number>
         //printf("mangleIdent('%s')\n", sym.toChars());
         Dsymbol p = sym;
-        if (p.toParent3() && p.toParent3().isTemplateInstance())
+        if (p.toParent() && p.toParent().isTemplateInstance())
         {
-            p = p.toParent3();
+            p = p.toParent();
         }
         while (p && !p.isModule())
         {
             mangleName(p, dont_use_back_reference);
-            p = p.toParent3();
-            if (p.toParent3() && p.toParent3().isTemplateInstance())
+            // Mangle our string namespaces as well
+            for (auto ns = p.cppnamespace; ns !is null; ns = ns.cppnamespace)
+                mangleName(ns, dont_use_back_reference);
+            p = p.toParent();
+            if (p.toParent() && p.toParent().isTemplateInstance())
             {
-                p = p.toParent3();
+                p = p.toParent();
             }
         }
         if (!dont_use_back_reference)
@@ -1289,7 +1288,7 @@ private:
             }
         }
         tmp.buf.writeByte('Z');
-        const(char)* ret = tmp.buf.extractString();
+        const(char)* ret = tmp.buf.extractChars();
         memcpy(&saved_idents, &tmp.saved_idents, (const(char)*).sizeof * VC_SAVED_IDENT_CNT);
         memcpy(&saved_types, &tmp.saved_types, Type.sizeof * VC_SAVED_TYPE_CNT);
         return ret;

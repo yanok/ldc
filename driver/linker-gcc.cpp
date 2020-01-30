@@ -69,9 +69,10 @@ private:
   void addDefaultPlatformLibs();
   virtual void addTargetFlags();
 
-  void addLTOGoldPluginFlags();
+  void addLTOGoldPluginFlags(bool requirePlugin);
   void addDarwinLTOFlags();
   void addLTOLinkFlags();
+  bool isLldDefaultLinker();
 
   virtual void addLdFlag(const llvm::Twine &flag) {
     args.push_back(("-Wl," + flag).str());
@@ -121,8 +122,9 @@ std::string getLTOGoldPluginPath() {
   }
 }
 
-void ArgsBuilder::addLTOGoldPluginFlags() {
-  addLdFlag("-plugin", getLTOGoldPluginPath());
+void ArgsBuilder::addLTOGoldPluginFlags(bool requirePlugin) {
+  if (requirePlugin)
+    addLdFlag("-plugin", getLTOGoldPluginPath());
 
   if (opts::isUsingThinLTO())
     addLdFlag("-plugin-opt=thinlto");
@@ -167,8 +169,7 @@ std::string getLTOdylibPath() {
 void ArgsBuilder::addDarwinLTOFlags() {
   std::string dylibPath = getLTOdylibPath();
   if (!dylibPath.empty()) {
-    args.push_back("-lto_library");
-    args.push_back(std::move(dylibPath));
+    addLdFlag("-lto_library", dylibPath);
   }
 }
 
@@ -179,11 +180,26 @@ void ArgsBuilder::addLTOLinkFlags() {
       global.params.targetTriple->isOSNetBSD() ||
       global.params.targetTriple->isOSOpenBSD() ||
       global.params.targetTriple->isOSDragonFly()) {
-    // Assume that ld.gold or ld.bfd is used with plugin support.
-    addLTOGoldPluginFlags();
+    // LLD supports LLVM LTO natively, do not add the plugin itself.
+    // Otherwise, assume that ld.gold or ld.bfd is used with plugin support.
+    bool isLld = opts::linker == "lld" || useInternalLLDForLinking() ||
+      (opts::linker.empty() && isLldDefaultLinker());
+    addLTOGoldPluginFlags(!isLld);
   } else if (global.params.targetTriple->isOSDarwin()) {
     addDarwinLTOFlags();
   }
+}
+
+bool ArgsBuilder::isLldDefaultLinker() {
+  auto triple = global.params.targetTriple;
+  if (triple->isOSFreeBSD()) {
+    if (triple->getOSMajorVersion() >= 12 &&
+        triple->getArch() == llvm::Triple::ArchType::x86_64)
+      return true;
+    if (triple->getArch() == llvm::Triple::ArchType::aarch64)
+      return true;
+  }
+  return false;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -532,7 +548,11 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
       addLdFlag("-rpath", rpath);
   }
 
-  if (global.params.targetTriple->getOS() == llvm::Triple::Linux) {
+  if (global.params.targetTriple->getOS() == llvm::Triple::Linux ||
+      (global.params.targetTriple->getOS() == llvm::Triple::FreeBSD &&
+       (useInternalLLDForLinking() ||
+        (!opts::linker.empty() && opts::linker != "bfd") ||
+        (opts::linker.empty() && isLldDefaultLinker())))) {
     // Make sure we don't do --gc-sections when generating a profile-
     // instrumented binary. The runtime relies on magic sections, which
     // would be stripped by gc-section on older version of ld, see bug:

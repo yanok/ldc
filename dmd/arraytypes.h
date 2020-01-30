@@ -11,6 +11,7 @@
 #pragma once
 
 #include "root/array.h"
+#include "root/bitarray.h"
 
 typedef Array<class TemplateParameter *> TemplateParameters;
 
@@ -48,8 +49,6 @@ typedef Array<class SharedStaticDtorDeclaration *> SharedStaticDtorDeclarations;
 typedef Array<class AliasDeclaration *> AliasDeclarations;
 
 typedef Array<class Module *> Modules;
-
-typedef Array<struct File *> Files;
 
 typedef Array<class CaseStatement *> CaseStatements;
 

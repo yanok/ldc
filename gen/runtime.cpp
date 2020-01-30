@@ -11,8 +11,8 @@
 
 #include "dmd/aggregate.h"
 #include "dmd/dsymbol.h"
+#include "dmd/errors.h"
 #include "dmd/ldcbindings.h"
-#include "dmd/mars.h"
 #include "dmd/module.h"
 #include "dmd/mtype.h"
 #include "dmd/root/root.h"
@@ -343,7 +343,12 @@ llvm::Function *getRuntimeFunction(const Loc &loc, llvm::Module &target,
   }
 
   LLFunction *resfn =
-      llvm::cast<llvm::Function>(target.getOrInsertFunction(name, fnty));
+      llvm::cast<llvm::Function>(target
+                                     .getOrInsertFunction(name, fnty)
+#if LDC_LLVM_VER >= 900
+                                     .getCallee()
+#endif
+      );
   resfn->setAttributes(fn->getAttributes());
   resfn->setCallingConv(fn->getCallingConv());
   return resfn;

@@ -50,18 +50,22 @@ extern (C++) struct CTFloat
         enum yl2x_supported = __traits(compiles, core.math.yl2x(1.0L, 2.0L));
     enum yl2xp1_supported = yl2x_supported;
 
-    static void yl2x(const real_t* x, const real_t* y, real_t* res)
+    static void yl2x(const real_t* x, const real_t* y, real_t* res) // IN_LLVM: impure because of log2
     {
         static if (yl2x_supported)
             *res = core.math.yl2x(*x, *y);
+        else version (IN_LLVM)
+            *res = *y * log2(*x); // fall back to generic version
         else
             assert(0);
     }
 
-    static void yl2xp1(const real_t* x, const real_t* y, real_t* res)
+    static void yl2xp1(const real_t* x, const real_t* y, real_t* res) // IN_LLVM: impure because of log2
     {
         static if (yl2xp1_supported)
             *res = core.math.yl2xp1(*x, *y);
+        else version (IN_LLVM)
+            *res = *y * log2(*x + real_t(1)); // fall back to generic version
         else
             assert(0);
     }
@@ -77,12 +81,12 @@ extern (C++) struct CTFloat
     }
     else
     {
-        static real_t sin(real_t x) { return core.math.sin(x); }
-        static real_t cos(real_t x) { return core.math.cos(x); }
+        pure static real_t sin(real_t x) { return core.math.sin(x); }
+        pure static real_t cos(real_t x) { return core.math.cos(x); }
         static real_t tan(real_t x) { return core.stdc.math.tanl(x); }
-        static real_t sqrt(real_t x) { return core.math.sqrt(x); }
-        static real_t fabs(real_t x) { return core.math.fabs(x); }
-        static real_t ldexp(real_t n, int exp) { return core.math.ldexp(n, exp); }
+        pure static real_t sqrt(real_t x) { return core.math.sqrt(x); }
+        pure static real_t fabs(real_t x) { return core.math.fabs(x); }
+        pure static real_t ldexp(real_t n, int exp) { return core.math.ldexp(n, exp); }
     }
 
     static if (!is(real_t == real))
@@ -161,7 +165,7 @@ extern (C++) struct CTFloat
         if (isNaN(a))
             a = real_t.nan;
         enum sz = (real_t.mant_dig == 64) ? 10 : real_t.sizeof;
-        return calcHash(cast(ubyte*) &a, sz);
+        return calcHash((cast(ubyte*) &a)[0 .. sz]);
     }
 
     pure
@@ -194,7 +198,7 @@ extern (C++) struct CTFloat
         }
   }
 
-    static bool isInfinity(real_t r)
+    static bool isInfinity(real_t r) pure
     {
         return isIdentical(fabs(r), real_t.infinity);
     }
@@ -263,7 +267,6 @@ extern (C++) struct CTFloat
     __gshared real_t half;
   version (IN_LLVM)
   {
-    __gshared real_t initVal;
     __gshared real_t nan;
     __gshared real_t infinity;
   }
