@@ -14,6 +14,7 @@
 #include "dmd/identifier.h"
 #include "dmd/hdrgen.h"
 #include "dmd/json.h"
+#include "dmd/ldcbindings.h"
 #include "dmd/mars.h"
 #include "dmd/module.h"
 #include "dmd/mtype.h"
@@ -112,7 +113,7 @@ void printVersion(llvm::raw_ostream &OS) {
 #endif
 #endif
   OS << "  Default target: " << llvm::sys::getDefaultTargetTriple() << "\n";
-  std::string CPU = llvm::sys::getHostCPUName();
+  std::string CPU(llvm::sys::getHostCPUName());
   if (CPU == "generic" || env::has("SOURCE_DATE_EPOCH")) {
     // Env variable SOURCE_DATE_EPOCH indicates that a reproducible build is
     // wanted. Don't print the actual host CPU in such an environment to aid
@@ -162,7 +163,7 @@ void processVersions(std::vector<std::string> &list, const char *type,
       char *cstr = mem.xstrdup(value);
       if (Identifier::isValidIdentifier(cstr)) {
         if (!globalIDs)
-          globalIDs = new Strings();
+          globalIDs = createStrings();
         globalIDs->push(cstr);
         continue;
       } else {
@@ -567,7 +568,7 @@ void fixupUClibcEnv() {
   llvm::Triple triple(mTargetTriple);
   if (triple.getEnvironmentName().find("uclibc") != 0)
     return;
-  std::string envName = triple.getEnvironmentName();
+  std::string envName(triple.getEnvironmentName());
   envName.replace(0, 6, "gnu");
   triple.setEnvironmentName(envName);
   mTargetTriple = triple.normalize();
@@ -829,6 +830,12 @@ void registerPredefinedTargetVersions() {
     VersionCondition::addPredefinedGlobalIdent("Posix");
     VersionCondition::addPredefinedGlobalIdent("CppRuntime_Clang");
     break;
+#if LDC_LLVM_VER >= 800
+  case llvm::Triple::WASI:
+    VersionCondition::addPredefinedGlobalIdent("WASI");
+    VersionCondition::addPredefinedGlobalIdent("CRuntime_WASI");
+    break;
+#endif
   default:
     if (triple.getEnvironment() == llvm::Triple::Android) {
       VersionCondition::addPredefinedGlobalIdent("Android");
@@ -915,9 +922,6 @@ void registerPredefinedVersions() {
 #undef STR
 }
 
-// in druntime:
-extern "C" void gc_disable();
-
 /// LDC's entry point, C main.
 /// Without `-lowmem`, we need to switch to the bump-pointer allocation scheme
 /// right from the start, before any module ctors are run, so we need this hook
@@ -965,11 +969,6 @@ int main(int argc, const char **originalArgv)
 }
 
 int cppmain() {
-  // Older host druntime versions need druntime to be initialized before
-  // disabling the GC, so we cannot disable it in C main above.
-  if (!mem.isGCEnabled())
-    gc_disable();
-
   exe_path::initialize(allArguments[0]);
 
   global._init();
