@@ -1,6 +1,6 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 1999-2019 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
  * http://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
@@ -103,7 +103,7 @@ enum ENUMTY
     Tvector,
     Tint128,
     Tuns128,
-    TTraits,
+    Ttraits,
     TMAX
 };
 typedef unsigned char TY;       // ENUMTY
@@ -604,6 +604,7 @@ public:
     bool isscope;       // true: 'this' is scope
     bool isreturninferred;      // true: 'this' is return from inference
     bool isscopeinferred; // true: 'this' is scope from inference
+    bool islive;        // is @live
     LINK linkage;  // calling convention
     TRUST trust;   // level of trust
     PURE purity;   // PURExxxx
@@ -657,6 +658,7 @@ class TypeTraits : public Type
 
     Type *syntaxCopy();
     d_uns64 size(const Loc &loc);
+    Dsymbol *toDsymbol(Scope *sc);
     void accept(Visitor *v) { v->visit(this); }
 };
 
@@ -741,7 +743,6 @@ class TypeStruct : public Type
 public:
     StructDeclaration *sym;
     AliasThisRec att;
-    CPPMANGLE cppmangle;
 
     static TypeStruct *create(StructDeclaration *sym);
     const char *kind();
@@ -751,7 +752,7 @@ public:
     Dsymbol *toDsymbol(Scope *sc);
     structalign_t alignment();
     Expression *defaultInitLiteral(const Loc &loc);
-    bool isZeroInit(const Loc &loc) /*const*/;
+    bool isZeroInit(const Loc &loc);
     bool isAssignable();
     bool isBoolean() /*const*/;
     bool needsDestruction() /*const*/;

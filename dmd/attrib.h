@@ -1,6 +1,6 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 1999-2019 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
  * http://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
@@ -88,6 +88,7 @@ public:
 
     Dsymbol *syntaxCopy(Dsymbol *s);
     Scope *newScope(Scope *sc);
+    void setScope(Scope *sc);
     const char *toChars() const;
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -188,11 +189,12 @@ public:
     void accept(Visitor *v) { v->visit(this); }
 };
 
-class StaticForeachDeclaration : public ConditionalDeclaration
+class StaticForeachDeclaration : public AttribDeclaration
 {
 public:
     StaticForeach *sfe;
     ScopeDsymbol *scopesym;
+    bool onStack;
     bool cached;
     Dsymbols *cache;
 
@@ -207,7 +209,7 @@ public:
     void accept(Visitor *v) { v->visit(this); }
 };
 
-class ForwardingAttribDeclaration : AttribDeclaration
+class ForwardingAttribDeclaration : public AttribDeclaration
 {
 public:
     ForwardingScopeDsymbol *sym;
@@ -215,6 +217,7 @@ public:
     Scope *newScope(Scope *sc);
     void addMember(Scope *sc, ScopeDsymbol *sds);
     ForwardingAttribDeclaration *isForwardingAttribDeclaration() { return this; }
+    void accept(Visitor *v) { v->visit(this); }
 };
 
 // Mixin declarations
