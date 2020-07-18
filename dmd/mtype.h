@@ -327,6 +327,7 @@ public:
 
     // For eliminating dynamic_cast
     virtual TypeBasic *isTypeBasic();
+    TypeStruct *isTypeStruct();
     virtual void accept(Visitor *v) { v->visit(this); }
 };
 

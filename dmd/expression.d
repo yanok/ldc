@@ -1535,6 +1535,11 @@ extern (C++) /* IN_LLVM abstract */ class Expression : RootObject
         return .isConst(this);
     }
 
+    final pure inout nothrow @nogc
+    {
+        inout(VarExp)       isVarExp() { return op == TOK.variable ? cast(typeof(return))this : null; }
+    }
+
     /********************************
      * Does this expression statically evaluate to a boolean 'result' (true or false)?
      */

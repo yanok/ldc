@@ -2705,6 +2705,11 @@ extern (C++) abstract class Type : RootObject
         return null;
     }
 
+    final pure inout nothrow @nogc
+    {
+        inout(TypeStruct)     isTypeStruct()     { return ty == Tstruct    ? cast(typeof(return))this : null; }
+    }
+
     void accept(Visitor v)
     {
         v.visit(this);

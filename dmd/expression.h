@@ -129,6 +129,7 @@ public:
     // A compile-time result is required. Give an error if not possible
     Expression *ctfeInterpret();
     int isConst();
+    VarExp* isVarExp();
     virtual bool isBool(bool result);
 
     virtual bool hasCode()
