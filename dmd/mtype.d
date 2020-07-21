@@ -5437,8 +5437,9 @@ extern (C++) final class TypeStruct : Type
         return structinit;
     }
 
-    override bool isZeroInit(const ref Loc loc) const
+    override bool isZeroInit(const ref Loc loc)
     {
+        sym.size(loc); // do semantic of type
         return sym.zeroInit;
     }
 
