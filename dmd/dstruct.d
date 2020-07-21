@@ -405,6 +405,9 @@ extern (C++) class StructDeclaration : AggregateDeclaration
                 if (vd.type.size(vd.loc) == 0)
                     continue;
 
+                if (vd._init.isVoidInitializer())
+                    continue;
+
                 // Examine init to see if it is all 0s.
                 auto exp = vd.getConstInitializer();
                 if (!exp || !_isZeroInit(exp))
