@@ -1427,7 +1427,8 @@ version (IN_LLVM)
                         {
                             // or a delegate that doesn't escape a reference to the function
                             FuncDeclaration f = (cast(FuncExp)ex).fd;
-                            f.tookAddressOf--;
+                            if (f.tookAddressOf)
+                                f.tookAddressOf--;
                         }
                     }
                 }
