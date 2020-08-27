@@ -1,9 +1,5 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
- *
- * This module contains the `Id` struct with a list of predefined symbols the
- * compiler knows about.
+ * Contains the `Id` struct with a list of predefined symbols the compiler knows about.
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -133,6 +129,8 @@ immutable Msgtable[] msgtable =
     { "_assert", "assert" },
     { "_unittest", "unittest" },
     { "_body", "body" },
+    { "printf" },
+    { "scanf" },
 
     { "TypeInfo" },
     { "TypeInfo_Class" },
@@ -370,10 +368,25 @@ immutable Msgtable[] msgtable =
     { "rint" },
     { "ldexp" },
     { "rndtol" },
+    { "exp" },
     { "expm1" },
     { "exp2" },
     { "yl2x" },
     { "yl2xp1" },
+    { "log" },
+    { "log2" },
+    { "log10" },
+    { "round" },
+    { "floor" },
+    { "trunc" },
+    { "fmax" },
+    { "fmin" },
+    { "fma" },
+    { "isnan" },
+    { "isInfinity" },
+    { "isfinite" },
+    { "ceil" },
+    { "copysign" },
     { "fabs" },
     { "toPrec" },
     { "simd" },
@@ -455,6 +468,7 @@ immutable Msgtable[] msgtable =
     { "getLocation" },
     { "hasPostblit" },
     { "hasCopyConstructor" },
+    { "isCopyable" },
 
     // For C++ mangling
     { "allocator" },
@@ -465,6 +479,7 @@ immutable Msgtable[] msgtable =
     { "char_traits" },
 
     // Compiler recognized UDA's
+    { "udaGNUAbiTag", "gnuAbiTag" },
     { "udaSelector", "selector" },
 
     // C names, for undefined identifier error messages

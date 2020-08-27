@@ -10,7 +10,6 @@
 #include "driver/linker.h"
 
 #include "dmd/errors.h"
-#include "driver/args.h"
 #include "driver/cl_options.h"
 #include "driver/tool.h"
 #include "gen/llvm.h"
@@ -32,6 +31,11 @@ static cl::opt<bool> linkInternally("link-internally", cl::ZeroOrMore,
 #else
 constexpr bool linkInternally = false;
 #endif
+
+static cl::opt<std::string> platformLib(
+    "platformlib", cl::ZeroOrMore, cl::value_desc("lib1,lib2,..."),
+    cl::desc("Platform libraries to link with (overrides previous)"),
+    cl::cat(opts::linkingCategory));
 
 static cl::opt<bool> noDefaultLib(
     "nodefaultlib", cl::ZeroOrMore, cl::Hidden,
@@ -137,6 +141,26 @@ static std::string getOutputName() {
 
 //////////////////////////////////////////////////////////////////////////////
 
+static std::vector<std::string>
+parseLibNames(llvm::StringRef commaSeparatedList, llvm::StringRef suffix = {}) {
+  std::vector<std::string> result;
+
+  std::stringstream list(commaSeparatedList);
+  while (list.good()) {
+    std::string lib;
+    std::getline(list, lib, ',');
+    if (lib.empty()) {
+      continue;
+    }
+
+    result.push_back(suffix.empty() ? std::move(lib) : (lib + suffix).str());
+  }
+
+  return result;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 static std::vector<std::string> getDefaultLibNames() {
   std::vector<std::string> result;
 
@@ -145,24 +169,20 @@ static std::vector<std::string> getDefaultLibNames() {
                        "overrides the existing list instead of appending to "
                        "it. Please use the latter instead.");
   } else if (!global.params.betterC) {
-    const bool addDebugSuffix =
-        (linkDefaultLibDebug && debugLib.getNumOccurrences() == 0);
-    const bool addSharedSuffix = linkAgainstSharedDefaultLibs();
+    llvm::StringRef list = defaultLib;
+    std::string suffix;
 
-    // Parse comma-separated default library list.
-    std::stringstream libNames(
-        linkDefaultLibDebug && !addDebugSuffix ? debugLib : defaultLib);
-    while (libNames.good()) {
-      std::string lib;
-      std::getline(libNames, lib, ',');
-      if (lib.empty()) {
-        continue;
-      }
-
-      result.push_back((llvm::Twine(lib) + (addDebugSuffix ? "-debug" : "") +
-                        (addSharedSuffix ? "-shared" : ""))
-                           .str());
+    if (linkDefaultLibDebug) {
+      if (debugLib.getNumOccurrences() == 0)
+        suffix = "-debug";
+      else
+        list = debugLib;
     }
+    if (linkAgainstSharedDefaultLibs()) {
+      suffix += "-shared";
+    }
+
+    result = parseLibNames(list, suffix);
   }
 
   return result;
@@ -170,7 +190,25 @@ static std::vector<std::string> getDefaultLibNames() {
 
 //////////////////////////////////////////////////////////////////////////////
 
-bool useInternalLLDForLinking() { return linkInternally; }
+llvm::Optional<std::vector<std::string>> getExplicitPlatformLibs() {
+  if (platformLib.getNumOccurrences() > 0)
+    return parseLibNames(platformLib);
+  return llvm::None;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+bool useInternalLLDForLinking() {
+  return linkInternally
+#if LDC_WITH_LLD
+         ||
+         // DWARF debuginfos for MSVC require LLD
+         (opts::emitDwarfDebugInfo && linkInternally.getNumOccurrences() == 0 &&
+          opts::linker.empty() && !opts::isUsingLTO() &&
+          global.params.targetTriple->isWindowsMSVCEnvironment())
+#endif
+      ;
+}
 
 cl::boolOrDefault linkFullyStatic() { return staticFlag; }
 
@@ -184,28 +222,31 @@ bool linkAgainstSharedDefaultLibs() {
 
 //////////////////////////////////////////////////////////////////////////////
 
-bool useInternalToolchainForMSVC() {
-#ifndef _WIN32
-  return true;
-#else
-  return !env::has(L"VSINSTALLDIR") && !env::has(L"LDC_VSDIR") &&
-         // LDC_VSDIR_FORCE alone can be used to prefer MSVC toolchain
-         // auto-detection over the internal toolchain.
-         !env::has(L"LDC_VSDIR_FORCE");
-#endif
-}
+llvm::StringRef getExplicitMscrtLibName() { return mscrtlib; }
 
-llvm::StringRef getMscrtLibName() {
-  llvm::StringRef name = mscrtlib;
-  if (name.empty()) {
-    if (useInternalToolchainForMSVC()) {
-      name = "vcruntime140";
-    } else {
-      // default to static release variant
-      name = linkFullyStatic() != llvm::cl::BOU_FALSE ? "libcmt" : "msvcrt";
-    }
+llvm::StringRef getMscrtLibName(const bool *useInternalToolchain) {
+  llvm::StringRef name = getExplicitMscrtLibName();
+  if (!name.empty())
+    return name;
+
+  bool useInternal = false;
+  if (useInternalToolchain) {
+    useInternal = *useInternalToolchain;
+  } else {
+#ifdef _WIN32
+    static bool haveMSVC = windows::isMsvcAvailable();
+    useInternal = !haveMSVC;
+#else
+    useInternal = true;
+#endif
   }
-  return name;
+
+  if (useInternal) {
+    return "vcruntime140";
+  } else {
+    // default to static release variant
+    return linkFullyStatic() != llvm::cl::BOU_FALSE ? "libcmt" : "msvcrt";
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////////

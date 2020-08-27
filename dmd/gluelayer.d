@@ -1,6 +1,7 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Declarations for back-end functions that the front-end invokes.
+ *
+ * This 'glues' either the DMC or GCC back-end to the front-end.
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -21,19 +22,18 @@ import dmd.root.file;
 
 version (IN_LLVM)
 {
-    struct Symbol;
-    struct code;
-    struct block;
-    struct Blockx;
-    struct elem;
-    struct TYPE;
-    alias type = TYPE;
-
     extern (C++)
     {
+        struct AsmCode;
+
+        // < 2.072: no `extern (C++, class)` support
+        /*extern (C++, class)*/ struct IrType;
+
         Statement asmSemantic(AsmStatement s, Scope* sc);
-        void objc_initSymbols() {}
     }
+
+    alias code = AsmCode;
+    alias type = IrType;
 }
 else version (NoBackend)
 {

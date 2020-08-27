@@ -26,6 +26,8 @@ using llvm::APFloat;
 TypeTuple *toArgTypes(Type *t);
 // in dmd/argtypes_sysv_x64.d:
 TypeTuple *toArgTypes_sysv_x64(Type *t);
+// in dmd/argtypes_aarch64.d:
+TypeTuple *toArgTypes_aarch64(Type *t);
 
 namespace {
 /******************************
@@ -78,10 +80,7 @@ unsigned getCriticalSectionSize(const Param &params) {
 
 void Target::_init(const Param &params) {
   CTFloat::initialize();
-
-  FloatProperties.initialize();
-  DoubleProperties.initialize();
-  RealProperties.initialize();
+  initFPTypeProperties();
 
   const auto &triple = *params.targetTriple;
   const bool isMSVC = triple.isWindowsMSVCEnvironment();
@@ -107,15 +106,9 @@ void Target::_init(const Param &params) {
   // Finalize RealProperties for the target's `real` type.
 
   const auto targetRealSemantics = &real->getFltSemantics();
-#if LDC_LLVM_VER >= 400
   const auto IEEEdouble = &APFloat::IEEEdouble();
   const auto x87DoubleExtended = &APFloat::x87DoubleExtended();
   const auto IEEEquad = &APFloat::IEEEquad();
-#else
-  const auto IEEEdouble = &APFloat::IEEEdouble;
-  const auto x87DoubleExtended = &APFloat::x87DoubleExtended;
-  const auto IEEEquad = &APFloat::IEEEquad;
-#endif
 
   RealProperties.nan = CTFloat::nan;
   RealProperties.infinity = CTFloat::infinity;
@@ -177,7 +170,11 @@ unsigned Target::alignsize(Type *type) {
  */
 unsigned Target::fieldalign(Type *type) { return DtoAlignment(type); }
 
-Type *Target::va_listType() { return gABI->vaListType(); }
+Type *Target::va_listType(const Loc &loc, Scope *sc) {
+  if (!tvalist)
+    tvalist = typeSemantic(gABI->vaListType(), loc, sc);
+  return tvalist;
+}
 
 /**
  * Gets vendor-specific type mangling for C++ ABI.
@@ -200,10 +197,13 @@ const char *TargetCPP::typeMangle(Type *t) {
 
 TypeTuple *Target::toArgTypes(Type *t) {
   const auto &triple = *global.params.targetTriple;
-  if (triple.getArch() == llvm::Triple::x86)
+  const auto arch = triple.getArch();
+  if (arch == llvm::Triple::x86)
     return ::toArgTypes(t);
-  if (triple.getArch() == llvm::Triple::x86_64 && !triple.isOSWindows())
+  if (arch == llvm::Triple::x86_64 && !triple.isOSWindows())
     return toArgTypes_sysv_x64(t);
+  if (arch == llvm::Triple::aarch64 || arch == llvm::Triple::aarch64_be)
+    return toArgTypes_aarch64(t);
   return nullptr;
 }
 
@@ -227,10 +227,8 @@ Expression *Target::getTargetInfo(const char *name_, const Loc &loc) {
       objectFormat = "macho";
     } else if (triple.isOSBinFormatELF()) {
       objectFormat = "elf";
-#if LDC_LLVM_VER >= 500
     } else if (triple.isOSBinFormatWasm()) {
       objectFormat = "wasm";
-#endif
     }
     return createStringExp(objectFormat);
   }
@@ -250,7 +248,8 @@ Expression *Target::getTargetInfo(const char *name_, const Loc &loc) {
   if (name == "cppRuntimeLibrary") {
     const char *cppRuntimeLibrary = "";
     if (triple.isWindowsMSVCEnvironment()) {
-      cppRuntimeLibrary = mem.xstrdup(getMscrtLibName().str().c_str());
+      auto mscrtlib = getMscrtLibName().str();
+      cppRuntimeLibrary = mem.xstrdup(mscrtlib.c_str());
     }
     return createStringExp(cppRuntimeLibrary);
   }

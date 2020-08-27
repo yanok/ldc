@@ -1,6 +1,6 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Miscellaneous declarations, including typedef, alias, variable declarations including the
+ * implicit this declaration, type tuples, ClassInfo, ModuleInfo and various TypeInfos.
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -89,15 +89,18 @@ bool modifyFieldVar(Loc loc, Scope* sc, VarDeclaration var, Expression e1)
         if (s)
             fd = s.isFuncDeclaration();
         if (fd &&
-            ((fd.isCtorDeclaration() && var.isField()) ||
-             (fd.isStaticCtorDeclaration() && !var.isField())) &&
+            ((var.isField() && (fd.isCtorDeclaration() || fd.isPostBlitDeclaration())) ||
+             (!var.isField() && fd.isStaticCtorDeclaration())) &&
             fd.toParentDecl() == var.toParent2() &&
             (!e1 || e1.op == TOK.this_))
         {
             bool result = true;
 
-            var.ctorinit = true;
-            //printf("setting ctorinit\n");
+            if (!fd.isPostBlitDeclaration())
+            {
+                var.ctorinit = true;
+                //printf("setting ctorinit\n");
+            }
 
             if (var.isField() && sc.ctorflow.fieldinit.length && !sc.intypeof)
             {
@@ -193,7 +196,7 @@ extern (C++) void ObjectNotFound(Identifier id)
     fatal();
 }
 
-enum STC : long
+enum STC : ulong
 {
     undefined_          = 0L,
     static_             = (1L << 0),

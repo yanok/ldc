@@ -1,6 +1,7 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Does semantic analysis for statements.
+ *
+ * Specification: $(LINK2 https://dlang.org/spec/statement.html, Statements)
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -56,6 +57,7 @@ import dmd.target;
 import dmd.tokens;
 import dmd.typesem;
 import dmd.visitor;
+import dmd.compiler;
 
 version (IN_LLVM) import gen.dpragma;
 
@@ -124,8 +126,15 @@ private Expression checkAssignmentAsCondition(Expression e)
 // Performs semantic analysis in Statement AST nodes
 extern(C++) Statement statementSemantic(Statement s, Scope* sc)
 {
+    version (CallbackAPI)
+        Compiler.onStatementSemanticStart(s, sc);
+
     scope v = new StatementSemanticVisitor(sc);
     s.accept(v);
+
+    version (CallbackAPI)
+        Compiler.onStatementSemanticDone(s, sc);
+
     return v.result;
 }
 
@@ -1139,8 +1148,8 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
             if (foundMismatch && dim != foreachParamCount)
             {
                 const(char)* plural = foreachParamCount > 1 ? "s" : "";
-                fs.error("cannot infer argument types, expected %d argument%s, not %d",
-                    foreachParamCount, plural, dim);
+                fs.error("cannot infer argument types, expected %llu argument%s, not %llu",
+                    cast(ulong) foreachParamCount, plural, cast(ulong) dim);
             }
             else
                 fs.error("cannot uniquely infer `foreach` argument types");
@@ -1216,9 +1225,7 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                      */
                     Type tv = (*fs.parameters)[1].type.toBasetype();
                     if ((tab.ty == Tarray ||
-                         (tn.ty != tv.ty &&
-                          (tn.ty == Tchar || tn.ty == Twchar || tn.ty == Tdchar) &&
-                          (tv.ty == Tchar || tv.ty == Twchar || tv.ty == Tdchar))) &&
+                         (tn.ty != tv.ty && tn.ty.isSomeChar && tv.ty.isSomeChar)) &&
                         !Type.tsize_t.implicitConvTo(tindex))
                     {
                         fs.deprecation("foreach: loop index implicitly converted from `size_t` to `%s`",
@@ -1229,13 +1236,12 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                 /* Look for special case of parsing char types out of char type
                  * array.
                  */
-                if (tn.ty == Tchar || tn.ty == Twchar || tn.ty == Tdchar)
+                if (tn.ty.isSomeChar)
                 {
                     int i = (dim == 1) ? 0 : 1; // index of value
                     Parameter p = (*fs.parameters)[i];
                     tnv = p.type.toBasetype();
-                    if (tnv.ty != tn.ty &&
-                        (tnv.ty == Tchar || tnv.ty == Twchar || tnv.ty == Tdchar))
+                    if (tnv.ty != tn.ty && tnv.ty.isSomeChar)
                     {
                         if (p.storageClass & STC.ref_)
                         {
@@ -1282,6 +1288,8 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                         {
                             TypeSArray ta = cast(TypeSArray)tab;
                             IntRange dimrange = getIntRange(ta.dim);
+                            // https://issues.dlang.org/show_bug.cgi?id=12504
+                            dimrange.imax = SignExtendedNumber(dimrange.imax.value-1);
                             if (!IntRange.fromType(var.type).contains(dimrange))
                             {
                                 fs.error("index type `%s` cannot cover index range 0..%llu",
@@ -1586,8 +1594,8 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                     if (exps.dim != dim)
                     {
                         const(char)* plural = exps.dim > 1 ? "s" : "";
-                        fs.error("cannot infer argument types, expected %d argument%s, not %d",
-                            exps.dim, plural, dim);
+                        fs.error("cannot infer argument types, expected %llu argument%s, not %llu",
+                            cast(ulong) exps.dim, plural, cast(ulong) dim);
                         goto case Terror;
                     }
 
@@ -2705,7 +2713,7 @@ version (IN_LLVM)
                     /* Rewrite as an assert(0) and let e2ir generate
                      * the call to the C assert failure function
                      */
-                    s = new ExpStatement(ss.loc, new AssertExp(ss.loc, new IntegerExp(ss.loc, 0, Type.tint32)));
+                    s = new ExpStatement(ss.loc, new AssertExp(ss.loc, IntegerExp.literal!0));
                 }
                 else
                 {
@@ -2791,19 +2799,14 @@ version (IN_LLVM)
 
             if (numcases)
             {
-                extern (C) static int sort_compare(const(void*) x, const(void*) y) @trusted
+                static int sort_compare(in CaseStatement* x, in CaseStatement* y) @trusted /* IN_LLVM: ltsmaster... */ nothrow
                 {
-                    CaseStatement ox = *cast(CaseStatement *)x;
-                    CaseStatement oy = *cast(CaseStatement*)y;
-
-                    auto se1 = ox.exp.isStringExp();
-                    auto se2 = oy.exp.isStringExp();
+                    auto se1 = x.exp.isStringExp();
+                    auto se2 = y.exp.isStringExp();
                     return (se1 && se2) ? se1.compare(se2) : 0;
                 }
-
                 // Sort cases for efficient lookup
-                import core.stdc.stdlib : qsort, _compare_fp_t;
-                qsort((*csCopy)[].ptr, numcases, CaseStatement.sizeof, cast(_compare_fp_t)&sort_compare);
+                csCopy.sort!sort_compare;
             }
 
             // The actual lowering
@@ -3557,7 +3560,7 @@ version (IN_LLVM)
         {
             if (sc.os && sc.os.tok != TOK.onScopeFailure)
             {
-                bs.error("`break` is not inside `%s` bodies", Token.toChars(sc.os.tok));
+                bs.error("`break` is not allowed inside `%s` bodies", Token.toChars(sc.os.tok));
             }
             else if (sc.fes)
             {
@@ -3648,7 +3651,7 @@ version (IN_LLVM)
         {
             if (sc.os && sc.os.tok != TOK.onScopeFailure)
             {
-                cs.error("`continue` is not inside `%s` bodies", Token.toChars(sc.os.tok));
+                cs.error("`continue` is not allowed inside `%s` bodies", Token.toChars(sc.os.tok));
             }
             else if (sc.fes)
             {

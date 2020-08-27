@@ -1,5 +1,7 @@
 /**
- * Compiler implementation of the $(LINK2 http://www.dlang.org, D programming language)
+ * Does name mangling for `extern(D)` symbols.
+ *
+ * Specification: $(LINK2 https://dlang.org/spec/abi.html#name_mangling, Name Mangling)
  *
  * Copyright: Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors: Walter Bright, http://www.digitalmars.com
@@ -395,6 +397,9 @@ public:
             buf.writestring("Nj");
         else if (ta.isscope && !ta.isscopeinferred)
             buf.writestring("Nl");
+
+        if (ta.islive)
+            buf.writestring("Nm");
 
         switch (ta.trust)
         {
@@ -1033,7 +1038,6 @@ public:
         buf.writeByte(m);
         buf.print(q.length);
         buf.writeByte('_');    // nbytes <= 11
-        const len = buf.length;
         auto slice = buf.allocate(2 * q.length);
         foreach (i, c; q)
         {

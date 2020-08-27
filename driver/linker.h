@@ -40,15 +40,19 @@ llvm::cl::boolOrDefault linkFullyStatic();
 bool linkAgainstSharedDefaultLibs();
 
 /**
- * Indicates whether the internal 'toolchain' (-link-internally and MinGW-w64
- * libs) is to be used for MSVC targets.
+ * Returns the -platformlib library names, if specified.
  */
-bool useInternalToolchainForMSVC();
+llvm::Optional<std::vector<std::string>> getExplicitPlatformLibs();
+
+/**
+ * Returns the value of -mscrtlib.
+ */
+llvm::StringRef getExplicitMscrtLibName();
 
 /**
  * Returns the name of the MS C runtime library to link with.
  */
-llvm::StringRef getMscrtLibName();
+llvm::StringRef getMscrtLibName(const bool *useInternalToolchain = nullptr);
 
 /**
  * Inserts bitcode files passed on the commandline into a module.

@@ -1,4 +1,8 @@
 /**
+ * Defines a visitor for the AST.
+ *
+ * Other visitors derive from this class.
+ *
  * Documentation:  https://dlang.org/phobos/dmd_parsetimevisitor.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/parsetimevisitor.d
  */
@@ -143,6 +147,7 @@ public:
     void visit(AST.TypeNext t) { visit(cast(AST.Type)t); }
     void visit(AST.TypeQualified t) { visit(cast(AST.Type)t); }
     void visit(AST.TypeTraits t) { visit(cast(AST.Type)t); }
+    void visit(AST.TypeMixin t) { visit(cast(AST.Type)t); }
 
     // TypeNext
     void visit(AST.TypeReference t) { visit(cast(AST.TypeNext)t); }

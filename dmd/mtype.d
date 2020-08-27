@@ -1,6 +1,5 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Defines a D type.
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -234,7 +233,6 @@ private enum TFlags
     real_        = 8,
     imaginary    = 0x10,
     complex      = 0x20,
-    char_        = 0x40,
 }
 
 enum ENUMTY : int
@@ -342,6 +340,12 @@ alias TMAX = ENUMTY.TMAX;
 
 alias TY = ubyte;
 
+///Returns true if ty is char, wchar, or dchar
+bool isSomeChar(TY ty) pure nothrow @nogc @safe
+{
+    return ty == Tchar || ty == Twchar || ty == Tdchar;
+}
+
 enum MODFlags : int
 {
     const_       = 1,    // type is const
@@ -367,7 +371,7 @@ enum DotExpFlag
  * Variadic argument lists
  * https://dlang.org/spec/function.html#variadic
  */
-enum VarArg
+enum VarArg : ubyte
 {
     none     = 0,  /// fixed number of arguments
     variadic = 1,  /// (T t, ...)  can be C-style (core.stdc.stdarg) or D-style (core.vararg)
@@ -438,7 +442,6 @@ extern (C++) abstract class Type : ASTNode
     extern (C++) __gshared Type tstring;     // immutable(char)[]
     extern (C++) __gshared Type twstring;    // immutable(wchar)[]
     extern (C++) __gshared Type tdstring;    // immutable(dchar)[]
-    extern (C++) __gshared Type tvalist;     // va_list alias
     extern (C++) __gshared Type terror;      // for error recovery
     extern (C++) __gshared Type tnull;       // for null type
 
@@ -893,7 +896,6 @@ version (IN_LLVM)
         tstring = tchar.immutableOf().arrayOf();
         twstring = twchar.immutableOf().arrayOf();
         tdstring = tdchar.immutableOf().arrayOf();
-        tvalist = target.va_listType();
 
         const isLP64 = global.params.isLP64;
 
@@ -1032,11 +1034,6 @@ version (IN_LLVM)
     }
 
     bool isunsigned()
-    {
-        return false;
-    }
-
-    bool ischar()
     {
         return false;
     }
@@ -2024,6 +2021,12 @@ version (IN_LLVM)
         return t;
     }
 
+    final bool hasDeprecatedAliasThis()
+    {
+        auto ad = isAggregate(this);
+        return ad && ad.aliasthis && (ad.aliasthis.isDeprecated || ad.aliasthis.sym.isDeprecated);
+    }
+
     final Type aliasthisOf()
     {
         auto ad = isAggregate(this);
@@ -2194,9 +2197,13 @@ version (IN_LLVM)
      * If this is a shell around another type,
      * get that other type.
      */
-    Type toBasetype()
+    final Type toBasetype()
     {
-        return this;
+        /* This function is used heavily.
+         * De-virtualize it so it can be easily inlined.
+         */
+        TypeEnum te;
+        return ((te = isTypeEnum()) !is null) ? te.toBasetype2() : this;
     }
 
     bool isBaseOf(Type t, int* poffset)
@@ -2452,7 +2459,7 @@ version (IN_LLVM)
             static assert(hashedname.length < namebuf.length-30);
             name = namebuf.ptr;
             length = sprintf(name, "_D%lluTypeInfo_%.*s6__initZ",
-                cast(ulong)9 + hashedname.length, hashedname.length, hashedname.ptr);
+                9LU + hashedname.length, cast(int) hashedname.length, hashedname.ptr);
         }
         else
         {
@@ -2595,6 +2602,15 @@ version (IN_LLVM)
      * Only applies to value types, not ref types.
      */
     bool needsDestruction()
+    {
+        return false;
+    }
+
+    /********************************
+     * true if when type is copied, it needs a copy constructor or postblit
+     * applied. Only applies to value types, not ref types.
+     */
+    bool needsCopyOrPostblit()
     {
         return false;
     }
@@ -3161,17 +3177,17 @@ extern (C++) final class TypeBasic : Type
 
         case Tchar:
             d = Token.toChars(TOK.char_);
-            flags |= TFlags.integral | TFlags.unsigned | TFlags.char_;
+            flags |= TFlags.integral | TFlags.unsigned;
             break;
 
         case Twchar:
             d = Token.toChars(TOK.wchar_);
-            flags |= TFlags.integral | TFlags.unsigned | TFlags.char_;
+            flags |= TFlags.integral | TFlags.unsigned;
             break;
 
         case Tdchar:
             d = Token.toChars(TOK.dchar_);
-            flags |= TFlags.integral | TFlags.unsigned | TFlags.char_;
+            flags |= TFlags.integral | TFlags.unsigned;
             break;
 
         default:
@@ -3309,11 +3325,6 @@ extern (C++) final class TypeBasic : Type
     override bool isunsigned() const
     {
         return (flags & TFlags.unsigned) != 0;
-    }
-
-    override bool ischar() const
-    {
-        return (flags & TFlags.char_) != 0;
     }
 
     override MATCH implicitConvTo(Type to)
@@ -3617,7 +3628,7 @@ extern (C++) final class TypeSArray : TypeArray
     override bool isString()
     {
         TY nty = next.toBasetype().ty;
-        return nty == Tchar || nty == Twchar || nty == Tdchar;
+        return nty.isSomeChar;
     }
 
     override bool isZeroInit(const ref Loc loc)
@@ -3728,6 +3739,11 @@ extern (C++) final class TypeSArray : TypeArray
         return next.needsDestruction();
     }
 
+    override bool needsCopyOrPostblit()
+    {
+        return next.needsCopyOrPostblit();
+    }
+
     /*********************************
      *
      */
@@ -3787,7 +3803,7 @@ extern (C++) final class TypeDArray : TypeArray
     override bool isString()
     {
         TY nty = next.toBasetype().ty;
-        return nty == Tchar || nty == Twchar || nty == Tdchar;
+        return nty.isSomeChar;
     }
 
     override bool isZeroInit(const ref Loc loc) const
@@ -4218,9 +4234,9 @@ extern (C++) final class TypeFunction : TypeNext
             this.trust = TRUST.trusted;
     }
 
-    static TypeFunction create(Parameters* parameters, Type treturn, VarArg varargs, LINK linkage, StorageClass stc = 0)
+    static TypeFunction create(Parameters* parameters, Type treturn, ubyte varargs, LINK linkage, StorageClass stc = 0)
     {
-        return new TypeFunction(ParameterList(parameters, varargs), treturn, linkage, stc);
+        return new TypeFunction(ParameterList(parameters, cast(VarArg)varargs), treturn, linkage, stc);
     }
 
     override const(char)* kind() const
@@ -4231,8 +4247,7 @@ extern (C++) final class TypeFunction : TypeNext
     override Type syntaxCopy()
     {
         Type treturn = next ? next.syntaxCopy() : null;
-        Parameters* params = Parameter.arraySyntaxCopy(parameterList.parameters);
-        auto t = new TypeFunction(ParameterList(params, parameterList.varargs), treturn, linkage);
+        auto t = new TypeFunction(parameterList.syntaxCopy(), treturn, linkage);
         t.mod = mod;
         t.isnothrow = isnothrow;
         t.isnogc = isnogc;
@@ -5517,6 +5532,7 @@ extern (C++) final class TypeStruct : Type
 {
     StructDeclaration sym;
     AliasThisRec att = AliasThisRec.fwdref;
+    bool inuse = false; // struct currently subject of recursive method call
 
     extern (D) this(StructDeclaration sym)
     {
@@ -5672,8 +5688,18 @@ extern (C++) final class TypeStruct : Type
         return sym.dtor !is null;
     }
 
+    override bool needsCopyOrPostblit()
+    {
+        return sym.hasCopyCtor || sym.postblit;
+    }
+
     override bool needsNested()
     {
+        if (inuse) return false; // circular type, error instead of crashing
+
+        inuse = true;
+        scope(exit) inuse = false;
+
         if (sym.isNested())
             return true;
 
@@ -5919,11 +5945,6 @@ extern (C++) final class TypeEnum : Type
         return memType().isunsigned();
     }
 
-    override bool ischar()
-    {
-        return memType().ischar();
-    }
-
     override bool isBoolean()
     {
         return memType().isBoolean();
@@ -5942,6 +5963,11 @@ extern (C++) final class TypeEnum : Type
     override bool needsDestruction()
     {
         return memType().needsDestruction();
+    }
+
+    override bool needsCopyOrPostblit()
+    {
+        return memType().needsCopyOrPostblit();
     }
 
     override bool needsNested()
@@ -5971,7 +5997,7 @@ extern (C++) final class TypeEnum : Type
         return MATCH.nomatch;
     }
 
-    override Type toBasetype()
+    extern (D) Type toBasetype2()
     {
         if (!sym.members && !sym.memtype)
             return this;
@@ -6178,6 +6204,9 @@ extern (C++) final class TypeClass : Type
  */
 extern (C++) final class TypeTuple : Type
 {
+    // 'logically immutable' cached global - don't modify!
+    __gshared TypeTuple empty = new TypeTuple();
+
     Parameters* arguments;  // types making up the tuple
 
     extern (D) this(Parameters* arguments)
@@ -6415,7 +6444,15 @@ extern (C++) final class TypeNull : Type
 extern (C++) struct ParameterList
 {
     Parameters* parameters;
+    StorageClass stc;                   // storage class of ...
     VarArg varargs = VarArg.none;
+
+    this(Parameters* parameters, VarArg varargs = VarArg.none, StorageClass stc = 0)
+    {
+        this.parameters = parameters;
+        this.varargs = varargs;
+        this.stc = stc;
+    }
 
     size_t length()
     {
@@ -6425,6 +6462,11 @@ extern (C++) struct ParameterList
     Parameter opIndex(size_t i)
     {
         return Parameter.getNth(parameters, i);
+    }
+
+    extern (D) ParameterList syntaxCopy()
+    {
+        return ParameterList(Parameter.arraySyntaxCopy(parameters), varargs);
     }
 
     alias parameters this;
@@ -6764,6 +6806,8 @@ void attributesApply(const TypeFunction tf, void delegate(string) dg, TRUSTforma
         dg("return");
     if (tf.isscope && !tf.isscopeinferred)
         dg("scope");
+    if (tf.islive)
+        dg("@live");
 
     TRUST trustAttrib = tf.trust;
 
@@ -6814,7 +6858,7 @@ bool isIndexableNonAggregate(Type t)
  * Returns:
  *      true if we can copy it
  */
-bool isCopyable(const Type t) pure nothrow @nogc
+bool isCopyable(Type t)
 {
     //printf("isCopyable() %s\n", t.toChars());
     if (auto ts = t.isTypeStruct())
@@ -6822,6 +6866,20 @@ bool isCopyable(const Type t) pure nothrow @nogc
         if (ts.sym.postblit &&
             ts.sym.postblit.storage_class & STC.disable)
             return false;
+        if (ts.sym.hasCopyCtor)
+        {
+            // check if there is a matching overload of the copy constructor and whether it is disabled or not
+            // `assert(ctor)` fails on Win32 and Win_32_64. See: https://auto-tester.puremagic.com/pull-history.ghtml?projectid=1&repoid=1&pullid=10575
+            Dsymbol ctor = search_function(ts.sym, Id.ctor);
+            assert(ctor);
+            scope el = new IdentifierExp(Loc.initial, Id.p); // dummy lvalue
+            el.type = cast() ts;
+            Expressions args;
+            args.push(el);
+            FuncDeclaration f = resolveFuncCall(Loc.initial, null, ctor, null, cast()ts, &args, FuncResolveFlag.quiet);
+            if (!f || f.storage_class & STC.disable)
+                return false;
+        }
     }
     return true;
 }

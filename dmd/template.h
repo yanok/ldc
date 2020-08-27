@@ -66,6 +66,8 @@ public:
     bool literal;               // this template declaration is a literal
     bool ismixin;               // template declaration is only to be used as a mixin
     bool isstatic;              // this is static template declaration
+    bool isTrivialAliasSeq;     // matches `template AliasSeq(T...) { alias AliasSeq = T; }
+    bool isTrivialAlias;        // matches pattern `template Alias(T) { alias Alias = qualifiers(T); }`
     Prot protection;
     int inuse;                  // for recursive expansion detection
 
@@ -136,7 +138,7 @@ public:
 
     /* Create dummy argument based on parameter.
      */
-    virtual void *dummyArg() = 0;
+    virtual RootObject *dummyArg() = 0;
     void accept(Visitor *v) { v->visit(this); }
 };
 
@@ -156,7 +158,7 @@ public:
     RootObject *specialization();
     RootObject *defaultArg(Loc instLoc, Scope *sc);
     bool hasDefaultArg();
-    void *dummyArg();
+    RootObject *dummyArg();
     void accept(Visitor *v) { v->visit(this); }
 };
 
@@ -188,7 +190,7 @@ public:
     RootObject *specialization();
     RootObject *defaultArg(Loc instLoc, Scope *sc);
     bool hasDefaultArg();
-    void *dummyArg();
+    RootObject *dummyArg();
     void accept(Visitor *v) { v->visit(this); }
 };
 
@@ -209,7 +211,7 @@ public:
     RootObject *specialization();
     RootObject *defaultArg(Loc instLoc, Scope *sc);
     bool hasDefaultArg();
-    void *dummyArg();
+    RootObject *dummyArg();
     void accept(Visitor *v) { v->visit(this); }
 };
 
@@ -226,7 +228,7 @@ public:
     RootObject *specialization();
     RootObject *defaultArg(Loc instLoc, Scope *sc);
     bool hasDefaultArg();
-    void *dummyArg();
+    RootObject *dummyArg();
     void accept(Visitor *v) { v->visit(this); }
 };
 
@@ -299,7 +301,6 @@ public:
     Dsymbol *syntaxCopy(Dsymbol *s);
     const char *kind() const;
     bool oneMember(Dsymbol **ps, Identifier *ident);
-    int apply(Dsymbol_apply_ft_t fp, void *param);
     bool hasPointers();
     void setFieldOffset(AggregateDeclaration *ad, unsigned *poffset, bool isunion);
     const char *toChars() const;

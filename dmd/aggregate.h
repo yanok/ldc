@@ -138,9 +138,11 @@ public:
     // 'this' type
     Type *handleType() { return type; }
 
+#if !IN_LLVM
     // Back end
     Symbol *stag;               // tag symbol for debug data
     Symbol *sinit;
+#endif
 
     AggregateDeclaration *isAggregateDeclaration() { return this; }
     void accept(Visitor *v) { v->visit(this); }
@@ -160,6 +162,7 @@ class StructDeclaration : public AggregateDeclaration
 public:
     bool zeroInit;              // !=0 if initialize with 0 fill
     bool hasIdentityAssign;     // true if has identity opAssign
+    bool hasBlitAssign;         // true if opAssign is a blit
     bool hasIdentityEquals;     // true if has identity opEquals
     bool hasNoFields;           // has no fields
     FuncDeclarations postblits; // Array of postblit functions
@@ -176,9 +179,8 @@ public:
     structalign_t alignment;    // alignment applied outside of the struct
     StructPOD ispod;            // if struct is POD
 
-    // For 64 bit Efl function call/return ABI
-    Type *arg1type;
-    Type *arg2type;
+    // ABI-specific type(s) if the struct can be passed in registers
+    TypeTuple *argTypes;
 
     // Even if struct is defined as non-root symbol, some built-in operations
     // (e.g. TypeidExp, NewExp, ArrayLiteralExp, etc) request its TypeInfo.
@@ -196,6 +198,9 @@ public:
 
     StructDeclaration *isStructDeclaration() { return this; }
     void accept(Visitor *v) { v->visit(this); }
+
+    unsigned numArgTypes() const;
+    Type *argType(unsigned index);
 };
 
 class UnionDeclaration : public StructDeclaration
@@ -276,7 +281,9 @@ public:
     Abstract isabstract;                // 0: fwdref, 1: is abstract class, 2: not abstract
     Baseok baseok;                      // set the progress of base classes resolving
     ObjcClassDeclaration objc;          // Data for a class declaration that is needed for the Objective-C integration
+#if !IN_LLVM
     Symbol *cpp_type_info_ptr_sym;      // cached instance of class Id.cpp_type_info_ptr
+#endif
 
     static ClassDeclaration *create(Loc loc, Identifier *id, BaseClasses *baseclasses, Dsymbols *members, bool inObject);
     Dsymbol *syntaxCopy(Dsymbol *s);

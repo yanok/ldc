@@ -1,6 +1,5 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Semantic analysis for D types.
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -152,7 +151,7 @@ private void resolveTupleIndex(const ref Loc loc, Scope* sc, Dsymbol s, Expressi
     const(uinteger_t) d = eindex.toUInteger();
     if (d >= tup.objects.dim)
     {
-        .error(loc, "tuple index `%llu` exceeds length %u", d, tup.objects.dim);
+        .error(loc, "tuple index `%llu` exceeds length %llu", d, cast(ulong) tup.objects.dim);
         *pt = Type.terror;
         return;
     }
@@ -532,7 +531,7 @@ private Type stripDefaultArgs(Type t)
 
 /******************************************
  * We've mistakenly parsed `t` as a type.
- * Redo `t` as an Expression.
+ * Redo `t` as an Expression only if there are no type modifiers.
  * Params:
  *      t = mistaken type
  * Returns:
@@ -573,6 +572,8 @@ Expression typeToExpression(Type t)
         return new TypeExp(t.loc, t);
     }
 
+    if (t.mod)
+        return null;
     switch (t.ty)
     {
         case Tsarray:   return visitSArray(cast(TypeSArray) t);
@@ -640,7 +641,7 @@ Expression typeToExpressionHelper(TypeQualified t, Expression e, size_t i = 0)
  *      `Type` with completed semantic analysis, `Terror` if errors
  *      were encountered
  */
-extern(C++) Type typeSemantic(Type t, Loc loc, Scope* sc)
+extern(C++) Type typeSemantic(Type t, const ref Loc loc, Scope* sc)
 {
     static Type error()
     {
@@ -1203,6 +1204,8 @@ extern(C++) Type typeSemantic(Type t, Loc loc, Scope* sc)
 
         if (sc.stc & STC.property)
             tf.isproperty = true;
+        if (sc.stc & STC.live)
+            tf.islive = true;
 
         tf.linkage = sc.linkage;
         version (none)
@@ -1669,7 +1672,7 @@ extern(C++) Type typeSemantic(Type t, Loc loc, Scope* sc)
 
     Type visitTypeof(TypeTypeof mtype)
     {
-        //printf("TypeTypeof::semantic() %s\n", toChars());
+        //printf("TypeTypeof::semantic() %s\n", mtype.toChars());
         Expression e;
         Type t;
         Dsymbol s;
@@ -1911,13 +1914,13 @@ extern(C++) Type typeSemantic(Type t, Loc loc, Scope* sc)
         auto o = mtype.compileTypeMixin(loc, sc);
         if (auto t = o.isType())
         {
-            return t.typeSemantic(loc, sc);
+            return t.typeSemantic(loc, sc).addMod(mtype.mod);
         }
         else if (auto e = o.isExpression())
         {
             e = e.expressionSemantic(sc);
             if (auto et = e.isTypeExp())
-                return et.type;
+                return et.type.addMod(mtype.mod);
             else
             {
                 if (!global.errors)
@@ -2076,13 +2079,14 @@ Type merge(Type type)
  *
  * Params:
  *  t = the type for which the property is calculated
+ *  scope_ = the scope from which the property is being accessed. Used for visibility checks only.
  *  loc = the location where the property is encountered
  *  ident = the identifier of the property
  *  flag = if flag & 1, don't report "not a property" error and just return NULL.
  * Returns:
  *      expression representing the property, or null if not a property and (flag & 1)
  */
-Expression getProperty(Type t, const ref Loc loc, Identifier ident, int flag)
+Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier ident, int flag)
 {
     Expression visitType(Type mt)
     {
@@ -2146,6 +2150,8 @@ Expression getProperty(Type t, const ref Loc loc, Identifier ident, int flag)
                 s = mt.toDsymbol(null);
             if (s)
                 s = s.search_correct(ident);
+            if (s && !symbolIsVisible(scope_, s))
+                s = null;
             if (mt != Type.terror)
             {
                 if (s)
@@ -2434,7 +2440,7 @@ Expression getProperty(Type t, const ref Loc loc, Identifier ident, int flag)
         }
         else
         {
-            e = mt.toBasetype().getProperty(loc, ident, flag);
+            e = mt.toBasetype().getProperty(scope_, loc, ident, flag);
         }
         return e;
     }
@@ -2619,7 +2625,7 @@ void resolve(Type mt, const ref Loc loc, Scope* sc, Expression* pe, Type* pt, Ds
                 const d = mt.dim.toUInteger();
                 if (d >= tup.objects.dim)
                 {
-                    error(loc, "tuple index `%llu` exceeds length %u", d, tup.objects.dim);
+                    error(loc, "tuple index `%llu` exceeds length %llu", d, cast(ulong) tup.objects.dim);
                     return returnError();
                 }
 
@@ -2893,7 +2899,10 @@ void resolve(Type mt, const ref Loc loc, Scope* sc, Expression* pe, Type* pt, Ds
         if (auto f = mt.exp.op == TOK.variable    ? (cast(   VarExp)mt.exp).var.isFuncDeclaration()
                    : mt.exp.op == TOK.dotVariable ? (cast(DotVarExp)mt.exp).var.isFuncDeclaration() : null)
         {
-            if (f.checkForwardRef(loc))
+            // f might be a unittest declaration which is incomplete when compiled
+            // without -unittest. That causes a segfault in checkForwardRef, see
+            // https://issues.dlang.org/show_bug.cgi?id=20626
+            if ((!f.isUnitTestDeclaration() || global.params.useUnitTests) && f.checkForwardRef(loc))
                 goto Lerr;
         }
         if (auto f = isFuncAddress(mt.exp))
@@ -3005,7 +3014,7 @@ void resolve(Type mt, const ref Loc loc, Scope* sc, Expression* pe, Type* pt, Ds
                 const i2 = mt.upr.toUInteger();
                 if (!(i1 <= i2 && i2 <= td.objects.dim))
                 {
-                    error(loc, "slice `[%llu..%llu]` is out of range of [0..%u]", i1, i2, td.objects.dim);
+                    error(loc, "slice `[%llu..%llu]` is out of range of [0..%llu]", i1, i2, cast(ulong) td.objects.dim);
                     return returnError();
                 }
 
@@ -3043,12 +3052,14 @@ void resolve(Type mt, const ref Loc loc, Scope* sc, Expression* pe, Type* pt, Ds
         if (auto t = o.isType())
         {
             resolve(t, loc, sc, pe, pt, ps, intypeid);
+            if (*pt)
+                (*pt) = (*pt).addMod(mt.mod);
         }
         else if (auto e = o.isExpression())
         {
             e = e.expressionSemantic(sc);
             if (auto et = e.isTypeExp())
-                return returnType(et.type);
+                return returnType(et.type.addMod(mt.mod));
             else
                 returnExp(e);
         }
@@ -3103,9 +3114,7 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, int flag)
         {
             printf("Type::dotExp(e = '%s', ident = '%s')\n", e.toChars(), ident.toChars());
         }
-        Expression ex = e;
-        while (ex.op == TOK.comma)
-            ex = (cast(CommaExp)ex).e2;
+        Expression ex = e.lastComma();
         if (ex.op == TOK.dotVariable)
         {
             DotVarExp dv = cast(DotVarExp)ex;
@@ -3120,6 +3129,7 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, int flag)
         {
             if (ident == Id.offsetof)
             {
+                v.dsymbolSemantic(null);
                 if (v.isField())
                 {
                     auto ad = v.toParent().isAggregateDeclaration();
@@ -3150,7 +3160,7 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, int flag)
             e = new StringExp(e.loc, e.toString());
         }
         else
-            e = mt.getProperty(e.loc, ident, flag & DotExpFlag.gag);
+            e = mt.getProperty(sc, e.loc, ident, flag & DotExpFlag.gag);
 
     Lreturn:
         if (e)
@@ -3210,7 +3220,7 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, int flag)
                 break;
 
             default:
-                e = mt.Type.getProperty(e.loc, ident, flag);
+                e = mt.Type.getProperty(sc, e.loc, ident, flag);
                 break;
             }
         }
@@ -3261,7 +3271,7 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, int flag)
                 break;
 
             default:
-                e = mt.Type.getProperty(e.loc, ident, flag);
+                e = mt.Type.getProperty(sc, e.loc, ident, flag);
                 break;
             }
         }
@@ -3608,7 +3618,7 @@ else
         // https://issues.dlang.org/show_bug.cgi?id=14010
         if (ident == Id._mangleof)
         {
-            return mt.getProperty(e.loc, ident, flag & 1);
+            return mt.getProperty(sc, e.loc, ident, flag & 1);
         }
 
         /* If e.tupleof
@@ -3830,7 +3840,7 @@ else
         // https://issues.dlang.org/show_bug.cgi?id=14010
         if (ident == Id._mangleof)
         {
-            return mt.getProperty(e.loc, ident, flag & 1);
+            return mt.getProperty(sc, e.loc, ident, flag & 1);
         }
 
         if (mt.sym.semanticRun < PASS.semanticdone)
@@ -3858,7 +3868,7 @@ else
         {
             if (ident == Id.max || ident == Id.min || ident == Id._init)
             {
-                return mt.getProperty(e.loc, ident, flag & 1);
+                return mt.getProperty(sc, e.loc, ident, flag & 1);
             }
 
             Expression res = mt.sym.getMemtype(Loc.initial).dotExp(sc, e, ident, 1);
@@ -3891,7 +3901,7 @@ else
         // https://issues.dlang.org/show_bug.cgi?id=12543
         if (ident == Id.__sizeof || ident == Id.__xalignof || ident == Id._mangleof)
         {
-            return mt.Type.getProperty(e.loc, ident, 0);
+            return mt.Type.getProperty(sc, e.loc, ident, 0);
         }
 
         /* If e.tupleof
@@ -3949,7 +3959,7 @@ else
             {
                 if (e.op == TOK.type)
                 {
-                    return mt.Type.getProperty(e.loc, ident, 0);
+                    return mt.Type.getProperty(sc, e.loc, ident, 0);
                 }
                 e = new DotTypeExp(e.loc, e, mt.sym);
                 e = e.expressionSemantic(sc);
@@ -3959,7 +3969,7 @@ else
             {
                 if (e.op == TOK.type)
                 {
-                    return mt.Type.getProperty(e.loc, ident, 0);
+                    return mt.Type.getProperty(sc, e.loc, ident, 0);
                 }
                 if (auto ifbase = cbase.isInterfaceDeclaration())
                     e = new CastExp(e.loc, e, ifbase.type);

@@ -1,6 +1,19 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Handles target-specific parameters
+ *
+ * In order to allow for cross compilation, when the compiler produces a binary
+ * for a different platform than it is running on, target information needs
+ * to be abstracted. This is done in this module, primarily through `Target`.
+ *
+ * Note:
+ * While DMD itself does not support cross-compilation, GDC and LDC do.
+ * Hence, this module is (sometimes heavily) modified by them,
+ * and contributors should review how their changes affect them.
+ *
+ * See_Also:
+ * - $(LINK2 https://wiki.osdev.org/Target_Triplet, Target Triplets)
+ * - $(LINK2 https://github.com/ldc-developers/ldc, LDC repository)
+ * - $(LINK2 https://github.com/D-Programming-GDC/gcc, GDC repository)
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -18,6 +31,7 @@ import dmd.cppmangle;
 import dmd.cppmanglewin;
 import dmd.dclass;
 import dmd.declaration;
+import dmd.dscope;
 import dmd.dstruct;
 import dmd.dsymbol;
 import dmd.expression;
@@ -54,13 +68,13 @@ extern (C++) struct Target
     uint classinfosize;       /// size of `ClassInfo`
     ulong maxStaticDataSize;  /// maximum size of static data
 
-    // C ABI
+    /// C ABI
     TargetC c;
 
-    // C++ ABI
+    /// C++ ABI
     TargetCPP cpp;
 
-    // Objective-C ABI
+    /// Objective-C ABI
     TargetObjC objc;
 
     /**
@@ -81,7 +95,7 @@ extern (C++) struct Target
         d_int64 max_10_exp = T.max_10_exp;  /// maximum int value such that 10$(SUPERSCRIPT `max_10_exp` is representable)
         d_int64 min_10_exp = T.min_10_exp;  /// minimum int value such that 10$(SUPERSCRIPT `min_10_exp`) is representable as a normalized value
 
-        /* IN_LLVM: extern (D) */ void initialize()
+        extern (D) void initialize()
         {
             max = T.max;
             min_normal = T.min_normal;
@@ -95,9 +109,18 @@ extern (C++) struct Target
     FPTypeProperties!double DoubleProperties;   ///
     FPTypeProperties!real_t RealProperties;     ///
 
+    private Type tvalist; // cached lazy result of va_listType()
+
 version (IN_LLVM)
 {
     extern (C++):
+
+    private void initFPTypeProperties()
+    {
+        FloatProperties.initialize();
+        DoubleProperties.initialize();
+        RealProperties.initialize();
+    }
 
     // implemented in gen/target.cpp:
     void _init(ref const Param params);
@@ -116,7 +139,7 @@ version (IN_LLVM)
         return c.criticalSectionSize;
     }
 
-    Type va_listType();
+    Type va_listType(const ref Loc loc, Scope* sc);
 }
 else // !IN_LLVM
 {
@@ -264,34 +287,41 @@ else // !IN_LLVM
     }
 
     /**
-     * Type for the `va_list` type for the target.
+     * Type for the `va_list` type for the target; e.g., required for `_argptr`
+     * declarations.
      * NOTE: For Posix/x86_64 this returns the type which will really
      * be used for passing an argument of type va_list.
      * Returns:
      *      `Type` that represents `va_list`.
      */
-    extern (C++) Type va_listType()
+    extern (C++) Type va_listType(const ref Loc loc, Scope* sc)
     {
+        if (tvalist)
+            return tvalist;
+
         if (global.params.isWindows)
         {
-            return Type.tchar.pointerTo();
+            tvalist = Type.tchar.pointerTo();
         }
-        else if (global.params.isLinux || global.params.isFreeBSD || global.params.isOpenBSD || global.params.isDragonFlyBSD ||
-            global.params.isSolaris || global.params.isOSX)
+        else if (global.params.isLinux        || global.params.isFreeBSD || global.params.isOpenBSD ||
+                 global.params.isDragonFlyBSD || global.params.isSolaris || global.params.isOSX)
         {
             if (global.params.is64bit)
             {
-                return (new TypeIdentifier(Loc.initial, Identifier.idPool("__va_list_tag"))).pointerTo();
+                tvalist = new TypeIdentifier(Loc.initial, Identifier.idPool("__va_list_tag")).pointerTo();
+                tvalist = typeSemantic(tvalist, loc, sc);
             }
             else
             {
-                return Type.tchar.pointerTo();
+                tvalist = Type.tchar.pointerTo();
             }
         }
         else
         {
             assert(0);
         }
+
+        return tvalist;
     }
 } // !IN_LLVM
 
@@ -576,14 +606,14 @@ else // !IN_LLVM
                 // win32 returns otherwise POD structs with ctors via memory
                 return true;
             }
-            if (sd.arg1type && !sd.arg2type)
+            if (sd.numArgTypes() == 1)
             {
-                tns = sd.arg1type;
+                tns = sd.argType(0);
                 if (tns.ty != Tstruct)
                     goto L2;
                 goto Lagain;
             }
-            else if (global.params.is64bit && !sd.arg1type && !sd.arg2type)
+            else if (global.params.is64bit && sd.numArgTypes() == 0)
                 return true;
             else if (sd.isPOD())
             {
@@ -752,6 +782,7 @@ struct TargetC
     uint long_doublesize;     /// size of a C `long double`
     uint criticalSectionSize; /// size of os critical section
 
+    version (IN_LLVM) { /* initialized in Target::_init() */ } else
     extern (D) void initialize(ref const Param params, ref const Target target)
     {
         if (params.isLinux || params.isFreeBSD || params.isOpenBSD || params.isDragonFlyBSD || params.isSolaris)
@@ -831,6 +862,7 @@ struct TargetCPP
     bool exceptions;          /// set if catching C++ exceptions is supported
     bool twoDtorInVtable;     /// target C++ ABI puts deleting and non-deleting destructor into vtable
 
+    version (IN_LLVM) { /* initialized in Target::_init() */ } else
     extern (D) void initialize(ref const Param params, ref const Target target)
     {
         if (params.isLinux || params.isFreeBSD || params.isOpenBSD || params.isDragonFlyBSD || params.isSolaris)
@@ -964,6 +996,7 @@ struct TargetObjC
 {
     bool supported;     /// set if compiler can interface with Objective-C
 
+    version (IN_LLVM) { /* initialized in Target::_init() */ } else
     extern (D) void initialize(ref const Param params, ref const Target target)
     {
         if (params.isOSX && params.is64bit)

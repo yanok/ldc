@@ -82,7 +82,7 @@ class OverloadSet;
 struct AA;
 #ifdef IN_GCC
 typedef union tree_node Symbol;
-#else
+#elif !IN_LLVM
 struct Symbol;
 #endif
 
@@ -150,8 +150,6 @@ enum
     IgnoreSymbolVisibility  = 0x80  // also find private and package protected symbols
 };
 
-typedef int (*Dsymbol_apply_ft_t)(Dsymbol *, void *);
-
 class Dsymbol : public ASTNode
 {
 public:
@@ -159,9 +157,14 @@ public:
     Dsymbol *parent;
     /// C++ namespace this symbol belongs to
     CPPNamespaceDeclaration *namespace_;
+#if IN_LLVM
+    IrDsymbol *ir;
+    uint32_t llvmInternal;
+#else
     Symbol *csym;               // symbol for code generator
     Symbol *isym;               // import version of csym
-    const utf8_t *comment;      // documentation comment for this Dsymbol
+#endif
+    const utf8_t *comment;       // documentation comment for this Dsymbol
     Loc loc;                    // where defined
     Scope *_scope;               // !=NULL means context to use for semantic()
     const utf8_t *prettystring;
@@ -170,13 +173,6 @@ public:
     DeprecatedDeclaration *depdecl; // customized deprecation message
     UserAttributeDeclaration *userAttribDecl;   // user defined attributes
     UnitTestDeclaration *ddocUnittest; // !=NULL means there's a ddoc unittest associated with this symbol (only use this with ddoc)
-
-#if IN_LLVM
-    // llvm stuff
-    uint32_t llvmInternal;
-
-    IrDsymbol *ir;
-#endif
 
     static Dsymbol *create(Identifier *);
     const char *toChars() const;
@@ -211,7 +207,6 @@ public:
     virtual const char *kind() const;
     virtual Dsymbol *toAlias();                 // resolve real symbol
     virtual Dsymbol *toAlias2();
-    virtual int apply(Dsymbol_apply_ft_t fp, void *param);
     virtual void addMember(Scope *sc, ScopeDsymbol *sds);
     virtual void setScope(Scope *sc);
     virtual void importAll(Scope *sc);
@@ -278,6 +273,8 @@ public:
     virtual UnitTestDeclaration *isUnitTestDeclaration() { return NULL; }
     virtual NewDeclaration *isNewDeclaration() { return NULL; }
     virtual VarDeclaration *isVarDeclaration() { return NULL; }
+    virtual VersionSymbol *isVersionSymbol() { return NULL; }
+    virtual DebugSymbol *isDebugSymbol() { return NULL; }
     virtual ClassDeclaration *isClassDeclaration() { return NULL; }
     virtual StructDeclaration *isStructDeclaration() { return NULL; }
     virtual UnionDeclaration *isUnionDeclaration() { return NULL; }
@@ -405,10 +402,13 @@ public:
     // Look up Identifier. Return Dsymbol if found, NULL if not.
     Dsymbol *lookup(Identifier const * const ident);
 
-    // Insert Dsymbol in table. Return NULL if already there.
-    Dsymbol *insert(Dsymbol *s);
-
     // Look for Dsymbol in table. If there, return it. If not, insert s and return that.
     Dsymbol *update(Dsymbol *s);
+
+    // Insert Dsymbol in table. Return NULL if already there.
+    Dsymbol *insert(Dsymbol *s);
     Dsymbol *insert(Identifier const * const ident, Dsymbol *s);     // when ident and s are not the same
+
+    // Number of symbols in symbol table
+    size_t length() const;
 };

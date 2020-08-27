@@ -1,6 +1,7 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Interfacing with Objective-C.
+ *
+ * Specification: $(LINK2 https://dlang.org/spec/objc_interface.html, Interfacing to Objective-C)
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -474,11 +475,7 @@ extern(C++) private final class Supported : Objc
     {
         VersionCondition.addPredefinedGlobalIdent("D_ObjectiveC");
 
-version (IN_LLVM)
-{
-        objc_initSymbols();
-}
-else
+version (IN_LLVM) {} else
 {
         ObjcGlue.initialize();
 }

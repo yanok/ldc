@@ -50,6 +50,7 @@
 #include "gen/passes/Passes.h"
 #include "gen/runtime.h"
 #include "gen/uda.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/LinkAllIR.h"
@@ -66,12 +67,6 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-#if LDC_LLVM_VER >= 600
-#include "llvm/CodeGen/TargetSubtargetInfo.h"
-#else
-#include "llvm/Target/TargetSubtargetInfo.h"
-#endif
 
 #if _WIN32
 #include "llvm/Support/ConvertUTF.h"
@@ -97,6 +92,8 @@ static cl::opt<bool> enableGC(
     "lowmem", cl::ZeroOrMore,
     cl::desc("Enable the garbage collector for the LDC front-end. This reduces "
              "the compiler memory requirements but increases compile times."));
+
+namespace {
 
 // This function exits the program.
 void printVersion(llvm::raw_ostream &OS) {
@@ -128,22 +125,10 @@ void printVersion(llvm::raw_ostream &OS) {
   // redirecting stdout to a file.
   OS.flush();
 
-  llvm::TargetRegistry::printRegisteredTargetsForVersion(
-#if LDC_LLVM_VER >= 600
-      OS
-#endif
-  );
+  llvm::TargetRegistry::printRegisteredTargetsForVersion(OS);
 
   exit(EXIT_SUCCESS);
 }
-
-// This function exits the program.
-void printVersionStdout() {
-  printVersion(llvm::outs());
-  assert(false);
-}
-
-namespace {
 
 // Helper function to handle -d-debug=* and -d-version=*
 void processVersions(std::vector<std::string> &list, const char *type,
@@ -287,11 +272,7 @@ void parseCommandLine(Strings &sourceFiles) {
   // finalize by expanding response files specified in config file
   args::expandResponseFiles(allArguments);
 
-#if LDC_LLVM_VER >= 600
   cl::SetVersionPrinter(&printVersion);
-#else
-  cl::SetVersionPrinter(&printVersionStdout);
-#endif
 
   opts::hideLLVMOptions();
   opts::createClashingOptions();
@@ -413,11 +394,9 @@ void parseCommandLine(Strings &sourceFiles) {
   if (includeImports)
     global.params.oneobj = true;
 
-#if LDC_LLVM_VER >= 400
   if (saveOptimizationRecord.getNumOccurrences() > 0) {
     global.params.outputSourceLocations = true;
   }
-#endif
 
   opts::initializeSanitizerOptionsFromCmdline();
 
@@ -442,11 +421,13 @@ void parseCommandLine(Strings &sourceFiles) {
 
   global.params.output_o =
       (opts::output_o == cl::BOU_UNSET &&
-       !(opts::output_bc || opts::output_ll || opts::output_s))
+       !(opts::output_bc || opts::output_ll || opts::output_s ||
+         opts::output_mlir))
           ? OUTPUTFLAGdefault
           : opts::output_o == cl::BOU_TRUE ? OUTPUTFLAGset : OUTPUTFLAGno;
   global.params.output_bc = opts::output_bc ? OUTPUTFLAGset : OUTPUTFLAGno;
   global.params.output_ll = opts::output_ll ? OUTPUTFLAGset : OUTPUTFLAGno;
+  global.params.output_mlir = opts::output_mlir ? OUTPUTFLAGset : OUTPUTFLAGno;
   global.params.output_s = opts::output_s ? OUTPUTFLAGset : OUTPUTFLAGno;
 
   global.params.cov = (global.params.covPercent <= 100);
@@ -512,8 +493,19 @@ void parseCommandLine(Strings &sourceFiles) {
                strcmp(ext, global.s_ext.ptr) == 0) {
       global.params.output_s = OUTPUTFLAGset;
       global.params.output_o = OUTPUTFLAGno;
+    } else if (opts::output_mlir.getNumOccurrences() == 0 &&
+               strcmp(ext, global.mlir_ext.ptr) == 0) {
+      global.params.output_mlir = OUTPUTFLAGset;
+      global.params.output_o = OUTPUTFLAGno;
     }
   }
+
+#ifndef LDC_MLIR_ENABLED
+  if (global.params.output_mlir == OUTPUTFLAGset) {
+    error(Loc(), "MLIR output requested but this LDC was built without MLIR support");
+    fatal();
+  }
+#endif
 
   if (soname.getNumOccurrences() > 0 && !global.params.dll) {
     error(Loc(), "-soname can be used only when building a shared library");
@@ -541,11 +533,7 @@ void initializePasses() {
   initializeTarget(Registry);
 
 // Initialize passes not included above
-#if LDC_LLVM_VER >= 400
   initializeRewriteSymbolsLegacyPassPass(Registry);
-#else
-  initializeRewriteSymbolsPass(Registry);
-#endif
   initializeSjLjEHPreparePass(Registry);
 }
 
@@ -654,6 +642,10 @@ void registerPredefinedTargetVersions() {
     VersionCondition::addPredefinedGlobalIdent("AArch64");
     registerPredefinedFloatABI("ARM_SoftFloat", "ARM_HardFloat", "ARM_SoftFP");
     break;
+  case llvm::Triple::avr:
+    VersionCondition::addPredefinedGlobalIdent("AVR");
+    VersionCondition::addPredefinedGlobalIdent("D_SoftFloat");
+    break;
   case llvm::Triple::mips:
   case llvm::Triple::mipsel:
     VersionCondition::addPredefinedGlobalIdent("MIPS");
@@ -670,18 +662,12 @@ void registerPredefinedTargetVersions() {
   case llvm::Triple::msp430:
     VersionCondition::addPredefinedGlobalIdent("MSP430");
     break;
-#if defined RISCV_LLVM_DEV || LDC_LLVM_VER >= 400
-#if defined RISCV_LLVM_DEV
-  case llvm::Triple::riscv:
-#else
   case llvm::Triple::riscv32:
-#endif
     VersionCondition::addPredefinedGlobalIdent("RISCV32");
     break;
   case llvm::Triple::riscv64:
     VersionCondition::addPredefinedGlobalIdent("RISCV64");
     break;
-#endif
   case llvm::Triple::sparc:
     // FIXME: Detect SPARC v8+ (SPARC_V8Plus).
     VersionCondition::addPredefinedGlobalIdent("SPARC");
@@ -1065,6 +1051,11 @@ int cppmain() {
       global.obj_ext = {3, "obj"};
   }
 
+  // -gdwarf implies -g if not specified explicitly
+  if (opts::emitDwarfDebugInfo && global.params.symdebug == 0) {
+    global.params.symdebug = 1;
+  }
+
   // allocate the target abi
   gABI = TargetABI::getTarget();
 
@@ -1096,7 +1087,13 @@ int cppmain() {
 void codegenModules(Modules &modules) {
   // Generate one or more object/IR/bitcode files/dcompute kernels.
   if (global.params.obj && !modules.empty()) {
+#if LDC_MLIR_ENABLED
+    mlir::MLIRContext mlircontext;
+    ldc::CodeGenerator cg(getGlobalContext(), mlircontext,
+                          global.params.oneobj);
+#else
     ldc::CodeGenerator cg(getGlobalContext(), global.params.oneobj);
+#endif
     DComputeCodeGenManager dccg(getGlobalContext());
     std::vector<Module *> computeModules;
     // When inlining is enabled, we are calling semantic3 on function
@@ -1119,7 +1116,12 @@ void codegenModules(Modules &modules) {
       const auto atCompute = hasComputeAttr(m);
       if (atCompute == DComputeCompileFor::hostOnly ||
           atCompute == DComputeCompileFor::hostAndDevice) {
-        cg.emit(m);
+#if LDC_MLIR_ENABLED
+        if (global.params.output_mlir == OUTPUTFLAGset)
+          cg.emitMLIR(m);
+        else
+#endif
+          cg.emit(m);
       }
       if (atCompute != DComputeCompileFor::hostOnly) {
         computeModules.push_back(m);

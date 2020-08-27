@@ -1,6 +1,18 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Defines declarations of various attributes.
+ *
+ * The term 'attribute' refers to things that can apply to a larger scope than a single declaration.
+ * Among them are:
+ * - Alignment (`align(8)`)
+ * - User defined attributes (`@UDA`)
+ * - Function Attributes (`@safe`)
+ * - Storage classes (`static`, `__gshared`)
+ * - Mixin declarations  (`mixin("int x;")`)
+ * - Conditional compilation (`static if`, `static foreach`)
+ * - Linkage (`extern(C)`)
+ * - Anonymous structs / unions
+ * - Protection (`private`, `public`)
+ * - Deprecated declarations (`@deprecated`)
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -59,11 +71,6 @@ extern (C++) abstract class AttribDeclaration : Dsymbol
             return null;
 
         return decl;
-    }
-
-    override final int apply(Dsymbol_apply_ft_t fp, void* param)
-    {
-        return include(_scope).foreachDsymbol( (s) { return s && s.apply(fp, param); } );
     }
 
     /****************************************
@@ -613,9 +620,20 @@ extern (C++) final class ProtDeclaration : AttribDeclaration
         if (protection.kind == Prot.Kind.package_ && protection.pkg && sc._module)
         {
             Module m = sc._module;
-            Package pkg = m.parent ? m.parent.isPackage() : null;
-            if (!pkg || !protection.pkg.isAncestorPackageOf(pkg))
-                error("does not bind to one of ancestor packages of module `%s`", m.toPrettyChars(true));
+
+            // While isAncestorPackageOf does an equality check, the fix for issue 17441 adds a check to see if
+            // each package's .isModule() properites are equal.
+            //
+            // Properties generated from `package(foo)` i.e. protection.pkg have .isModule() == null.
+            // This breaks package declarations of the package in question if they are declared in
+            // the same package.d file, which _do_ have a module associated with them, and hence a non-null
+            // isModule()
+            if (!m.isPackage() || !protection.pkg.ident.equals(m.isPackage().ident))
+            {
+                Package pkg = m.parent ? m.parent.isPackage() : null;
+                if (!pkg || !protection.pkg.isAncestorPackageOf(pkg))
+                    error("does not bind to one of ancestor packages of module `%s`", m.toPrettyChars(true));
+            }
         }
         return AttribDeclaration.addMember(sc, sds);
     }
@@ -826,7 +844,7 @@ extern (C++) final class PragmaDeclaration : AttribDeclaration
                 inlining = PINLINE.default_;
             else if (args.dim != 1)
             {
-                error("one boolean expression expected for `pragma(inline)`, not %d", args.dim);
+                error("one boolean expression expected for `pragma(inline)`, not %llu", cast(ulong) args.dim);
                 args.setDim(1);
                 (*args)[0] = new ErrorExp();
             }
@@ -848,7 +866,19 @@ extern (C++) final class PragmaDeclaration : AttribDeclaration
             }
             return createNewScope(sc, sc.stc, sc.linkage, sc.cppmangle, sc.protection, sc.explicitProtection, sc.aligndecl, inlining);
         }
-        else if (IN_LLVM && ident == Id.LDC_profile_instr)
+        if (ident == Id.printf || ident == Id.scanf)
+        {
+            auto sc2 = sc.push();
+
+            if (ident == Id.printf)
+                // Override previous setting, never let both be set
+                sc2.flags = (sc2.flags & ~SCOPE.scanf) | SCOPE.printf;
+            else
+                sc2.flags = (sc2.flags & ~SCOPE.printf) | SCOPE.scanf;
+
+            return sc2;
+        }
+        if (IN_LLVM && ident == Id.LDC_profile_instr)
         {
             bool emitInstr = true;
             if (!args || args.dim != 1 || !DtoCheckProfileInstrPragma((*args)[0], emitInstr))
@@ -867,7 +897,6 @@ extern (C++) final class PragmaDeclaration : AttribDeclaration
                 }
             }
         }
-
         return sc;
     }
 
@@ -1361,7 +1390,7 @@ extern (C++) final class UserAttributeDeclaration : AttribDeclaration
             arrayExpressionSemantic(atts, sc);
         }
         auto exps = new Expressions();
-        if (userAttribDecl)
+        if (userAttribDecl && userAttribDecl !is this)
             exps.push(new TupleExp(Loc.initial, userAttribDecl.getAttributes()));
         if (atts && atts.dim)
             exps.push(new TupleExp(Loc.initial, atts));
@@ -1376,5 +1405,73 @@ extern (C++) final class UserAttributeDeclaration : AttribDeclaration
     override void accept(Visitor v)
     {
         v.visit(this);
+    }
+
+    /**
+     * Check if the provided expression references `core.attribute.gnuAbiTag`
+     *
+     * This should be called after semantic has been run on the expression.
+     * Semantic on UDA happens in semantic2 (see `dmd.semantic2`).
+     *
+     * Params:
+     *   e = Expression to check (usually from `UserAttributeDeclaration.atts`)
+     *
+     * Returns:
+     *   `true` if the expression references the compiler-recognized `gnuAbiTag`
+     */
+    static bool isGNUABITag(Expression e)
+    {
+        if (global.params.cplusplus < CppStdRevision.cpp11)
+            return false;
+
+        auto ts = e.type ? e.type.isTypeStruct() : null;
+        if (!ts)
+            return false;
+        if (ts.sym.ident != Id.udaGNUAbiTag || !ts.sym.parent)
+            return false;
+        // Can only be defined in druntime
+        Module m = ts.sym.parent.isModule();
+        if (!m || !m.isCoreModule(Id.attribute))
+            return false;
+        return true;
+    }
+
+    /**
+     * Called from a symbol's semantic to check if `gnuAbiTag` UDA
+     * can be applied to them
+     *
+     * Directly emits an error if the UDA doesn't work with this symbol
+     *
+     * Params:
+     *   sym = symbol to check for `gnuAbiTag`
+     *   linkage = Linkage of the symbol (Declaration.link or sc.link)
+     */
+    static void checkGNUABITag(Dsymbol sym, LINK linkage)
+    {
+        if (global.params.cplusplus < CppStdRevision.cpp11)
+            return;
+
+        // Avoid `if` at the call site
+        if (sym.userAttribDecl is null || sym.userAttribDecl.atts is null)
+            return;
+
+        foreach (exp; *sym.userAttribDecl.atts)
+        {
+            if (isGNUABITag(exp))
+            {
+                if (sym.isCPPNamespaceDeclaration() || sym.isNspace())
+                {
+                    exp.error("`@%s` cannot be applied to namespaces", Id.udaGNUAbiTag.toChars());
+                    sym.errors = true;
+                }
+                else if (linkage != LINK.cpp)
+                {
+                    exp.error("`@%s` can only apply to C++ symbols", Id.udaGNUAbiTag.toChars());
+                    sym.errors = true;
+                }
+                // Only one `@gnuAbiTag` is allowed by semantic2
+                return;
+            }
+        }
     }
 }

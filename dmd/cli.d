@@ -1,8 +1,6 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Defines the help texts for the CLI options offered by DMD.
  *
- * This modules defines the help texts for the CLI options offered by DMD.
  * This file is not shared with other compilers which use the DMD front-end.
  * However, this file will be used to generate the
  * $(LINK2 https://dlang.org/dmd-linux.html, online documentation) and MAN pages.
@@ -591,8 +589,8 @@ dmd -cov -unittest myprog.d
             off when generating an object, interface, or Ddoc file
             name. $(SWLINK -op) will leave it on.`,
         ),
-        Option("preview=<id>",
-            "enable an upcoming language change identified by 'id'",
+        Option("preview=<name>",
+            "enable an upcoming language change identified by 'name'",
             `Preview an upcoming language change identified by $(I id)`,
         ),
         Option("preview=[h|help|?]",
@@ -617,8 +615,8 @@ dmd -cov -unittest myprog.d
             done for system and trusted functions, and assertion failures
             are undefined behaviour.`
         ),
-        Option("revert=<id>",
-            "revert language change identified by 'id'",
+        Option("revert=<name>",
+            "revert language change identified by 'name'",
             `Revert language change identified by $(I id)`,
         ),
         Option("revert=[h|help|?]",
@@ -636,8 +634,8 @@ dmd -cov -unittest myprog.d
             `$(UNIX Generate shared library)
              $(WINDOWS Generate DLL library)`,
         ),
-        Option("transition=<id>",
-            "help with language change identified by 'id'",
+        Option("transition=<name>",
+            "help with language change identified by 'name'",
             `Show additional info about language change identified by $(I id)`,
         ),
         Option("transition=[h|help|?]",
@@ -690,6 +688,9 @@ dmd -cov -unittest myprog.d
         Option("vtls",
             "list all variables going into thread local storage"
         ),
+        Option("vtemplates",
+            "list statistics on template instantiations"
+        ),
         Option("w",
             "warnings as errors (compilation will halt)",
             `Enable $(LINK2 $(ROOT_DIR)articles/warnings.html, warnings)`
@@ -727,8 +728,6 @@ dmd -cov -unittest myprog.d
     static immutable transitions = [
         Feature("field", "vfield",
             "list all non-mutable fields which occupy an object instance"),
-        Feature("checkimports", "check10378",
-            "give deprecation messages about 10378 anomalies", true, true),
         Feature("complex", "vcomplex",
             "give deprecation messages about all usages of complex or imaginary types"),
         Feature("tls", "vtls",
@@ -740,7 +739,6 @@ dmd -cov -unittest myprog.d
     /// Returns all available reverts
     static immutable reverts = [
         Feature("dip25", "noDIP25", "revert DIP25 changes https://github.com/dlang/DIPs/blob/master/DIPs/archive/DIP25.md"),
-        Feature("import", "bug10378", "revert to single phase name lookup", true, true),
     ];
 
     /// Returns all available previews
@@ -765,6 +763,8 @@ dmd -cov -unittest myprog.d
             "enable rvalue arguments to ref parameters"),
         Feature("nosharedaccess", "noSharedAccess",
             "disable access to shared memory objects"),
+        Feature("in", "inMeansScopeConst",
+            "in means scope const"),
     ];
 }
 
@@ -829,7 +829,7 @@ version (IN_LLVM) {} else
         auto buf = description.capitalize ~ " listed by -"~flagName~"=name:
 ";
         auto allTransitions = [Usage.Feature("all", null,
-            "list information on all " ~ description)] ~ features;
+            "Enables all available " ~ description)] ~ features;
         foreach (t; allTransitions)
         {
             if (t.deprecated_)

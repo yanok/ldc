@@ -1,6 +1,7 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Defines a `class` declaration.
+ *
+ * Specification: $(LINK2 https://dlang.org/spec/class.html, Classes)
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -16,6 +17,7 @@ import core.stdc.stdio;
 import core.stdc.string;
 
 import dmd.aggregate;
+import dmd.apply;
 import dmd.arraytypes;
 import dmd.gluelayer;
 import dmd.declaration;
@@ -83,40 +85,20 @@ extern (C++) struct BaseClass
         for (size_t j = sym.vtblOffset(); j < sym.vtbl.dim; j++)
         {
             FuncDeclaration ifd = sym.vtbl[j].isFuncDeclaration();
-            FuncDeclaration fd;
-            TypeFunction tf;
 
             //printf("        vtbl[%d] is '%s'\n", j, ifd ? ifd.toChars() : "null");
             assert(ifd);
 
             // Find corresponding function in this class
-            tf = ifd.type.toTypeFunction();
-            fd = cd.findFunc(ifd.ident, tf);
+            auto tf = ifd.type.toTypeFunction();
+            auto fd = cd.findFunc(ifd.ident, tf);
             if (fd && !fd.isAbstract())
             {
-                //printf("            found\n");
-                // Check that calling conventions match
-                if (fd.linkage != ifd.linkage)
-                    fd.error("linkage doesn't match interface function");
-
-                // Check that it is current
-                //printf("newinstance = %d fd.toParent() = %s ifd.toParent() = %s\n",
-                    //newinstance, fd.toParent().toChars(), ifd.toParent().toChars());
-                if (newinstance && fd.toParent() != cd && ifd.toParent() == sym)
-                    cd.error("interface function `%s` is not implemented", ifd.toFullSignature());
-
                 if (fd.toParent() == cd)
                     result = true;
             }
             else
-            {
-                //printf("            not found %p\n", fd);
-                // BUG: should mark this class as abstract?
-                if (!cd.isAbstract())
-                    cd.error("interface function `%s` is not implemented", ifd.toFullSignature());
-
                 fd = null;
-            }
             if (vtbl)
                 (*vtbl)[j] = fd;
         }
@@ -221,7 +203,10 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
      */
     ObjcClassDeclaration objc;
 
+version (IN_LLVM) {} else
+{
     Symbol* cpp_type_info_ptr_sym;      // cached instance of class Id.cpp_type_info_ptr
+}
 
     final extern (D) this(const ref Loc loc, Identifier id, BaseClasses* baseclasses, Dsymbols* members, bool inObject)
     {
@@ -876,7 +861,7 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
          * Resolve forward references to all class member functions,
          * and determine whether this class is abstract.
          */
-        extern (C++) static int func(Dsymbol s, void* param)
+        static int func(Dsymbol s)
         {
             auto fd = s.isFuncDeclaration();
             if (!fd)
@@ -892,7 +877,7 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
         for (size_t i = 0; i < members.dim; i++)
         {
             auto s = (*members)[i];
-            if (s.apply(&func, cast(void*)this))
+            if (s.apply(&func))
             {
                 return yes();
             }
@@ -919,7 +904,7 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
              * each of the virtual functions,
              * which will fill in the vtbl[] overrides.
              */
-            extern (C++) static int virtualSemantic(Dsymbol s, void* param)
+            static int virtualSemantic(Dsymbol s)
             {
                 auto fd = s.isFuncDeclaration();
                 if (fd && !(fd.storage_class & STC.static_) && !fd.isUnitTestDeclaration())
@@ -930,7 +915,7 @@ extern (C++) class ClassDeclaration : AggregateDeclaration
             for (size_t i = 0; i < members.dim; i++)
             {
                 auto s = (*members)[i];
-                s.apply(&virtualSemantic, cast(void*)this);
+                s.apply(&virtualSemantic);
             }
         }
 

@@ -1,6 +1,8 @@
 /**
- * Compiler implementation of the
- * $(LINK2 http://www.dlang.org, D programming language).
+ * Performs inlining, which is an optimization pass enabled with the `-inline` flag.
+ *
+ * The AST is traversed, and every function call is considered for inlining using `inlinecost.d`.
+ * The function call is then inlined if this cost is below a threshold.
  *
  * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
@@ -653,7 +655,7 @@ public:
                             result = doInlineAs!Expression(result, ids);
                         }
                         else
-                            result = new IntegerExp(vd._init.loc, 0, Type.tint32);
+                            result = IntegerExp.literal!0;
                         return;
                     }
                 }
@@ -661,8 +663,11 @@ public:
                 auto vto = new VarDeclaration(vd.loc, vd.type, vd.ident, vd._init);
                 memcpy(cast(void*)vto, cast(void*)vd, __traits(classInstanceSize, VarDeclaration));
                 vto.parent = ids.parent;
+version (IN_LLVM) {} else
+{
                 vto.csym = null;
                 vto.isym = null;
+}
 
                 ids.from.push(vd);
                 ids.to.push(vto);
@@ -815,8 +820,11 @@ public:
                 auto vto = new VarDeclaration(vd.loc, vd.type, vd.ident, vd._init);
                 memcpy(cast(void*)vto, cast(void*)vd, __traits(classInstanceSize, VarDeclaration));
                 vto.parent = ids.parent;
+version (IN_LLVM) {} else
+{
                 vto.csym = null;
                 vto.isym = null;
+}
 
                 ids.from.push(vd);
                 ids.to.push(vto);
@@ -844,8 +852,11 @@ public:
                 auto vto = new VarDeclaration(vd.loc, vd.type, vd.ident, vd._init);
                 memcpy(cast(void*)vto, cast(void*)vd, __traits(classInstanceSize, VarDeclaration));
                 vto.parent = ids.parent;
+version (IN_LLVM) {} else
+{
                 vto.csym = null;
                 vto.isym = null;
+}
 
                 ids.from.push(vd);
                 ids.to.push(vto);
