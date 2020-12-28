@@ -587,6 +587,20 @@ static cl::opt<uint32_t, true>
              cl::location(global.params.templateCodegenDepth), cl::init(0));
 #endif
 
+// Compilation time tracing options
+cl::opt<bool> fTimeTrace(
+    "ftime-trace", cl::ZeroOrMore,
+    cl::desc("Turn on time profiler. Generates JSON file "
+             "based on the output filename (also see --ftime-trace-file)."));
+cl::opt<unsigned> fTimeTraceGranularity(
+    "ftime-trace-granularity", cl::ZeroOrMore,
+    cl::desc(
+        "Minimum time granularity (in microseconds) traced by time profiler"));
+cl::opt<std::string>
+fTimeTraceFile("ftime-trace-file",
+               cl::desc("Specify time trace file destination"),
+               cl::value_desc("filename"));
+
 cl::opt<LTOKind> ltoMode(
     "flto", cl::ZeroOrMore, cl::desc("Set LTO mode, requires linker support"),
     cl::init(LTO_None),
