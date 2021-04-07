@@ -161,7 +161,7 @@ public:
     TraitsExp* isTraitsExp();
     HaltExp* isHaltExp();
     IsExp* isExp();
-    CompileExp* isCompileExp();
+    MixinExp* isMixinExp();
     ImportExp* isImportExp();
     AssertExp* isAssertExp();
     DotIdExp* isDotIdExp();
@@ -234,6 +234,7 @@ public:
     FuncInitExp* isFuncInitExp();
     PrettyFuncInitExp* isPrettyFuncInitExp();
     ClassReferenceExp* isClassReferenceExp();
+    virtual BinAssignExp* isBinAssignExp();
 
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -737,12 +738,13 @@ public:
     bool isLvalue();
     Expression *toLvalue(Scope *sc, Expression *ex);
     Expression *modifiableLvalue(Scope *sc, Expression *e);
+    BinAssignExp* isBinAssignExp();
     void accept(Visitor *v) { v->visit(this); }
 };
 
 /****************************************************************/
 
-class CompileExp : public UnaExp
+class MixinExp : public UnaExp
 {
 public:
     void accept(Visitor *v) { v->visit(this); }
@@ -904,6 +906,8 @@ public:
     unsigned char mod;          // MODxxxxx
 
     Expression *syntaxCopy();
+    bool isLvalue();
+    Expression *toLvalue(Scope *sc, Expression *e);
 
     void accept(Visitor *v) { v->visit(this); }
 };

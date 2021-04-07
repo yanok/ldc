@@ -107,8 +107,6 @@ DIBuilder::DIBuilder(IRState *const IR)
       // (https://reviews.llvm.org/D23720)
       emitColumnInfo(opts::getFlagOrDefault(::emitColumnInfo, !emitCodeView)) {}
 
-llvm::LLVMContext &DIBuilder::getContext() { return IR->context(); }
-
 unsigned DIBuilder::getColumn(const Loc &loc) const {
   return (loc.linnum && emitColumnInfo) ? loc.charnum : 0;
 }
@@ -193,16 +191,16 @@ llvm::StringRef DIBuilder::GetNameAndScope(Dsymbol *sym, DIScope &scope) {
 // Sets the memory address for a debuginfo variable.
 void DIBuilder::Declare(const Loc &loc, llvm::Value *storage,
                         DILocalVariable divar, DIExpression diexpr) {
-  auto debugLoc =
-      llvm::DebugLoc::get(loc.linnum, getColumn(loc), GetCurrentScope());
+  auto debugLoc = llvm::DILocation::get(IR->context(), loc.linnum,
+                                        getColumn(loc), GetCurrentScope());
   DBuilder.insertDeclare(storage, divar, diexpr, debugLoc, IR->scopebb());
 }
 
 // Sets the (current) value for a debuginfo variable.
 void DIBuilder::SetValue(const Loc &loc, llvm::Value *value,
                          DILocalVariable divar, DIExpression diexpr) {
-  auto debugLoc =
-      llvm::DebugLoc::get(loc.linnum, getColumn(loc), GetCurrentScope());
+  auto debugLoc = llvm::DILocation::get(IR->context(), loc.linnum,
+                                        getColumn(loc), GetCurrentScope());
   DBuilder.insertDbgValueIntrinsic(value, divar, diexpr, debugLoc,
                                    IR->scopebb());
 }
@@ -578,7 +576,7 @@ DIType DIBuilder::CreateCompositeType(Type *type) {
 
   // if we don't know the aggregate's size, we don't know enough about it
   // to provide debug info. probably a forward-declared struct?
-  if (ad->sizeok == SIZEOKnone) {
+  if (ad->sizeok == Sizeok::none) {
     return DBuilder.createUnspecifiedType(name);
   }
 
@@ -761,9 +759,8 @@ DISubroutineType DIBuilder::CreateFunctionType(Type *type) {
 
   // The calling convention has to be recorded to distinguish
   // extern(D) functions from extern(C++) ones.
-  DtoType(t);
-  assert(t->ctype);
-  unsigned CC = t->ctype->getIrFuncTy().reverseParams ? DW_CC_D_dmd : 0;
+  unsigned CC =
+      getIrType(t, true)->getIrFuncTy().reverseParams ? DW_CC_D_dmd : 0;
 
   return DBuilder.createSubroutineType(paramsArray, DIFlags::FlagZero, CC);
 }
@@ -1203,8 +1200,9 @@ void DIBuilder::EmitStopPoint(const Loc &loc) {
   unsigned col = getColumn(loc);
   Logger::println("D to dwarf stoppoint at line %u, column %u", linnum, col);
   LOG_SCOPE;
+
   IR->ir->SetCurrentDebugLocation(
-      llvm::DebugLoc::get(linnum, col, GetCurrentScope()));
+      llvm::DILocation::get(IR->context(), linnum, col, GetCurrentScope()));
 }
 
 void DIBuilder::EmitValue(llvm::Value *val, VarDeclaration *vd) {
@@ -1255,9 +1253,9 @@ void DIBuilder::EmitLocalVariable(llvm::Value *ll, VarDeclaration *vd,
     if (isaArgument(ll) && addr.empty()) {
       forceAsLocal = true;
     } else {
-      // 2) dynamic arrays and vectors
+      // 2) dynamic arrays, delegates and vectors
       TY ty = type->toBasetype()->ty;
-      if (ty == Tarray || ty == Tvector)
+      if (ty == Tarray || ty == Tdelegate || ty == Tvector)
         forceAsLocal = true;
     }
   }

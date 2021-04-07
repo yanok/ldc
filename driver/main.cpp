@@ -64,6 +64,9 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#if LDC_MLIR_ENABLED
+#include "mlir/IR/MLIRContext.h"
+#endif
 #include <assert.h>
 #include <limits.h>
 #include <stdio.h>
@@ -366,6 +369,12 @@ void parseCommandLine(Strings &sourceFiles) {
       global.params.moduleDepsFile = opts::dupPathString(moduleDeps);
   }
 
+  if (makeDeps.getNumOccurrences() != 0) {
+    global.params.emitMakeDeps = true;
+    if (!makeDeps.empty())
+      global.params.makeDepsFile = opts::dupPathString(makeDeps);
+  }
+
 #if _WIN32
   const auto toWinPaths = [](Strings *paths) {
     if (!paths)
@@ -433,8 +442,9 @@ void parseCommandLine(Strings &sourceFiles) {
   global.params.output_mlir = opts::output_mlir ? OUTPUTFLAGset : OUTPUTFLAGno;
   global.params.output_s = opts::output_s ? OUTPUTFLAGset : OUTPUTFLAGno;
 
-  templateLinkage = opts::linkonceTemplates ? LLGlobalValue::LinkOnceODRLinkage
-                                            : LLGlobalValue::WeakODRLinkage;
+  templateLinkage = global.params.linkonceTemplates
+                        ? LLGlobalValue::LinkOnceODRLinkage
+                        : LLGlobalValue::WeakODRLinkage;
 
   if (global.params.run || !runargs.empty()) {
     // FIXME: how to properly detect the presence of a PositionalEatsArgs
@@ -461,6 +471,12 @@ void parseCommandLine(Strings &sourceFiles) {
     } else {
       global.params.run = false;
       error(Loc(), "Expected at least one argument to '-run'\n");
+    }
+
+    // -run: enforce -oq and -cleanup-obj for non-conflicting temporary objects
+    if (global.params.run) {
+      global.params.fullyQualifiedObjectFiles = true;
+      global.params.cleanupObjectFiles = true;
     }
   }
 
@@ -761,6 +777,8 @@ void registerPredefinedTargetVersions() {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Bionic");
     } else if (triple.isMusl()) {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Musl");
+      // use libunwind for backtraces
+      VersionCondition::addPredefinedGlobalIdent("DRuntime_Use_Libunwind");
     } else if (global.params.isUClibcEnvironment) {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_UClibc");
     } else {
@@ -782,6 +800,12 @@ void registerPredefinedTargetVersions() {
     break;
   case llvm::Triple::FreeBSD:
     VersionCondition::addPredefinedGlobalIdent("FreeBSD");
+    if (unsigned major = triple.getOSMajorVersion()) {
+      const auto withMajor = "FreeBSD_" + std::to_string(major);
+      VersionCondition::addPredefinedGlobalIdent(withMajor.c_str());
+    } else {
+      warning(Loc(), "FreeBSD major version not specified in target triple");
+    }
     VersionCondition::addPredefinedGlobalIdent("Posix");
     VersionCondition::addPredefinedGlobalIdent("CppRuntime_Clang");
     break;
@@ -834,7 +858,9 @@ void registerPredefinedTargetVersions() {
       VersionCondition::addPredefinedGlobalIdent("Android");
     } else {
       llvm::StringRef osName = triple.getOSName();
-      if (!osName.empty() && osName != "unknown" && osName != "none") {
+      if (osName.empty() || osName == "unknown" || osName == "none") {
+        VersionCondition::addPredefinedGlobalIdent("FreeStanding");
+      } else {
         warning(Loc(), "unknown target OS: %s", osName.str().c_str());
       }
     }
@@ -916,6 +942,25 @@ void registerPredefinedVersions() {
   VersionCondition::addPredefinedGlobalIdent("LDC_LLVM_" XSTR(LDC_LLVM_VER));
 #undef XSTR
 #undef STR
+}
+
+static llvm::SmallString<32> tempObjectsDir;
+
+// With -cleanup-obj, potentially invoked (once) by Module.setOutfilename() to
+// create a unique temporary directory for generated object files (if -od hasn't
+// been specified), e.g., `/tmp/objtmp-ldc-688445`.
+const char *createTempObjectsDir() {
+  assert(tempObjectsDir.empty());
+
+  auto ec = llvm::sys::fs::createUniqueDirectory("objtmp-ldc", tempObjectsDir);
+  if (ec) {
+    error(Loc(),
+          "failed to create temporary directory for object files: %s\n%s",
+          tempObjectsDir.c_str(), ec.message().c_str());
+    fatal();
+  }
+
+  return tempObjectsDir.c_str();
 }
 
 /// LDC's entry point, C main.
@@ -1034,13 +1079,23 @@ int cppmain() {
   {
     llvm::Triple *triple = new llvm::Triple(gTargetMachine->getTargetTriple());
     global.params.targetTriple = triple;
-    global.params.isLinux = triple->isOSLinux();
-    global.params.isOSX = triple->isOSDarwin();
-    global.params.isWindows = triple->isOSWindows();
-    global.params.isFreeBSD = triple->isOSFreeBSD();
-    global.params.isOpenBSD = triple->isOSOpenBSD();
-    global.params.isDragonFlyBSD = triple->isOSDragonFly();
-    global.params.isSolaris = triple->isOSSolaris();
+
+    if (triple->isOSLinux()) {
+      global.params.targetOS = TargetOS_linux;
+    } else if (triple->isOSDarwin()) {
+      global.params.targetOS = TargetOS_OSX;
+    } else if (triple->isOSWindows()) {
+      global.params.targetOS = TargetOS_Windows;
+    } else if (triple->isOSFreeBSD()) {
+      global.params.targetOS = TargetOS_FreeBSD;
+    } else if (triple->isOSOpenBSD()) {
+      global.params.targetOS = TargetOS_OpenBSD;
+    } else if (triple->isOSDragonFly()) {
+      global.params.targetOS = TargetOS_DragonFlyBSD;
+    } else if (triple->isOSSolaris()) {
+      global.params.targetOS = TargetOS_Solaris;
+    }
+
     global.params.isLP64 = gDataLayout->getPointerSizeInBits() == 64;
     global.params.is64bit = triple->isArch64Bit();
     global.params.hasObjectiveC = objc_isSupported(*triple);
@@ -1088,8 +1143,14 @@ int cppmain() {
     status = mars_mainBody(global.params, files, libmodules);
   }
 
+  // try to remove the temp objects dir if created for -cleanup-obj
+  if (!tempObjectsDir.empty())
+    llvm::sys::fs::remove(tempObjectsDir);
+
   writeTimeTraceProfile();
   deinitializeTimeTracer();
+
+  llvm::llvm_shutdown();
 
   return status;
 }
@@ -1173,5 +1234,4 @@ void codegenModules(Modules &modules) {
   }
 
   freeRuntime();
-  llvm::llvm_shutdown();
 }

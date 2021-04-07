@@ -77,8 +77,10 @@ version (IN_LLVM)
     void codegenModules(ref Modules modules);
     // in driver/archiver.cpp
     int createStaticLibrary();
+    const(char)* getPathToProducedStaticLibrary();
     // in driver/linker.cpp
     int linkObjToBinary();
+    const(char)* getPathToProducedBinary();
     void deleteExeFile();
     int runProgram();
 }
@@ -417,9 +419,6 @@ else
 {
     setTarget(params);
 
-    // Predefined version identifiers
-    addDefaultVersionIdentifiers(params);
-
     setDefaultLibrary();
 }
 
@@ -440,6 +439,12 @@ else
     }
     import dmd.root.ctfloat : CTFloat;
     CTFloat.initialize();
+
+version (IN_LLVM) {} else
+{
+    // Predefined version identifiers
+    addDefaultVersionIdentifiers(params);
+}
 
     if (params.verbose)
     {
@@ -540,12 +545,6 @@ version (IN_LLVM)
             if (m.hdrfile)
                 m.hdrfile = m.setOutfilename(params.hdrname, params.hdrdir, m.arg, global.hdr_ext);
         }
-
-        // If `-run` is passed, the obj file is temporary and is removed after execution.
-        // Make sure the name does not collide with other files from other processes by
-        // creating a unique filename.
-        if (params.run)
-            m.makeObjectFilenameUnique();
 
         // Set object filename in params.objfiles.
         for (size_t j = 0; j < params.objfiles.dim; j++)
@@ -762,6 +761,7 @@ version (IN_LLVM) {} else
             library.addObject(p.toDString(), null);
     }
 }
+
     // Generate output files
     if (params.doJsonGeneration)
     {
@@ -880,8 +880,7 @@ version (IN_LLVM)
         else if (params.lib)
             status = createStaticLibrary();
 
-        if (status == EXIT_SUCCESS &&
-            (params.cleanupObjectFiles || params.run))
+        if (status == EXIT_SUCCESS && params.cleanupObjectFiles)
         {
             for (size_t i = 0; i < modules.dim; i++)
             {
@@ -903,7 +902,12 @@ else // !IN_LLVM
                 status = runProgram();
                 /* Delete .obj files and .exe file
                  */
-version (IN_LLVM) {} else
+version (IN_LLVM)
+{
+                // object files already deleted above
+                deleteExeFile();
+}
+else
 {
                 foreach (m; modules)
                 {
@@ -911,15 +915,95 @@ version (IN_LLVM) {} else
                     if (params.oneobj)
                         break;
                 }
-}
                 params.exefile.toCStringThen!(ef => File.remove(ef.ptr));
+}
             }
         }
     }
+
+    // Output the makefile dependencies
+    if (params.emitMakeDeps)
+    {
+version (IN_LLVM)
+{
+        emitMakeDeps(params);
+}
+else
+{
+        emitMakeDeps(params, library);
+}
+    }
+
     if (global.errors || global.warnings)
         removeHdrFilesAndFail(params, modules);
 
     return status;
+}
+
+/// Emit the makefile dependencies for the -makedeps switch
+version (NoMain) {} else
+{
+    // IN_LLVM: no `library` param
+    void emitMakeDeps(ref Param params/*, Library library*/)
+    {
+        assert(params.emitMakeDeps);
+
+        OutBuffer buf;
+
+        // start by resolving and writing the target (which is sometimes resolved during link phase)
+        if (IN_LLVM && params.link)
+        {
+            buf.writeEscapedMakePath(getPathToProducedBinary());
+        }
+        else if (IN_LLVM && params.lib)
+        {
+            buf.writeEscapedMakePath(getPathToProducedStaticLibrary());
+        }
+        /* IN_LLVM: handled above
+        else if (params.link && params.exefile)
+        {
+            buf.writeEscapedMakePath(&params.exefile[0]);
+        }
+        else if (params.lib && library)
+        {
+            buf.writeEscapedMakePath(library.getFilename());
+        }
+        */
+        else if (params.objname)
+        {
+            buf.writeEscapedMakePath(&params.objname[0]);
+        }
+        else if (params.objfiles.length)
+        {
+            buf.writeEscapedMakePath(params.objfiles[0]);
+            foreach (of; params.objfiles[1 .. $])
+            {
+                buf.writestring(" ");
+                buf.writeEscapedMakePath(of);
+            }
+        }
+        else
+        {
+            assert(false, "cannot resolve makedeps target");
+        }
+
+        buf.writestring(":");
+
+        // then output every dependency
+        foreach (dep; params.makeDeps)
+        {
+            buf.writestringln(" \\");
+            buf.writestring("  ");
+            buf.writeEscapedMakePath(dep);
+        }
+        buf.writenl();
+
+        const data = buf[];
+        if (params.makeDepsFile)
+            writeFile(Loc.initial, params.makeDepsFile, data);
+        else
+            printf("%.*s", cast(int) data.length, data.ptr);
+    }
 }
 
 private FileBuffer readFromStdin()
@@ -1081,23 +1165,20 @@ else
      */
     extern (C) int main(int argc, char** argv)
     {
-        static if (isGCAvailable)
+        bool lowmem = false;
+        foreach (i; 1 .. argc)
         {
-            bool lowmem = false;
-            foreach (i; 1 .. argc)
+            if (strcmp(argv[i], "-lowmem") == 0)
             {
-                if (strcmp(argv[i], "-lowmem") == 0)
-                {
-                    lowmem = true;
-                    break;
-                }
+                lowmem = true;
+                break;
             }
-            if (!lowmem)
-            {
-                __gshared string[] disable_options = [ "gcopt=disable:1" ];
-                rt_options = disable_options;
-                mem.disableGC();
-            }
+        }
+        if (!lowmem)
+        {
+            __gshared string[] disable_options = [ "gcopt=disable:1" ];
+            rt_options = disable_options;
+            mem.disableGC();
         }
 
         // initialize druntime and call _Dmain() below
@@ -1119,9 +1200,6 @@ else
         }
 
         import core.runtime;
-        import core.memory;
-        static if (!isGCAvailable)
-            GC.disable();
 
         version(D_Coverage)
         {
@@ -1346,19 +1424,19 @@ private void setDefaultLibrary()
 void setTarget(ref Param params)
 {
     static if (TARGET.Windows)
-        params.isWindows = true;
+        params.targetOS = TargetOS.Windows;
     else static if (TARGET.Linux)
-        params.isLinux = true;
+        params.targetOS = TargetOS.linux;
     else static if (TARGET.OSX)
-        params.isOSX = true;
+        params.targetOS = TargetOS.OSX;
     else static if (TARGET.FreeBSD)
-        params.isFreeBSD = true;
+        params.targetOS = TargetOS.FreeBSD;
     else static if (TARGET.OpenBSD)
-        params.isOpenBSD = true;
+        params.targetOS = TargetOS.OpenBSD;
     else static if (TARGET.Solaris)
-        params.isSolaris = true;
+        params.targetOS = TargetOS.Solaris;
     else static if (TARGET.DragonFlyBSD)
-        params.isDragonFlyBSD = true;
+        params.targetOS = TargetOS.DragonFlyBSD;
     else
         static assert(0, "unknown TARGET");
 }
@@ -1378,7 +1456,7 @@ void setTarget(ref Param params)
 void addDefaultVersionIdentifiers(const ref Param params)
 {
     VersionCondition.addPredefinedGlobalIdent("DigitalMars");
-    if (params.isWindows)
+    if (params.targetOS == TargetOS.Windows)
     {
         VersionCondition.addPredefinedGlobalIdent("Windows");
         if (global.params.mscoff)
@@ -1392,7 +1470,7 @@ void addDefaultVersionIdentifiers(const ref Param params)
             VersionCondition.addPredefinedGlobalIdent("CppRuntime_DigitalMars");
         }
     }
-    else if (params.isLinux)
+    else if (params.targetOS == TargetOS.linux)
     {
         VersionCondition.addPredefinedGlobalIdent("Posix");
         VersionCondition.addPredefinedGlobalIdent("linux");
@@ -1408,7 +1486,7 @@ void addDefaultVersionIdentifiers(const ref Param params)
             VersionCondition.addPredefinedGlobalIdent("CRuntime_Glibc");
         VersionCondition.addPredefinedGlobalIdent("CppRuntime_Gcc");
     }
-    else if (params.isOSX)
+    else if (params.targetOS == TargetOS.OSX)
     {
         VersionCondition.addPredefinedGlobalIdent("Posix");
         VersionCondition.addPredefinedGlobalIdent("OSX");
@@ -1416,28 +1494,29 @@ void addDefaultVersionIdentifiers(const ref Param params)
         // For legacy compatibility
         VersionCondition.addPredefinedGlobalIdent("darwin");
     }
-    else if (params.isFreeBSD)
+    else if (params.targetOS == TargetOS.FreeBSD)
     {
         VersionCondition.addPredefinedGlobalIdent("Posix");
         VersionCondition.addPredefinedGlobalIdent("FreeBSD");
+        VersionCondition.addPredefinedGlobalIdent("FreeBSD_" ~ target.FreeBSDMajor);
         VersionCondition.addPredefinedGlobalIdent("ELFv1");
         VersionCondition.addPredefinedGlobalIdent("CppRuntime_Clang");
     }
-    else if (params.isOpenBSD)
+    else if (params.targetOS == TargetOS.OpenBSD)
     {
         VersionCondition.addPredefinedGlobalIdent("Posix");
         VersionCondition.addPredefinedGlobalIdent("OpenBSD");
         VersionCondition.addPredefinedGlobalIdent("ELFv1");
         VersionCondition.addPredefinedGlobalIdent("CppRuntime_Gcc");
     }
-    else if (params.isDragonFlyBSD)
+    else if (params.targetOS == TargetOS.DragonFlyBSD)
     {
         VersionCondition.addPredefinedGlobalIdent("Posix");
         VersionCondition.addPredefinedGlobalIdent("DragonFlyBSD");
         VersionCondition.addPredefinedGlobalIdent("ELFv1");
         VersionCondition.addPredefinedGlobalIdent("CppRuntime_Gcc");
     }
-    else if (params.isSolaris)
+    else if (params.targetOS == TargetOS.Solaris)
     {
         VersionCondition.addPredefinedGlobalIdent("Posix");
         VersionCondition.addPredefinedGlobalIdent("Solaris");
@@ -1465,7 +1544,7 @@ void addDefaultVersionIdentifiers(const ref Param params)
     {
         VersionCondition.addPredefinedGlobalIdent("D_InlineAsm_X86_64");
         VersionCondition.addPredefinedGlobalIdent("X86_64");
-        if (params.isWindows)
+        if (params.targetOS & TargetOS.Windows)
         {
             VersionCondition.addPredefinedGlobalIdent("Win64");
         }
@@ -1475,7 +1554,7 @@ void addDefaultVersionIdentifiers(const ref Param params)
         VersionCondition.addPredefinedGlobalIdent("D_InlineAsm"); //legacy
         VersionCondition.addPredefinedGlobalIdent("D_InlineAsm_X86");
         VersionCondition.addPredefinedGlobalIdent("X86");
-        if (params.isWindows)
+        if (params.targetOS == TargetOS.Windows)
         {
             VersionCondition.addPredefinedGlobalIdent("Win32");
         }
@@ -2071,15 +2150,7 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, ref Param 
             params.stackstomp = true;
         else if (arg == "-lowmem") // https://dlang.org/dmd.html#switch-lowmem
         {
-            static if (isGCAvailable)
-            {
-                // ignore, already handled in C main
-            }
-            else
-            {
-                error("switch '%s' requires DMD to be built with '-version=GC'", arg.ptr);
-                continue;
-            }
+            // ignore, already handled in C main
         }
         else if (arg.length > 6 && arg[0..6] == "--DRT-")
         {
@@ -2267,6 +2338,9 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, ref Param 
                 break;
             case "c++17":
                 params.cplusplus = CppStdRevision.cpp17;
+                break;
+            case "c++20":
+                params.cplusplus = CppStdRevision.cpp20;
                 break;
             default:
                 error("Switch `%s` is invalid", p);
@@ -2760,6 +2834,29 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, ref Param 
             }
             params.moduleDeps = new OutBuffer();
         }
+        else if (startsWith(p + 1, "makedeps"))          // https://dlang.org/dmd.html#switch-makedeps
+        {
+            if (params.emitMakeDeps)
+            {
+                error("-makedeps[=file] can only be provided once!");
+                break;
+            }
+            if (p[9] == '=')
+            {
+                if (p[10] == '\0')
+                {
+                    error("expected filename after -makedeps=");
+                    break;
+                }
+                params.makeDepsFile = (p + 10).toDString;
+            }
+            else if (p[9] != '\0')
+            {
+                goto Lerror;
+            }
+            // Else output to stdout.
+            params.emitMakeDeps = true;
+        }
         else if (arg == "-main")             // https://dlang.org/dmd.html#switch-main
         {
             params.addMain = true;
@@ -2955,20 +3052,12 @@ else
     }
     else
     {
-version (IN_LLVM)
-{
-        if (params.objname && numSrcFiles + (params.addMain ? 1 : 0) > 1)
-            params.oneobj = true;
-}
-else
-{
         if (params.objname && numSrcFiles)
         {
             params.oneobj = true;
             //error("multiple source files, but only one .obj name");
             //fatal();
         }
-}
     }
 
     if (params.noDIP25)
@@ -3036,7 +3125,7 @@ version (IN_LLVM) {} else
         return null;
     }
     // IN_LLVM replaced: static if (TARGET.Linux || TARGET.OSX || TARGET.FreeBSD || TARGET.OpenBSD || TARGET.Solaris || TARGET.DragonFlyBSD)
-    if (!global.params.isWindows)
+    if (global.params.targetOS != TargetOS.Windows)
     {
         if (FileName.equals(ext, global.dll_ext))
         {
@@ -3062,7 +3151,7 @@ version (IN_LLVM) {} else
         return null;
     }
     // IN_LLVM replaced: static if (TARGET.Windows)
-    if (global.params.isWindows)
+    if (global.params.targetOS == TargetOS.Windows)
     {
         if (FileName.equals(ext, "res"))
         {
@@ -3161,11 +3250,9 @@ else
     }
 version (IN_LLVM)
 {
-    if (global.params.oneobj && modules.dim < 2 && !includeImports)
-        global.params.oneobj = false;
-    // global.params.oneobj => move object file for first source file to
-    // beginning of object files list
-    if (global.params.oneobj && firstModuleObjectFileIndex != 0)
+    // When compiling to a single object file, move that object file to the
+    // beginning of the object files list.
+    if (global.params.oneobj && modules.length > 0 && firstModuleObjectFileIndex != 0)
     {
         auto fn = global.params.objfiles[firstModuleObjectFileIndex];
         global.params.objfiles.remove(firstModuleObjectFileIndex);

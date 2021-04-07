@@ -32,6 +32,14 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/YAMLTraits.h"
+#if LDC_MLIR_ENABLED
+#if LDC_LLVM_VER >= 1200
+#include "mlir/IR/BuiltinOps.h"
+#else
+#include "mlir/IR/Module.h"
+#endif
+#include "mlir/IR/MLIRContext.h"
+#endif
 
 namespace {
 
@@ -186,7 +194,7 @@ CodeGenerator::CodeGenerator(llvm::LLVMContext &context,
 }
 
 CodeGenerator::~CodeGenerator() {
-  if (singleObj_) {
+  if (singleObj_ && moduleCount_ > 0) {
     // For singleObj builds, the first object file name is the one for the first
     // source file (e.g., `b.o` for `ldc2 a.o b.d c.d`).
     const char *filename = global.params.objfiles[0];

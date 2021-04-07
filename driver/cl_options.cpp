@@ -170,12 +170,15 @@ static cl::opt<CppStdRevision, true> cplusplus(
     cl::values(
         clEnumValN(CppStdRevisionCpp98, "c++98",
                    "Sets `__traits(getTargetInfo, \"cppStd\")` to `199711`"),
-        clEnumValN(CppStdRevisionCpp11, "c++11",
-                   "Sets `__traits(getTargetInfo, \"cppStd\")` to `201103`"),
+        clEnumValN(
+            CppStdRevisionCpp11, "c++11",
+            "Sets `__traits(getTargetInfo, \"cppStd\")` to `201103` (default)"),
         clEnumValN(CppStdRevisionCpp14, "c++14",
                    "Sets `__traits(getTargetInfo, \"cppStd\")` to `201402`"),
         clEnumValN(CppStdRevisionCpp17, "c++17",
-                   "Sets `__traits(getTargetInfo, \"cppStd\")` to `201703`")));
+                   "Sets `__traits(getTargetInfo, \"cppStd\")` to `201703`"),
+        clEnumValN(CppStdRevisionCpp20, "c++20",
+                   "Sets `__traits(getTargetInfo, \"cppStd\")` to `202002`")));
 
 static cl::opt<unsigned char, true> debugInfo(
     cl::desc("Generating debug information:"), cl::ZeroOrMore,
@@ -386,9 +389,15 @@ cl::list<std::string>
 cl::opt<std::string>
     moduleDeps("deps", cl::ValueOptional, cl::ZeroOrMore,
                cl::value_desc("filename"),
-               cl::desc("Write module dependencies to filename (only imports). "
+               cl::desc("Write module dependencies to <filename> (only imports). "
                         "'-deps' alone prints module dependencies "
                         "(imports/file/version/debug/lib)"));
+
+cl::opt<std::string>
+    makeDeps("makedeps", cl::ValueOptional, cl::ZeroOrMore,
+             cl::value_desc("filename"),
+             cl::desc("Write module dependencies in Makefile compatible format "
+                      "to <filename>/stdout (only imports)"));
 
 cl::opt<bool> m32bits("m32", cl::desc("32 bit target"), cl::ZeroOrMore);
 
@@ -487,8 +496,9 @@ cl::opt<uint32_t, true> hashThreshold(
     "hash-threshold", cl::ZeroOrMore, cl::location(global.params.hashThreshold),
     cl::desc("Hash symbol names longer than this threshold (experimental)"));
 
-cl::opt<bool> linkonceTemplates(
+static cl::opt<bool, true> linkonceTemplates(
     "linkonce-templates", cl::ZeroOrMore,
+    cl::location(global.params.linkonceTemplates),
     cl::desc(
         "Use linkonce_odr linkage for template symbols instead of weak_odr"));
 
@@ -704,9 +714,18 @@ void createClashingOptions() {
 /// to be useful for end users from the -help output.
 void hideLLVMOptions() {
   static const char *const hiddenOptions[] = {
-      "aarch64-neon-syntax", "addrsig", "arm-add-build-attributes",
+      "aarch64-neon-syntax", "abort-on-max-devirt-iterations-reached",
+      "addrsig", "amdgpu-bypass-slow-div", "amdgpu-disable-loop-alignment",
+      "amdgpu-disable-power-sched", "amdgpu-dpp-combine",
+      "amdgpu-dump-hsa-metadata", "amdgpu-enable-flat-scratch",
+      "amdgpu-enable-global-sgpr-addr", "amdgpu-enable-merge-m0",
+      "amdgpu-promote-alloca-to-vector-limit",
+      "amdgpu-reserve-vgpr-for-sgpr-spill", "amdgpu-sdwa-peephole",
+      "amdgpu-use-aa-in-codegen", "amdgpu-verify-hsa-metadata",
+      "amdgpu-vgpr-index-mode", "arm-add-build-attributes",
       "arm-implicit-it", "asm-instrumentation", "asm-show-inst",
       "atomic-counter-update-promoted", "atomic-first-counter",
+      "basic-block-sections",
       "basicblock-sections", "bounds-checking-single-trap",
       "cfg-hide-deoptimize-paths", "cfg-hide-unreachable-paths",
       "code-model", "cost-kind", "cppfname", "cppfor", "cppgen",
@@ -714,8 +733,10 @@ void hideLLVMOptions() {
       "cvp-dont-process-adds", "debug-counter", "debug-entry-values",
       "debugger-tune", "debugify-level", "debugify-quiet",
       "denormal-fp-math", "denormal-fp-math-f32", "disable-debug-info-verifier",
-      "disable-objc-arc-checkforcfghazards", "disable-spill-fusing",
-      "do-counter-promotion", "dwarf64", "emit-call-site-info",
+      "disable-objc-arc-checkforcfghazards", "disable-promote-alloca-to-lds",
+      "disable-promote-alloca-to-vector", "disable-slp-vectorization",
+      "disable-spill-fusing",
+      "do-counter-promotion", "dot-cfg-mssa", "dwarf64", "emit-call-site-info",
       "emscripten-cxx-exceptions-allowed",
       "emscripten-cxx-exceptions-whitelist",
       "emulated-tls", "enable-correct-eh-support",
@@ -729,17 +750,19 @@ void hideLLVMOptions() {
       "enable-no-nans-fp-math", "enable-no-signed-zeros-fp-math",
       "enable-no-trapping-fp-math", "enable-objc-arc-annotations",
       "enable-objc-arc-opts", "enable-pie", "enable-scoped-noalias",
+      "enable-split-backedge-in-load-pre",
       "enable-tbaa", "enable-unsafe-fp-math", "exception-model",
       "exhaustive-register-search", "expensive-combines",
+      "experimental-debug-variable-locations",
       "fatal-assembler-warnings", "filter-print-funcs",
       "force-dwarf-frame-section", "gpsize", "hash-based-counter-split",
-      "hot-cold-split",
+      "hot-cold-split", "ignore-xcoff-visibility",
       "imp-null-check-page-size", "imp-null-max-insts-to-consider",
       "import-all-index", "incremental-linker-compatible",
       "instcombine-code-sinking", "instcombine-guard-widening-window",
       "instcombine-max-iterations", "instcombine-max-num-phis",
       "instcombine-maxarray-size", "instcombine-negator-enabled",
-      "instcombine-negator-max-depth",
+      "instcombine-negator-max-depth", "instcombine-unsafe-select-transform",
       "instrprof-atomic-counter-update-all", "internalize-public-api-file",
       "internalize-public-api-list", "iterative-counter-promotion",
       "join-liveintervals", "jump-table-type", "limit-float-precision",
@@ -747,9 +770,9 @@ void hideLLVMOptions() {
       "max-counter-promotions", "max-counter-promotions-per-loop",
       "mc-relax-all", "mc-x86-disable-arith-relaxation", "meabi",
       "memop-size-large", "memop-size-range", "merror-missing-parenthesis",
-      "merror-noncontigious-register", "mfuture-regs", "mips-compact-branches",
-      "mips16-constant-islands", "mips16-hard-float", "mir-strip-debugify-only",
-      "mlsm", "mno-compound",
+      "merror-noncontigious-register", "mfuture-regs", "mhvx",
+      "mips-compact-branches", "mips16-constant-islands", "mips16-hard-float",
+      "mir-strip-debugify-only", "mlsm", "mno-compound",
       "mno-fixup", "mno-ldc1-sdc1", "mno-pairing", "mwarn-missing-parenthesis",
       "mwarn-noncontigious-register", "mwarn-sign-mismatch",
       "no-discriminators", "no-xray-index",
@@ -761,6 +784,7 @@ void hideLLVMOptions() {
       "print-before-all", "print-machineinstrs", "print-module-scope",
       "profile-estimator-loop-weight", "profile-estimator-loop-weight",
       "profile-file", "profile-info-file", "profile-verifier-noassert",
+      "pseudo-probe-for-profiling",
       "r600-ir-structurize", "rdf-dump", "rdf-limit", "recip", "regalloc",
       "relax-elf-relocations", "remarks-section", "rewrite-map-file", "rng-seed",
       "runtime-counter-relocation", "safepoint-ir-verifier-print-only",
@@ -768,20 +792,26 @@ void hideLLVMOptions() {
       "sample-profile-check-sample-coverage",
       "sample-profile-inline-hot-threshold",
       "sample-profile-max-propagate-iterations", "shrink-wrap", "simplify-mir",
+      "skip-ret-exit-block",
       "speculative-counter-promotion-max-exiting",
       "speculative-counter-promotion-to-loop", "spiller", "spirv-debug",
       "spirv-erase-cl-md", "spirv-lower-const-expr", "spirv-mem2reg",
-      "spirv-no-deref-attr", "spirv-text",
-      "spv-lower-saddwithoverflow-validate", "spvbool-validate",
-      "spvmemmove-validate",
-      "stack-alignment", "stack-size-section", "stack-symbol-ordering",
+      "spirv-no-deref-attr", "spirv-text", "spirv-verify-regularize-passes",
+      "split-machine-functions", "spv-lower-saddwithoverflow-validate",
+      "spvbool-validate", "spvmemmove-validate",
+      "stack-alignment", "stack-protector-guard",
+      "stack-protector-guard-offset", "stack-protector-guard-reg",
+      "stack-size-section", "stack-symbol-ordering",
       "stackmap-version", "static-func-full-module-prefix",
       "static-func-strip-dirname-prefix", "stats", "stats-json", "strip-debug",
       "struct-path-tbaa", "summary-file", "tail-predication", "tailcallopt",
+      "thinlto-assume-merged",
       "thread-model", "time-passes", "time-trace-granularity", "tls-size",
-      "unfold-element-atomic-memcpy-max-elements", "unique-bb-section-names",
+      "unfold-element-atomic-memcpy-max-elements",
+      "unique-basic-block-section-names", "unique-bb-section-names",
       "unique-section-names", "unit-at-a-time", "use-ctors",
-      "verify-debug-info", "verify-dom-info", "verify-loop-info",
+      "vec-extabi", "verify-debug-info", "verify-dom-info",
+      "verify-legalizer-debug-locs", "verify-loop-info",
       "verify-loop-lcssa", "verify-machine-dom-info", "verify-regalloc",
       "verify-region-info", "verify-scev", "verify-scev-maps",
       "vp-counters-per-site", "vp-static-alloc",
@@ -789,6 +819,7 @@ void hideLLVMOptions() {
       "x86-branches-within-32B-boundaries", "x86-early-ifcvt",
       "x86-pad-max-prefix-size",
       "x86-recip-refinement-steps", "x86-use-vzeroupper",
+      "xcoff-traceback-table",
 
       // We enable -fdata-sections/-ffunction-sections by default where it makes
       // sense for reducing code size, so hide them to avoid confusion.

@@ -93,7 +93,7 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
 
 //////////////////////////////////////////////////////////////////////////////
 
-static std::string getOutputName() {
+static std::string getOutputPath() {
   const auto &triple = *global.params.targetTriple;
   const bool sharedLib = global.params.dll;
 
@@ -203,10 +203,11 @@ bool useInternalLLDForLinking() {
   return linkInternally
 #if LDC_WITH_LLD
          ||
-         // DWARF debuginfos for MSVC require LLD
-         (opts::emitDwarfDebugInfo && linkInternally.getNumOccurrences() == 0 &&
-          opts::linker.empty() && !opts::isUsingLTO() &&
-          global.params.targetTriple->isWindowsMSVCEnvironment())
+         // MSVC: DWARF debuginfos and LTO require LLD
+         (linkInternally.getNumOccurrences() == 0 && // not explicitly disabled
+          opts::linker.empty() && // no explicitly selected linker
+          global.params.targetTriple->isWindowsMSVCEnvironment() &&
+          (opts::emitDwarfDebugInfo || opts::isUsingLTO()))
 #endif
       ;
 }
@@ -287,7 +288,7 @@ int linkObjToBinary() {
   TimeTraceScope timeScope("Linking executable");
 
   // remember output path for later
-  gExePath = getOutputName();
+  gExePath = getOutputPath();
 
   createDirectoryForFileOrFail(gExePath);
 
@@ -298,6 +299,11 @@ int linkObjToBinary() {
   }
 
   return linkObjToBinaryGcc(gExePath, defaultLibNames);
+}
+
+const char *getPathToProducedBinary() {
+  assert(!gExePath.empty());
+  return gExePath.c_str();
 }
 
 //////////////////////////////////////////////////////////////////////////////

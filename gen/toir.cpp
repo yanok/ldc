@@ -587,7 +587,7 @@ public:
 
   //////////////////////////////////////////////////////////////////////////////
 
-  using BinOpFunc = DValue *(Loc &, Type *, DValue *, Expression *, bool);
+  using BinOpFunc = DValue *(const Loc &, Type *, DValue *, Expression *, bool);
 
   static Expression *getLValExp(Expression *e) {
     e = skipOverCasts(e);
@@ -728,7 +728,7 @@ public:
       // as requested by bearophile, see if it's a C printf call and that it's
       // valid.
       if (global.params.warnings != DIAGNOSTICoff && checkPrintf) {
-        if (fndecl->linkage == LINKc &&
+        if (fndecl->linkage == LINK::c &&
             strcmp(fndecl->ident->toChars(), "printf") == 0) {
           warnInvalidPrintfCall(e->loc, (*e->arguments)[0],
                                 e->arguments->length);
@@ -1093,10 +1093,9 @@ public:
     // evaluate the base expression but delay getting its pointer until the
     // potential bounds have been evaluated
     DValue *v = toElem(e->e1);
-    auto getBasePointer = [e, v, etype]() {
+    auto getBasePointer = [v, etype]() {
       if (etype->ty == Tpointer) {
         // pointer slicing
-        assert(e->lwr);
         return DtoRVal(v);
       } else {
         // array slice
@@ -1691,7 +1690,7 @@ public:
       Logger::println("calling class invariant");
 
       const auto fnMangle =
-          getIRMangledFuncName("_D9invariant12_d_invariantFC6ObjectZv", LINKd);
+          getIRMangledFuncName("_D9invariant12_d_invariantFC6ObjectZv", LINK::d);
       const auto fn = getRuntimeFunction(e->loc, gIR->module, fnMangle.c_str());
 
       const auto arg =
@@ -2402,9 +2401,9 @@ public:
       llvm::Function *func =
           getRuntimeFunction(e->loc, gIR->module, "_d_assocarrayliteralTX");
       LLFunctionType *funcTy = func->getFunctionType();
-      LLValue *aaTypeInfo =
-          DtoBitCast(DtoTypeInfoOf(stripModifiers(aatype), /*base=*/false),
-                     DtoType(getAssociativeArrayTypeInfoType()));
+      LLValue *aaTypeInfo = DtoBitCast(
+          DtoTypeInfoOf(e->loc, stripModifiers(aatype), /*base=*/false),
+          DtoType(getAssociativeArrayTypeInfoType()));
 
       LLConstant *idxs[2] = {DtoConstUint(0), DtoConstUint(0)};
 
@@ -2595,6 +2594,7 @@ public:
       // and store element-wise.
       if (auto ts = tsrc->isTypeSArray()) {
         Logger::println("static array expression");
+        (void)ts;
         assert(ts->dim->toInteger() == N &&
                "Static array vector initializer length mismatch, should have "
                "been handled in frontend.");
@@ -2621,7 +2621,9 @@ public:
       DValue *val = toElem(e->e1);
       LLValue *llElement = getCastElement(val);
       if (auto llConstant = isaConstant(llElement)) {
-#if LDC_LLVM_VER >= 1100
+#if LDC_LLVM_VER >= 1200
+        const auto elementCount = llvm::ElementCount::getFixed(N);
+#elif LDC_LLVM_VER >= 1100
         const auto elementCount = llvm::ElementCount(N, false);
 #else
         const auto elementCount = N;
@@ -2669,8 +2671,8 @@ public:
 
   void visit(TypeidExp *e) override {
     if (Type *t = isType(e->obj)) {
-      result = DtoSymbolAddress(
-          e->loc, e->type, getOrCreateTypeInfoDeclaration(e->loc, t, nullptr));
+      result = DtoSymbolAddress(e->loc, e->type,
+                                getOrCreateTypeInfoDeclaration(e->loc, t));
       return;
     }
     if (Expression *ex = isExpression(e->obj)) {

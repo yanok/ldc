@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.4.3)
 if(POLICY CMP0025)
   cmake_policy(SET CMP0025 NEW)
 endif()
@@ -8,9 +8,6 @@ project(ldc)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
 include(FindDCompiler)
-include(CheckIncludeFile)
-include(CheckIncludeFileCXX)
-include(CheckLibraryExists)
 include(CheckCXXCompilerFlag)
 include(CheckDSourceCompiles)
 include(CheckLinkFlag)
@@ -51,14 +48,14 @@ endforeach()
 # Set MLIR support variables if it is found. Only try for LLVM >= 10.0.
 if(NOT (LDC_LLVM_VER LESS 1000))
     include(FindMLIR)
-    message(STATUS "Building LDC with MLIR support: ${MLIR_FOUND}")
     if(MLIR_FOUND)
-        message(STATUS "Using MLIR installation directory: ${MLIR_ROOT_DIR}")
+        message(STATUS "-- Building LDC with MLIR support (${MLIR_ROOT_DIR})")
         include_directories(${MLIR_INCLUDE_DIR})
         add_definitions("-DLDC_MLIR_ENABLED")
-
         set(LLVM_LIBRARIES "${MLIR_LIBRARIES}" ${LLVM_LIBRARIES})
-    endif() #if MLIR_FOUND
+    else()
+        message(STATUS "-- Building LDC without MLIR support: not found")
+    endif()
 endif()
 
 # Check and adapt for LLVMSPIRVLib (Khronos SPIRV-LLVM-Translator)
@@ -95,8 +92,10 @@ if(NOT LLVM_SPIRV_FOUND)
     endif()
 endif()
 if(LLVM_SPIRV_FOUND)
-    message(STATUS "Building with SPIR-V support")
+    message(STATUS "-- Building LDC with SPIR-V support")
     add_definitions("-DLDC_LLVM_SUPPORTED_TARGET_SPIRV=1")
+else()
+    message(STATUS "-- Building LDC without SPIR-V support: not found")
 endif()
 
 #
@@ -110,10 +109,10 @@ include(GetLinuxDistribution)
 #
 
 # Version information
-set(LDC_VERSION "1.24.0") # May be overridden by git hash tag
+set(LDC_VERSION "1.25.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   94)
+set(DMDFE_PATCH_VERSION   95)
 set(DMDFE_FIX_LEVEL       1)
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
@@ -141,6 +140,8 @@ set(LIB_SUFFIX "" CACHE STRING "Appended to the library installation directory. 
 
 set(COMPILE_D_MODULES_SEPARATELY OFF CACHE BOOL "Compile each D module separately (instead of all at once). Useful for many CPU cores and/or iterative development; generated executables will be somewhat slower.")
 
+set(LDC_ENABLE_ASSERTIONS "${LLVM_ENABLE_ASSERTIONS}" CACHE BOOL "Enable LDC assertions. Defaults to the LLVM assertions mode; overriding may cause LDC segfaults!")
+
 if(D_VERSION EQUAL 1)
     message(FATAL_ERROR "D version 1 is no longer supported.
 Please consider using D version 2 or checkout the 'd1' git branch for the last version supporting D version 1.")
@@ -164,7 +165,7 @@ if(NOT MSVC_IDE)
     if(CMAKE_BUILD_TYPE MATCHES "Debug")
         append("-g" DFLAGS_BUILD_TYPE)
         if(${D_COMPILER_ID} STREQUAL "LDMD")
-            append("-link-debuglib" DFLAGS_BUILD_TYPE)
+            append("-link-debuglib" DFLAGS_BASE)
         endif()
     elseif(CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
         append("-g -O -inline -release" DFLAGS_BUILD_TYPE)
@@ -173,17 +174,17 @@ if(NOT MSVC_IDE)
         append("-O -inline -release" DFLAGS_BUILD_TYPE)
     endif()
 
-    if(LLVM_ENABLE_ASSERTIONS)
+    if(LDC_ENABLE_ASSERTIONS)
         string(REPLACE " -release" "" DFLAGS_BUILD_TYPE "${DFLAGS_BUILD_TYPE}")
     endif()
 endif()
 
 if(MSVC)
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-        message(STATUS "Let D host compiler output 64bit object files")
+        message(STATUS "Let D host compiler output 64-bit object files")
         append("-m64" DFLAGS_BASE)
     else()
-        message(STATUS "Let D host compiler output 32bit COFF object files")
+        message(STATUS "Let D host compiler output 32-bit COFF object files")
         if(${D_COMPILER_ID} STREQUAL "DigitalMars")
             append("-m32mscoff" DFLAGS_BASE)
         else()
@@ -448,12 +449,17 @@ include(HandleLTOPGOBuildOptions)
 #
 # Enable Dynamic compilation if supported for this platform and LLVM version.
 #
-set(LDC_DYNAMIC_COMPILE "AUTO" CACHE STRING "Support dynamic compilation (ON|OFF). Enabled by default.")
+set(LDC_DYNAMIC_COMPILE "AUTO" CACHE STRING "Support dynamic compilation (ON|OFF). Enabled by default; not supported for LLVM >= 12.")
 option(LDC_DYNAMIC_COMPILE_USE_CUSTOM_PASSES "Use custom LDC passes in jit" ON)
 if(LDC_DYNAMIC_COMPILE STREQUAL "AUTO")
-    set(LDC_DYNAMIC_COMPILE ON)
+    if(LDC_LLVM_VER LESS 1200)
+        set(LDC_DYNAMIC_COMPILE ON)
+    else()
+        # TODO: port from ORCv1 API (dropped with LLVM 12) to ORCv2 (added with LLVM 7)
+        set(LDC_DYNAMIC_COMPILE OFF)
+    endif()
 endif()
-message(STATUS "Building LDC with dynamic compilation support: ${LDC_DYNAMIC_COMPILE} (LDC_DYNAMIC_COMPILE=${LDC_DYNAMIC_COMPILE})")
+message(STATUS "-- Building LDC with dynamic compilation support (LDC_DYNAMIC_COMPILE): ${LDC_DYNAMIC_COMPILE}")
 if(LDC_DYNAMIC_COMPILE)
     add_definitions(-DLDC_DYNAMIC_COMPILE)
     add_definitions(-DLDC_DYNAMIC_COMPILE_API_VERSION=3)
@@ -482,6 +488,10 @@ append("-DLDC_LLVM_VER=${LDC_LLVM_VER}" LDC_CXXFLAGS)
 append("\"-DLDC_LIBDIR_SUFFIX=R\\\"(${LIB_SUFFIX})\\\"\"" LDC_CXXFLAGS)
 append("-DLDC_HOST_${D_COMPILER_ID}=1" LDC_CXXFLAGS)
 append("-DLDC_HOST_FE_VER=${D_COMPILER_FE_VERSION}" LDC_CXXFLAGS)
+# If the LLVM is shared, add its lib dir to the hardcoded list used for library lookups.
+if(LLVM_IS_SHARED)
+    append("\"-DLDC_LLVM_LIBDIR=R\\\"(${LLVM_LIBRARY_DIRS})\\\"\"" LDC_CXXFLAGS)
+endif()
 
 #
 # LLD integration (requires headers & libs)
@@ -496,16 +506,17 @@ endif()
 if(LDC_WITH_LLD)
     append("-DLDC_WITH_LLD" LDC_CXXFLAGS)
 endif()
-message(STATUS "Building LDC with integrated LLD: ${LDC_WITH_LLD} (LDC_WITH_LLD=${LDC_WITH_LLD})")
+message(STATUS "-- Building LDC with integrated LLD linker (LDC_WITH_LLD): ${LDC_WITH_LLD}")
 
-# if llvm was built with assertions we have to do the same
-# as there are some headers with differing behavior based on NDEBUG
-if(LLVM_ENABLE_ASSERTIONS)
+message(STATUS "-- Building LDC with enabled assertions (LDC_ENABLE_ASSERTIONS): ${LDC_ENABLE_ASSERTIONS}")
+if(LDC_ENABLE_ASSERTIONS)
     append("-UNDEBUG" EXTRA_CXXFLAGS)
     # avoid MSVC warning D9025 about "-DNDEBUG ... -UNDEBUG"
     string(REGEX REPLACE "(^| )[/-]D *NDEBUG( |$)" "\\1-UNDEBUG\\2" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
     string(REGEX REPLACE "(^| )[/-]D *NDEBUG( |$)" "\\1-UNDEBUG\\2" CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL}")
     string(REGEX REPLACE "(^| )[/-]D *NDEBUG( |$)" "\\1-UNDEBUG\\2" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+else()
+    append("-DNDEBUG" EXTRA_CXXFLAGS)
 endif()
 
 #
@@ -597,10 +608,15 @@ if(LDC_WITH_LLD)
             set(LDC_LINKERFLAG_LIST -lLLVMSymbolize ${LDC_LINKERFLAG_LIST})
         endif()
     endif()
-    if(MSVC)
-        list(APPEND LDC_LINKERFLAG_LIST lldDriver.lib lldMinGW.lib lldCOFF.lib lldELF.lib lldMachO.lib lldWasm.lib lldYAML.lib lldReaderWriter.lib lldCommon.lib lldCore.lib)
+    if (LDC_LLVM_VER LESS 1200)
+        set(LLD_MACHO lldMachO)
     else()
-        set(LDC_LINKERFLAG_LIST -llldDriver -llldMinGW -llldCOFF -llldELF -llldMachO -llldWasm -llldYAML -llldReaderWriter -llldCommon -llldCore ${LDC_LINKERFLAG_LIST})
+        set(LLD_MACHO lldMachO2)
+    endif()
+    if(MSVC)
+        list(APPEND LDC_LINKERFLAG_LIST lldDriver.lib lldMinGW.lib lldCOFF.lib lldELF.lib ${LLD_MACHO}.lib lldWasm.lib lldYAML.lib lldReaderWriter.lib lldCommon.lib lldCore.lib)
+    else()
+        set(LDC_LINKERFLAG_LIST -llldDriver -llldMinGW -llldCOFF -llldELF -l${LLD_MACHO} -llldWasm -llldYAML -llldReaderWriter -llldCommon -llldCore ${LDC_LINKERFLAG_LIST})
     endif()
     if(APPLE AND LDC_LLVM_VER LESS 700) # LLVM 6.0.0 bug, should be fixed in 6.0.1
         list(APPEND LDC_LINKERFLAG_LIST -lxml2)
@@ -622,13 +638,17 @@ if(LDC_ENABLE_PLUGINS)
     elseif(UNIX)
         # For plugin support, we need to link with --export-dynamic on Unix.
         # Make sure the linker supports --export-dynamic (on Solaris it is not supported and also not needed).
+        set(CMAKE_REQUIRED_QUIET_BAK ${CMAKE_REQUIRED_QUIET})
+        set(CMAKE_REQUIRED_QUIET ON) # suppress status messages
         CHECK_LINK_FLAG("--export-dynamic" LINKER_ACCEPTS_EXPORT_DYNAMIC_FLAG)
+        set(CMAKE_REQUIRED_QUIET ${CMAKE_REQUIRED_QUIET_BAK})
+
         if(LINKER_ACCEPTS_EXPORT_DYNAMIC_FLAG)
             set(LDC_LINKERFLAG_LIST "${LDC_LINKERFLAG_LIST};-Wl,--export-dynamic")
         endif()
     endif()
 endif()
-message(STATUS "Building LDC with plugin support: ${LDC_ENABLE_PLUGINS} (LDC_ENABLE_PLUGINS=${LDC_ENABLE_PLUGINS})")
+message(STATUS "-- Building LDC with plugin support (LDC_ENABLE_PLUGINS): ${LDC_ENABLE_PLUGINS}")
 
 if(NOT DEFINED LDC_LINK_MANUALLY)
     if(MSVC)
@@ -668,17 +688,10 @@ endif()
 #
 # LDMD
 #
-include(CheckSymbolExists)
-CHECK_SYMBOL_EXISTS(_SC_ARG_MAX "unistd.h" HAVE_SC_ARG_MAX)
-if (HAVE_SC_ARG_MAX)
-   append("-DHAVE_SC_ARG_MAX" CMAKE_CXX_FLAGS)
-endif()
-
 set_source_files_properties(driver/args.cpp driver/exe_path.cpp driver/ldmd.cpp driver/response.cpp PROPERTIES
     COMPILE_FLAGS "${LLVM_CXXFLAGS} ${LDC_CXXFLAGS}"
     COMPILE_DEFINITIONS LDC_EXE_NAME="${LDC_EXE_NAME}"
 )
-
 add_library(LDMD_CXX_LIB ${LDC_LIB_TYPE} driver/args.cpp driver/exe_path.cpp driver/ldmd.cpp driver/response.cpp driver/args.h driver/exe_path.h)
 set_target_properties(
     LDMD_CXX_LIB PROPERTIES
@@ -712,10 +725,10 @@ endfunction()
 #
 # Locate LLVM's LTO binary and use it
 #
-if(APPLE)
-    set(LDC_INSTALL_LTOPLUGIN_DEFAULT ON)
-else()
+if(WIN32 OR LLVM_IS_SHARED)
     set(LDC_INSTALL_LTOPLUGIN_DEFAULT OFF)
+else()
+    set(LDC_INSTALL_LTOPLUGIN_DEFAULT ON)
 endif()
 set(LDC_INSTALL_LTOPLUGIN ${LDC_INSTALL_LTOPLUGIN_DEFAULT} CACHE BOOL "Copy/install the LTO plugin from the LLVM package when available.")
 if (LDC_INSTALL_LTOPLUGIN)
@@ -727,28 +740,30 @@ if (LDC_INSTALL_LTOPLUGIN)
         set(LDC_LTO_BINARY_NAME LLVMgold-ldc.so)
     endif()
     if(EXISTS ${LLVM_LTO_BINARY})
-        message(STATUS "Also installing LTO binary: ${LLVM_LTO_BINARY} (LDC_INSTALL_LTOPLUGIN=${LDC_INSTALL_LTOPLUGIN})")
+        message(STATUS "-- Including LTO linker plugin (LDC_INSTALL_LTOPLUGIN): ON (${LLVM_LTO_BINARY})")
         copy_and_rename_file(${LLVM_LTO_BINARY} ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}/${LDC_LTO_BINARY_NAME})
         install(PROGRAMS ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}/${LDC_LTO_BINARY_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
     else()
-        message(STATUS "Not found: ${LLVM_LTO_BINARY}")
+        message(STATUS "-- Including LTO linker plugin (LDC_INSTALL_LTOPLUGIN): OFF (cannot find ${LLVM_LTO_BINARY})")
     endif()
+else()
+    message(STATUS "-- Including LTO linker plugin (LDC_INSTALL_LTOPLUGIN): ${LDC_INSTALL_LTOPLUGIN}")
 endif()
 
 #
 # Locate ASan and other LLVM compiler-rt libraries, and copy them to our lib folder
 # Location is LLVM_LIBRARY_DIRS/clang/<version>/lib/<OS>/ , for example LLVM_LIBRARY_DIRS/clang/4.0.0/lib/darwin/
 #
-if(APPLE OR WIN32)
-    set(LDC_INSTALL_LLVM_RUNTIME_LIBS_DEFAULT ON)
-else()
+if(LLVM_IS_SHARED)
     set(LDC_INSTALL_LLVM_RUNTIME_LIBS_DEFAULT OFF)
+else()
+    set(LDC_INSTALL_LLVM_RUNTIME_LIBS_DEFAULT ON)
 endif()
 set(LDC_INSTALL_LLVM_RUNTIME_LIBS ${LDC_INSTALL_LLVM_RUNTIME_LIBS_DEFAULT} CACHE BOOL "Copy/install LLVM compiler-rt libraries (ASan, libFuzzer, ...) from LLVM/Clang into LDC lib dir when available.")
 function(copy_compilerrt_lib llvm_lib_name ldc_lib_name fixup_dylib)
     set(llvm_lib_path ${LLVM_LIBRARY_DIRS}/clang/${LLVM_VERSION_BASE_STRING}/lib/${llvm_lib_name})
     if(EXISTS ${llvm_lib_path})
-        message(STATUS "Copying runtime library: ${llvm_lib_path} --> ${ldc_lib_name}")
+        message(STATUS "--  - ${llvm_lib_path} --> ${ldc_lib_name}")
         set(ldc_lib_path ${PROJECT_BINARY_DIR}/lib${LIB_SUFFIX}/${ldc_lib_name})
         copy_and_rename_file(${llvm_lib_path} ${ldc_lib_path})
         if (fixup_dylib)
@@ -756,11 +771,10 @@ function(copy_compilerrt_lib llvm_lib_name ldc_lib_name fixup_dylib)
         endif()
         install(FILES ${ldc_lib_path} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
     else()
-        message(STATUS "Not found: ${llvm_lib_path}")
+        message(STATUS "--  - not found: ${llvm_lib_path}")
     endif()
 endfunction()
-include(CheckTypeSize)
-check_type_size(void* ptr_size)
+message(STATUS "-- Including LLVM compiler-rt libraries (LDC_INSTALL_LLVM_RUNTIME_LIBS): ${LDC_INSTALL_LLVM_RUNTIME_LIBS}")
 if (LDC_INSTALL_LLVM_RUNTIME_LIBS)
     # Locate LLVM sanitizer runtime libraries, and copy them to our lib folder
 
@@ -793,19 +807,13 @@ if (LDC_INSTALL_LLVM_RUNTIME_LIBS)
         endif()
     elseif(WIN32)
         set(compilerrt_arch_suffix "x86_64")
-        if(${ptr_size} EQUAL 4)
+        if(CMAKE_SIZEOF_VOID_P EQUAL 4)
             set(compilerrt_arch_suffix "i386")
         endif()
         copy_compilerrt_lib("windows/clang_rt.asan-${compilerrt_arch_suffix}.lib"       "ldc_rt.asan.lib"     FALSE)
         copy_compilerrt_lib("windows/clang_rt.builtins-${compilerrt_arch_suffix}.lib"   "ldc_rt.builtins.lib" FALSE)
         copy_compilerrt_lib("windows/clang_rt.profile-${compilerrt_arch_suffix}.lib"    "ldc_rt.profile.lib"  FALSE)
         copy_compilerrt_lib("windows/clang_rt.fuzzer-${compilerrt_arch_suffix}.lib"     "ldc_rt.fuzzer.lib"   FALSE)
-        copy_compilerrt_lib("windows/clang_rt.xray-${compilerrt_arch_suffix}.lib"       "ldc_rt.xray.lib"     FALSE)
-        if(NOT (LDC_LLVM_VER LESS 700))
-            copy_compilerrt_lib("windows/clang_rt.xray-basic-${compilerrt_arch_suffix}.lib"      "ldc_rt.xray-basic.lib"     FALSE)
-            copy_compilerrt_lib("windows/clang_rt.xray-fdr-${compilerrt_arch_suffix}.lib"        "ldc_rt.xray-fdr.lib"       FALSE)
-            copy_compilerrt_lib("windows/clang_rt.xray-profiling-${compilerrt_arch_suffix}.lib"  "ldc_rt.xray-profiling.lib" FALSE)
-        endif()
     endif()
 endif()
 

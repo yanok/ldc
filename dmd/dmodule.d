@@ -43,12 +43,16 @@ import dmd.root.rootobject;
 import dmd.root.string;
 import dmd.semantic2;
 import dmd.semantic3;
+import dmd.utils;
 import dmd.visitor;
 version (IN_LLVM)
 {
     import dmd.root.aav;
     import dmd.root.array;
     import dmd.root.rmem;
+
+    // in driver/main.cpp
+    extern (C++) const(char)* createTempObjectsDir();
 }
 
 version(Windows) {
@@ -701,6 +705,17 @@ else
             // If argdoc doesn't have an absolute path, make it relative to dir
             if (!FileName.absolute(argdoc))
             {
+version (IN_LLVM)
+{
+                if (!dir.length && global.params.cleanupObjectFiles)
+                {
+                    __gshared const(char)[] tempObjectsDir;
+                    if (!tempObjectsDir.length)
+                        tempObjectsDir = createTempObjectsDir().toDString;
+
+                    dir = tempObjectsDir;
+                }
+}
                 //FileName::ensurePathExists(dir);
                 argdoc = FileName.combine(dir, argdoc);
             }
@@ -785,6 +800,9 @@ else
     /**
      * Reads the file from `srcfile` and loads the source buffer.
      *
+     * If makefile module dependency is requested, we add this module
+     * to the list of dependencies from here.
+     *
      * Params:
      *  loc = the location
      *
@@ -798,6 +816,11 @@ else
 
         //printf("Module::read('%s') file '%s'\n", toChars(), srcfile.toChars());
         auto readResult = File.read(srcfile.toChars());
+
+        if (global.params.emitMakeDeps)
+        {
+            global.params.makeDeps.push(srcfile.toChars());
+        }
 
         return loadSourceBuffer(loc, readResult);
     }
@@ -1516,7 +1539,6 @@ version (IN_LLVM)
 {
     //llvm::Module* genLLVMModule(llvm::LLVMContext& context);
     void checkAndAddOutputFile(const ref FileName file);
-    void makeObjectFilenameUnique();
 
     bool llvmForceLogging;
     bool noModuleInfo; /// Do not emit any module metadata.

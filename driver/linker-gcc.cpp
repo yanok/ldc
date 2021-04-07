@@ -101,6 +101,9 @@ std::string getLTOGoldPluginPath() {
       exe_path::prependLibDir("LLVMgold-ldc.so"),
       // Perhaps the user copied the plugin to LDC's lib dir.
       exe_path::prependLibDir("LLVMgold.so"),
+#ifdef LDC_LLVM_LIBDIR
+      LDC_LLVM_LIBDIR "/LLVMgold.so",
+#endif
 #if __LP64__
       "/usr/local/lib64/LLVMgold.so",
 #endif
@@ -161,6 +164,12 @@ std::string getLTOdylibPath() {
     std::string searchPath = exe_path::prependLibDir("libLTO-ldc.dylib");
     if (llvm::sys::fs::exists(searchPath))
       return searchPath;
+
+#ifdef LDC_LLVM_LIBDIR
+    searchPath = LDC_LLVM_LIBDIR "/libLTO.dylib";
+    if (llvm::sys::fs::exists(searchPath))
+      return searchPath;
+#endif
 
     return "";
   }
@@ -247,14 +256,21 @@ std::string getRelativeClangCompilerRTLibPath(const llvm::Twine &name,
 
 void appendFullLibPathCandidates(std::vector<std::string> &paths,
                                  const llvm::Twine &filename) {
+  llvm::SmallString<128> candidate;
   for (const char *dir : ConfigFile::instance.libDirs()) {
-    llvm::SmallString<128> candidate(dir);
+    candidate = dir;
     llvm::sys::path::append(candidate, filename);
     paths.emplace_back(candidate.data(), candidate.size());
   }
 
   // for backwards compatibility
   paths.push_back(exe_path::prependLibDir(filename));
+
+#ifdef LDC_LLVM_LIBDIR
+  candidate = LDC_LLVM_LIBDIR;
+  llvm::sys::path::append(candidate, filename);
+  paths.emplace_back(candidate.data(), candidate.size());
+#endif
 }
 
 // Returns candidates of full paths to a compiler-rt lib.
@@ -575,7 +591,8 @@ void ArgsBuilder::addLinker() {
 
   // We have a default linker preference for Linux targets. It can be disabled
   // via `-linker=` (explicitly empty).
-  if (global.params.isLinux && opts::linker.getNumOccurrences() == 0) {
+  if (global.params.targetTriple->isOSLinux() &&
+      opts::linker.getNumOccurrences() == 0) {
     // Default to ld.bfd for Android (placing .tdata and .tbss sections adjacent
     // to each other as required by druntime's rt.sections_android, contrary to
     // gold and lld as of Android NDK r21d).
@@ -642,12 +659,14 @@ void ArgsBuilder::addDefaultPlatformLibs() {
       args.push_back("-lm");
       break;
     }
+    if (triple.isMusl() && !global.params.betterC) {
+      args.push_back("-lunwind"); // for druntime backtrace
+    }
     args.push_back("-lrt");
+    args.push_back("-ldl");
   // fallthrough
   case llvm::Triple::Darwin:
   case llvm::Triple::MacOSX:
-    args.push_back("-ldl");
-  // fallthrough
   case llvm::Triple::FreeBSD:
   case llvm::Triple::NetBSD:
   case llvm::Triple::OpenBSD:
@@ -742,13 +761,17 @@ int linkObjToBinaryGcc(llvm::StringRef outputPath,
 #endif
       );
     } else if (global.params.targetTriple->isOSBinFormatMachO()) {
+#if LDC_LLVM_VER >= 1200
+      success = lld::macho::link(fullArgs
+#else
       success = lld::mach_o::link(fullArgs
+#endif
 #if LDC_LLVM_VER >= 700
-                                  ,
-                                  CanExitEarly
+                                 ,
+                                 CanExitEarly
 #if LDC_LLVM_VER >= 1000
-                                  ,
-                                  llvm::outs(), llvm::errs()
+                                 ,
+                                 llvm::outs(), llvm::errs()
 #endif
 #endif
       );
