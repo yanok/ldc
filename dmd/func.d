@@ -301,6 +301,8 @@ version (IN_LLVM)
     VarDeclaration vresult;             /// result variable for out contracts
     LabelDsymbol returnLabel;           /// where the return goes
 
+    bool[Type.UniqueId] isTypeIsolatedCache; /// cache of this potentially very expensive check
+
     // used to prevent symbols in different
     // scopes from having the same name
     DsymbolTable localsymtab;
@@ -1555,8 +1557,18 @@ version (IN_LLVM)
     extern (D) final bool isTypeIsolated(Type t)
     {
         StringTable!Type parentTypes;
-        parentTypes._init();
-        return isTypeIsolated(t, parentTypes);
+        if(t.uniqueId) {
+            auto isIsolatedP = t.uniqueId in isTypeIsolatedCache;
+            if(isIsolatedP !is null) return *isIsolatedP;
+
+            parentTypes._init();
+            bool isIsolated = isTypeIsolated(t, parentTypes);
+            isTypeIsolatedCache[t.uniqueId] = isIsolated;
+            return isIsolated;
+        } else {
+            parentTypes._init();
+            return isTypeIsolated(t, parentTypes);
+        }
     }
 
     ///ditto

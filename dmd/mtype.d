@@ -517,7 +517,9 @@ version (IN_LLVM)
     final extern (D) this(TY ty)
     {
         this.ty = ty;
-        this.uniqueId = nextUniqueId++;
+        if(!__ctfe) {
+            this.uniqueId = nextUniqueId++;
+        }
     }
 
     const(char)* kind() const nothrow pure @nogc @safe
