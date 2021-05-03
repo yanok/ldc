@@ -973,7 +973,12 @@ void emulateWeakAnyLinkageForMSVC(LLFunction *func, LINK linkage) {
 
 void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   TimeTraceScope timeScope(
-      ("Codegen func " + llvm::SmallString<40>(fd->toChars())).str(), [fd]() {
+      [fd]() {
+        std::string name("Codegen func ");
+        name += fd->toChars();
+        return name;
+      },
+      [fd]() {
         std::string detail = fd->toPrettyChars();
         detail += ", loc: ";
         detail += fd->loc.toChars();

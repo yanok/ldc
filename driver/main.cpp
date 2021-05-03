@@ -993,7 +993,9 @@ int cppmain() {
     fatal();
   }
 
-  initializeTimeTracer();
+  if (opts::fTimeTrace) {
+    initializeTimeTrace(opts::fTimeTraceGranularity, 0, opts::allArguments[0]);
+  }
 
   // Set up the TargetMachine.
   const auto arch = getArchStr();
@@ -1088,8 +1090,9 @@ int cppmain() {
     status = mars_mainBody(global.params, files, libmodules);
   }
 
-  writeTimeTraceProfile();
-  deinitializeTimeTracer();
+  std::string fTimeTraceFile = opts::fTimeTraceFile;
+  writeTimeTraceProfile(fTimeTraceFile.empty() ? "" : fTimeTraceFile.c_str());
+  deinitializeTimeTrace();
 
   return status;
 }
@@ -1128,7 +1131,7 @@ void codegenModules(Modules &modules) {
       const auto atCompute = hasComputeAttr(m);
       if (atCompute == DComputeCompileFor::hostOnly ||
           atCompute == DComputeCompileFor::hostAndDevice) {
-        TimeTraceScope timeScope(("Codegen module " + llvm::SmallString<20>(m->toChars())).str());
+        TimeTraceScope timeScope(("Codegen module " + llvm::SmallString<20>(m->toChars())).str().c_str());
 #if LDC_MLIR_ENABLED
         if (global.params.output_mlir == OUTPUTFLAGset)
           cg.emitMLIR(m);
@@ -1156,7 +1159,7 @@ void codegenModules(Modules &modules) {
     if (!computeModules.empty()) {
       TimeTraceScope timeScope("Codegen DCompute device modules");
       for (auto &mod : computeModules) {
-        TimeTraceScope timeScope(("Codegen DCompute device module " + llvm::SmallString<20>(mod->toChars())).str());
+        TimeTraceScope timeScope(("Codegen DCompute device module " + llvm::SmallString<20>(mod->toChars())).str().c_str());
         dccg.emit(mod);
       }
     }
