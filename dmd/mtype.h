@@ -138,7 +138,7 @@ public:
     TY ty;
     MOD mod;  // modifiers MODxxxx
     char *deco;
-    ulong uniqueId;             // incremented by 1 in each construction
+    d_uns64 uniqueId;             // incremented by 1 in each construction
 
 private:
     void* mcache;

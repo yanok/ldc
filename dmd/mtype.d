@@ -512,7 +512,7 @@ version (IN_LLVM)
             return sizeTy;
         }();
 
-    static __gshared ulong nextUniqueId = 0x100000;
+    static __gshared UniqueId nextUniqueId = 0x100000;
 
     final extern (D) this(TY ty)
     {
