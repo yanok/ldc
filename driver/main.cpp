@@ -1131,7 +1131,7 @@ void codegenModules(Modules &modules) {
       const auto atCompute = hasComputeAttr(m);
       if (atCompute == DComputeCompileFor::hostOnly ||
           atCompute == DComputeCompileFor::hostAndDevice) {
-        TimeTraceScope timeScope(("Codegen module " + llvm::SmallString<20>(m->toChars())).str().c_str());
+        TimeTraceScope timeScope(("Codegen module " + llvm::SmallString<20>(m->toChars())).str().c_str(), m->loc);
 #if LDC_MLIR_ENABLED
         if (global.params.output_mlir == OUTPUTFLAGset)
           cg.emitMLIR(m);
@@ -1159,7 +1159,7 @@ void codegenModules(Modules &modules) {
     if (!computeModules.empty()) {
       TimeTraceScope timeScope("Codegen DCompute device modules");
       for (auto &mod : computeModules) {
-        TimeTraceScope timeScope(("Codegen DCompute device module " + llvm::SmallString<20>(mod->toChars())).str().c_str());
+        TimeTraceScope timeScope(("Codegen DCompute device module " + llvm::SmallString<20>(mod->toChars())).str().c_str(), mod->loc);
         dccg.emit(mod);
       }
     }

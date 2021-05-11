@@ -586,7 +586,7 @@ void registerModuleInfo(Module *m) {
 }
 
 void codegenModule(IRState *irs, Module *m) {
-  TimeTraceScope timeScope("Generate IR", m->toChars());
+  TimeTraceScope timeScope("Generate IR", m->toChars(), m->loc);
 
   assert(!irs->dmodule &&
          "irs->module not null, codegen already in progress?!");

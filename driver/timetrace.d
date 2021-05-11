@@ -9,6 +9,9 @@
 //
 // Compilation time tracing, --ftime-trace.
 //
+// The time trace profile is output in the Chrome Trace Event Format, described
+// here: https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU/preview
+//
 //===----------------------------------------------------------------------===//
 
 module driver.timetrace;
@@ -43,11 +46,15 @@ void deinitializeTimeTrace()
 
 pragma(inline, true)
 extern(C++)
-bool timeTraceProfilerEnabled() {
-    version (LDC) {
+bool timeTraceProfilerEnabled()
+{
+    version (LDC)
+    {
         import ldc.intrinsics: llvm_expect;
         return llvm_expect(timeTraceProfiler !is null, false);
-    } else {
+    }
+    else
+    {
         return timeTraceProfiler !is null;
     }
 }
@@ -103,13 +110,19 @@ void writeTimeTraceProfile(const(char)* filename_cstr)
 
 // Pointers should not be stored, string copies must be made.
 extern(C++)
-void timeTraceProfilerBegin(const(char)* name_ptr, const(char)* detail_ptr)
+void timeTraceProfilerBegin(const(char)* name_ptr, const(char)* detail_ptr, Loc loc)
 {
     import dmd.root.rmem;
+    import core.stdc.string : strdup;
 
     assert(timeTraceProfiler);
+
+    // `loc` contains a pointer to a string, so we need to duplicate that string too.
+    if (loc.filename)
+        loc.filename = strdup(loc.filename);
+
     timeTraceProfiler.beginScope(mem.xstrdup(name_ptr).toDString(),
-                                 mem.xstrdup(detail_ptr).toDString());
+                                 mem.xstrdup(detail_ptr).toDString(), loc);
 }
 
 extern(C++)
@@ -135,11 +148,9 @@ struct TimeTraceProfiler
 
     // timeBegin / time_scale = time in microseconds
     static if (is(typeof(&QueryPerformanceFrequency)))
-    {
-        uint time_scale = 1_000;
-    } else {
+        timer_t time_scale = 1_000;
+    else
         enum time_scale = 1_000;
-    }
 
     struct CounterEvent
     {
@@ -152,6 +163,7 @@ struct TimeTraceProfiler
     {
         const(char)[] name;
         const(char)[] details;
+        Loc loc;
         timer_t timeBegin;
         timer_t timeDuration;
     }
@@ -177,7 +189,7 @@ struct TimeTraceProfiler
         this.beginningOfTime = time / time_scale;
     }
 
-    void beginScope(const(char)[] name, const(char)[] details)
+    void beginScope(const(char)[] name, const(char)[] details, Loc loc)
     {
         timer_t time;
         QueryPerformanceCounter(&time);
@@ -185,11 +197,13 @@ struct TimeTraceProfiler
         DurationEvent event;
         event.name = name;
         event.details = details;
+        event.loc = loc;
         event.timeBegin = time / time_scale;
         durationStack.push(event);
 
         //counterEvents.push(generateCounterEvent(event.timeBegin));
     }
+
     void endScope()
     {
         timer_t timeEnd;
@@ -243,10 +257,12 @@ struct TimeTraceProfiler
         buf.print(beginningOfTime);
         buf.write(",\n\"traceEvents\": [\n");
     }
+
     void writeEpilogue(OutBuffer* buf)
     {
         buf.write("]\n}\n");
     }
+
     void writeEvents(OutBuffer* buf)
     {
         writeMetadataEvents(buf);
@@ -259,6 +275,7 @@ struct TimeTraceProfiler
             buf.writeByte('\n');
         }
     }
+
     void writeMetadataEvents(OutBuffer* buf)
     {
         // {"ph":"M","ts":0,"args":{"name":"bin/ldc2"},"name":"thread_name","pid":0,"tid":0},
@@ -274,6 +291,7 @@ struct TimeTraceProfiler
         buf.write(pidtid_string);
         buf.write("},\n");
     }
+
     void writeCounterEvents(OutBuffer* buf)
     {
         // {"ph":"C","name":"ctr","ts":111,"args": {"Allocated_Memory_bytes":  0, "hello":  0}},
@@ -291,9 +309,10 @@ struct TimeTraceProfiler
             buf.write("}},\n");
         }
     }
+
     void writeDurationEvents(OutBuffer* buf)
     {
-        // {"ph":"X","name": "Sema1: somename","ts":111,"dur":222,"args": {"detail": "something"},"pid":0,"tid":0}
+        // {"ph":"X","name": "Sema1: somename","ts":111,"dur":222,"loc":"filename.d:123","args": {"detail": "something"},"pid":0,"tid":0}
 
         foreach (event; durationEvents)
         {
@@ -303,7 +322,21 @@ struct TimeTraceProfiler
             buf.print(event.timeBegin);
             buf.write(`,"dur":`);
             buf.print(event.timeDuration);
-            buf.write(`,"args":{"detail": "`);
+            buf.write(`,"loc":"`);
+            if (event.loc.filename)
+            {
+                buf.writestring(event.loc.filename);
+                if (event.loc.linnum)
+                {
+                    buf.writeByte(':');
+                    buf.print(event.loc.linnum);
+                }
+            }
+            else
+            {
+                buf.write(`<no file>`);
+            }
+            buf.write(`","args":{"detail": "`);
             writeEscapeJSONString(buf, event.details);
             buf.write(`"},`);
             buf.write(pidtid_string);
@@ -321,22 +354,33 @@ struct TimeTraceScope
     @disable this();
     @disable this(this);
 
-    this(lazy string name) {
+    this(lazy string name, Loc loc = Loc())
+    {
         if (timeTraceProfilerEnabled())
         {
             assert(timeTraceProfiler);
-            timeTraceProfiler.beginScope(name.dup, "");
+            // `loc` contains a pointer to a string, so we need to duplicate that too.
+            import core.stdc.string : strdup;
+            if (loc.filename)
+                loc.filename = strdup(loc.filename);
+            timeTraceProfiler.beginScope(name.dup, "", loc);
         }
     }
-    this(lazy string name, lazy string detail) {
+    this(lazy string name, lazy string detail, Loc loc = Loc())
+    {
         if (timeTraceProfilerEnabled())
         {
             assert(timeTraceProfiler);
-            timeTraceProfiler.beginScope(name.dup, detail.dup);
+            // `loc` contains a pointer to a string, so we need to duplicate that too.
+            import core.stdc.string : strdup;
+            if (loc.filename)
+                loc.filename = strdup(loc.filename);
+            timeTraceProfiler.beginScope(name.dup, detail.dup, loc);
         }
     }
 
-    ~this() {
+    ~this()
+    {
         if (timeTraceProfilerEnabled())
             timeTraceProfilerEnd();
     }
@@ -395,15 +439,6 @@ private void writeEscapeJSONString(OutBuffer* buf, const(char[]) str)
  * Authors:   Walter Bright, Sean Kelly, the LDC team
  * Source: $(DRUNTIMESRC rt/_trace.d)
  */
-
-import core.stdc.ctype;
-import core.stdc.stdio;
-import core.stdc.stdlib;
-import core.stdc.string;
-
-version (CRuntime_Microsoft)
-    private alias core.stdc.stdlib._strtoui64 strtoull;
-
 
 alias long timer_t;
 

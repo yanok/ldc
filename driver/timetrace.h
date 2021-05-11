@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include "dmd/globals.h"
 #include <functional>
 
 // Forward declarations to functions implemented in D
@@ -21,7 +22,7 @@ void initializeTimeTrace(unsigned timeGranularity, unsigned memoryGranularity,
                          const char *processName);
 void deinitializeTimeTrace();
 void writeTimeTraceProfile(const char *filename_cstr);
-void timeTraceProfilerBegin(const char *name_ptr, const char *detail_ptr);
+void timeTraceProfilerBegin(const char *name_ptr, const char *detail_ptr, Loc loc);
 void timeTraceProfilerEnd();
 bool timeTraceProfilerEnabled();
 
@@ -37,21 +38,21 @@ struct TimeTraceScope {
   TimeTraceScope(TimeTraceScope &&) = delete;
   TimeTraceScope &operator=(TimeTraceScope &&) = delete;
 
-  TimeTraceScope(const char *name) {
+  TimeTraceScope(const char *name, Loc loc = Loc()) {
     if (timeTraceProfilerEnabled())
-      timeTraceProfilerBegin(name, "");
+      timeTraceProfilerBegin(name, "", loc);
   }
-  TimeTraceScope(const char *name, const char *detail) {
+  TimeTraceScope(const char *name, const char *detail, Loc loc = Loc()) {
     if (timeTraceProfilerEnabled())
-      timeTraceProfilerBegin(name, detail);
+      timeTraceProfilerBegin(name, detail, loc);
   }
-  TimeTraceScope(const char *name, std::function<std::string()> detail) {
+  TimeTraceScope(const char *name, std::function<std::string()> detail, Loc loc = Loc()) {
     if (timeTraceProfilerEnabled())
-      timeTraceProfilerBegin(name, detail().c_str());
+      timeTraceProfilerBegin(name, detail().c_str(), loc);
   }
-  TimeTraceScope(std::function<std::string()> name, std::function<std::string()> detail) {
+  TimeTraceScope(std::function<std::string()> name, std::function<std::string()> detail, Loc loc = Loc()) {
     if (timeTraceProfilerEnabled())
-      timeTraceProfilerBegin(name().c_str(), detail().c_str());
+      timeTraceProfilerBegin(name().c_str(), detail().c_str(), loc);
   }
 
   ~TimeTraceScope() {
