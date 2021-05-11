@@ -306,13 +306,32 @@ struct TimeTraceProfiler
             buf.print(event.allocatedMemory);
             buf.write(`,"GC collections":`);
             buf.print(event.numberOfGCCollections);
-            buf.write("}},\n");
+            buf.write("},");
+            buf.write(pidtid_string);
+            buf.write("},\n");
         }
     }
 
     void writeDurationEvents(OutBuffer* buf)
     {
-        // {"ph":"X","name": "Sema1: somename","ts":111,"dur":222,"loc":"filename.d:123","args": {"detail": "something"},"pid":0,"tid":0}
+        // {"ph":"X","name": "Sema1: somename","ts":111,"dur":222,"loc":"filename.d:123","args": {"detail": "something", "loc":"filename.d:123"},"pid":0,"tid":0}
+
+        void writeLocation(Loc loc)
+        {
+            if (loc.filename)
+            {
+                buf.writestring(loc.filename);
+                if (loc.linnum)
+                {
+                    buf.writeByte(':');
+                    buf.print(loc.linnum);
+                }
+            }
+            else
+            {
+                buf.write(`<no file>`);
+            }
+        }
 
         foreach (event; durationEvents)
         {
@@ -323,21 +342,12 @@ struct TimeTraceProfiler
             buf.write(`,"dur":`);
             buf.print(event.timeDuration);
             buf.write(`,"loc":"`);
-            if (event.loc.filename)
-            {
-                buf.writestring(event.loc.filename);
-                if (event.loc.linnum)
-                {
-                    buf.writeByte(':');
-                    buf.print(event.loc.linnum);
-                }
-            }
-            else
-            {
-                buf.write(`<no file>`);
-            }
+            writeLocation(event.loc);
             buf.write(`","args":{"detail": "`);
             writeEscapeJSONString(buf, event.details);
+            // Also output loc data in the "args" field so it shows in trace viewers that do not support the "loc" variable
+            buf.write(`","loc":"`);
+            writeLocation(event.loc);
             buf.write(`"},`);
             buf.write(pidtid_string);
             buf.write("},\n");
