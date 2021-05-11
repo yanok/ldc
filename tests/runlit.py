@@ -5,7 +5,7 @@ from __future__ import print_function
 
 if __name__=='__main__':
     try:
-        import lit
+        import lit.main
     except ImportError:
         import sys
         sys.exit('Package lit cannot be imported.\n' \
@@ -14,4 +14,4 @@ if __name__=='__main__':
                  'https://pip.pypa.io/en/latest/installing/)')
 
     print("Lit version: ", lit.__version__)
-    lit.main()
+    lit.main.main()
