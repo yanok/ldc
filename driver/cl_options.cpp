@@ -585,6 +585,18 @@ static cl::opt<uint32_t, true>
     templateCodegenDepth("template-codegen-depth",
              cl::desc("Don't codegen templates beyond this recusion depth (0 = off)."),
              cl::location(global.params.templateCodegenDepth), cl::init(0));
+
+cl::opt<CoverageIncrement> coverageIncrement(
+    "cov-increment", cl::ZeroOrMore,
+    cl::desc("Set the type of coverage line count increment instruction"),
+    cl::init(CoverageIncrement::_default),
+    cl::values(clEnumValN(CoverageIncrement::_default, "default",
+                          "Use the default (atomic)"),
+               clEnumValN(CoverageIncrement::atomic, "atomic", "Atomic increment"),
+               clEnumValN(CoverageIncrement::nonatomic, "non-atomic",
+                          "Non-atomic increment (not thread safe)"),
+               clEnumValN(CoverageIncrement::boolean, "boolean",
+                          "Don't read, just set counter to 1")));
 #endif
 
 // Compilation time tracing options
