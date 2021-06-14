@@ -1,7 +1,7 @@
 /**
  * Define the implicit `opEquals`, `opAssign`, post blit, copy constructor and destructor for structs.
  *
- * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/clone.d, _clone.d)
@@ -1110,8 +1110,8 @@ DtorDeclaration buildExternDDtor(AggregateDeclaration ad, Scope* sc)
     if (!dtor)
         return null;
 
-    // ABI incompatible on all (?) x86 32-bit platforms
-    if (ad.classKind != ClassKind.cpp || global.params.is64bit)
+    // Generate shim only when ABI incompatible on target platform
+    if (ad.classKind != ClassKind.cpp || !target.cpp.wrapDtorInExternD)
         return dtor;
 
     // generate member function that adjusts calling convention

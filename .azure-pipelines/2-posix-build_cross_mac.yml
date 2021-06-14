@@ -9,6 +9,7 @@
 # - PARALLEL_JOBS
 # Exported env vars:
 # - DFLAGS
+# - CROSS_TRIPLE
 
 steps:
 
@@ -17,7 +18,11 @@ steps:
     set -ex
     cd ..
     # Download & extract LDC-flavoured LLVM for macOS target
-    curl -L -o llvm-$ARCH.tar.xz https://github.com/ldc-developers/llvm-project/releases/download/ldc-v$LLVM_VERSION/llvm-$LLVM_VERSION-$CI_OS-$ARCH.tar.xz
+    if [[ "$LLVM_VERSION" = *.* ]]; then
+      curl --max-time 300 --retry 3 -L -o llvm-$ARCH.tar.xz https://github.com/ldc-developers/llvm-project/releases/download/ldc-v$LLVM_VERSION/llvm-$LLVM_VERSION-$CI_OS-$ARCH.tar.xz
+    else
+      curl --max-time 300 --retry 3 -L -o llvm-$ARCH.tar.xz https://github.com/ldc-developers/llvm-project/releases/download/CI/llvm-$LLVM_VERSION-$CI_OS-$ARCH.tar.xz
+    fi
     mkdir llvm-$ARCH
     tar -xf llvm-$ARCH.tar.xz --strip 1 -C llvm-$ARCH
     # Replace llvm-config by the native LLVM's
@@ -27,6 +32,7 @@ steps:
     DFLAGS="-mtriple=$triple -L-L$PWD/ldc-build-runtime.tmp/lib -Xcc=-target -Xcc=$triple -Xcc=-isysroot -Xcc=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
     set +x
     echo "##vso[task.setvariable variable=DFLAGS]$DFLAGS"
+    echo "##vso[task.setvariable variable=CROSS_TRIPLE]$triple"
   displayName: Set up cross-compilation
 
 # Cross-compile default libraries

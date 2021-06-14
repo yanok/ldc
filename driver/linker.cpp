@@ -10,6 +10,7 @@
 #include "driver/linker.h"
 
 #include "dmd/errors.h"
+#include "dmd/target.h"
 #include "driver/cl_options.h"
 #include "driver/timetrace.h"
 #include "driver/tool.h"
@@ -99,7 +100,7 @@ static std::string getOutputPath() {
 
   const char *extension = nullptr;
   if (sharedLib) {
-    extension = global.dll_ext.ptr;
+    extension = target.dll_ext.ptr;
   } else if (triple.isOSWindows()) {
     extension = "exe";
   } else if (triple.getArch() == llvm::Triple::wasm32 ||
@@ -246,8 +247,7 @@ llvm::StringRef getMscrtLibName(const bool *useInternalToolchain) {
   if (useInternal) {
     return "vcruntime140";
   } else {
-    // default to static release variant
-    return linkFullyStatic() != llvm::cl::BOU_FALSE ? "libcmt" : "msvcrt";
+    return linkAgainstSharedDefaultLibs() ? "msvcrt" : "libcmt";
   }
 }
 

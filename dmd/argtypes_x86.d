@@ -1,7 +1,7 @@
 /**
  * Break down a D type into basic (register) types for the 32-bit x86 ABI.
  *
- * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/argtypes_x86.d, _argtypes_x86.d)
@@ -17,6 +17,7 @@ import core.checkedint;
 import dmd.declaration;
 import dmd.globals;
 import dmd.mtype;
+import dmd.target;
 import dmd.visitor;
 
 /****************************************************
@@ -349,7 +350,7 @@ extern (C++) TypeTuple toArgTypes_x86(Type t)
             default:
                 return memory();
             }
-            if (global.params.targetOS == TargetOS.FreeBSD && nfields == 1 &&
+            if (target.os == Target.OS.FreeBSD && nfields == 1 &&
                 (sz == 4 || sz == 8))
             {
                 /* FreeBSD changed their 32 bit ABI at some point before 10.3 for the following:

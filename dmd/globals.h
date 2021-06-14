@@ -1,6 +1,6 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
  * http://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
@@ -16,9 +16,6 @@
 #include "root/filename.h"
 #include "compiler.h"
 
-// Can't include arraytypes.h here, need to declare these directly.
-template <typename TYPE> struct Array;
-
 #if IN_LLVM
 #include "llvm/ADT/Triple.h"
 
@@ -30,25 +27,8 @@ enum OUTPUTFLAG
 };
 #endif
 
-typedef unsigned char TargetOS;
-enum
-{
-    /* These are mutually exclusive; one and only one is set.
-     * Match spelling and casing of corresponding version identifiers
-     */
-    TargetOS_linux        = 1,
-    TargetOS_Windows      = 2,
-    TargetOS_OSX          = 4,
-    TargetOS_OpenBSD      = 8,
-    TargetOS_FreeBSD      = 0x10,
-    TargetOS_Solaris      = 0x20,
-    TargetOS_DragonFlyBSD = 0x40,
-
-    // Combination masks
-    all = TargetOS_linux | TargetOS_Windows | TargetOS_OSX | TargetOS_FreeBSD | TargetOS_Solaris | TargetOS_DragonFlyBSD,
-    Posix = TargetOS_linux | TargetOS_OSX | TargetOS_FreeBSD | TargetOS_Solaris | TargetOS_DragonFlyBSD,
-};
-
+// Can't include arraytypes.h here, need to declare these directly.
+template <typename TYPE> struct Array;
 
 typedef unsigned char Diagnostic;
 enum
@@ -84,25 +64,6 @@ enum
     CHECKACTION_context   // call D assert with the error context on failure
 };
 
-enum class CPU
-{
-    x87,
-    mmx,
-    sse,
-    sse2,
-    sse3,
-    ssse3,
-    sse4_1,
-    sse4_2,
-    avx,                // AVX1 instruction set
-    avx2,               // AVX2 instruction set
-    avx512,             // AVX-512 instruction set
-
-    // Special values that don't survive past the command line processing
-    baseline,           // (default) the minimum capability CPU
-    native              // the machine the compiler is being run on
-};
-
 enum JsonFieldFlags
 {
     none         = 0,
@@ -129,6 +90,14 @@ enum class CxxHeaderMode
     verbose /// Generate headers and add comments for hidden declarations
 };
 
+/// Trivalent boolean to represent the state of a `revert`able change
+enum class FeatureState : signed char
+{
+    default_ = -1, /// Not specified by the user
+    disabled = 0,  /// Specified as `-revert=`
+    enabled = 1    /// Specified as `-preview=`
+};
+
 // Put command line switches in here
 struct Param
 {
@@ -151,20 +120,12 @@ struct Param
     bool vcomplex;      // identify complex/imaginary type usage
     unsigned char symdebug;  // insert debug symbolic information
     bool symdebugref;   // insert debug information for all referenced types, too
-    bool alwaysframe;   // always emit standard stack frame
     bool optimize;      // run optimizer
-    bool map;           // generate linker .map file
-    bool is64bit;       // generate 64 bit code
-    bool isLP64;        // generate code for LP64
-    TargetOS targetOS;      // operating system to generate code for
-    bool hasObjectiveC; // target supports Objective-C
-    bool mscoff;        // for Win32: write COFF object files instead of OMF
     Diagnostic useDeprecated;
     bool stackstomp;    // add stack stomping code
     bool useUnitTests;  // generate unittest code
     bool useInline;     // inline expand functions
-    bool useDIP25;      // implement http://wiki.dlang.org/DIP25
-    bool noDIP25;       // revert to pre-DIP25 behavior
+    FeatureState useDIP25;      // implement http://wiki.dlang.org/DIP25
     bool useDIP1021;    // implement https://github.com/dlang/DIPs/blob/master/DIPs/accepted/DIP1021.md
     bool release;       // build release version
     bool preservePaths; // true means don't strip path from source file
@@ -181,6 +142,7 @@ struct Param
     bool useExceptions; // support exception handling
     bool noSharedAccess; // read/write access to shared memory objects
     bool previewIn;     // `in` means `scope const`, perhaps `ref`, accepts rvalues
+    bool shortenedMethods; // allow => in normal function declarations
     bool betterC;       // be a "better C" compiler; no dependency on D runtime
     bool addMain;       // add a default main() function
     bool allInst;       // generate code for all template instantiations
@@ -190,8 +152,8 @@ struct Param
     bool inclusiveInContracts;   // 'in' contracts of overridden methods must be a superset of parent contract
     bool vsafe;         // use enhanced @safe checking
     bool ehnogc;        // use @nogc exception handling
-    bool dtorFields;        // destruct fields of partially constructed objects
-                            // https://issues.dlang.org/show_bug.cgi?id=14246
+    FeatureState dtorFields;  // destruct fields of partially constructed objects
+                              // https://issues.dlang.org/show_bug.cgi?id=14246
     bool fieldwise;         // do struct equality testing field-wise rather than by memcmp()
     bool rvalueRefParam;    // allow rvalues to be arguments to ref parameters
     CppStdRevision cplusplus;  // version of C++ name mangling to support
@@ -210,8 +172,6 @@ struct Param
     bool externStdUsage;    // print help on -extern-std switch
     bool hcUsage;           // print help on -HC switch
     bool logo;              // print logo;
-
-    CPU cpu;                // CPU instruction set to target
 
     CHECKENABLE useInvariants;     // generate class invariant checks
     CHECKENABLE useIn;             // generate precondition checks
@@ -274,14 +234,6 @@ struct Param
 
     MessageStyle messageStyle;  // style of file/line annotations on messages
 
-    // Hidden debug switches
-    bool debugb;
-    bool debugc;
-    bool debugf;
-    bool debugr;
-    bool debugx;
-    bool debugy;
-
     bool run;           // run resulting executable
     Strings runargs;    // arguments for executable
 
@@ -326,6 +278,10 @@ struct Param
 
     bool linkonceTemplates; // -linkonce-templates
 
+    // Windows-specific:
+    bool dllexport; // dllexport ~all defined symbols?
+    bool dllimport; // dllimport data symbols not defined in any root module?
+
 #if IN_WEKA
     bool enableWekaMods; // Enable specific Weka mods like the template instantiation mods
     uint32_t templateCodegenDepth;
@@ -338,31 +294,23 @@ typedef unsigned structalign_t;
 // other values are all powers of 2
 #define STRUCTALIGN_DEFAULT ((structalign_t) ~0)
 
+const DString mars_ext = "d";
+const DString doc_ext  = "html";     // for Ddoc generated files
+const DString ddoc_ext = "ddoc";     // for Ddoc macro include files
+const DString dd_ext   = "dd";       // for Ddoc source files
+const DString hdr_ext  = "di";       // for D 'header' import files
+const DString json_ext = "json";     // for JSON files
+const DString map_ext  = "map";      // for .map files
+#if IN_LLVM
+const DString ll_ext = "ll";
+const DString mlir_ext = "mlir";
+const DString bc_ext = "bc";
+const DString s_ext = "s";
+#endif
+
 struct Global
 {
     DString inifilename;
-    const DString mars_ext;
-    DString obj_ext;
-#if IN_LLVM
-    DString ll_ext;
-    DString mlir_ext; //MLIR code
-    DString bc_ext;
-    DString s_ext;
-    DString ldc_version;
-    DString llvm_version;
-
-    bool gaggedForInlining; // Set for functionSemantic3 for external inlining candidates
-#endif
-    DString lib_ext;
-    DString dll_ext;
-    const DString doc_ext;      // for Ddoc generated files
-    const DString ddoc_ext;     // for Ddoc macro include files
-    const DString hdr_ext;      // for D 'header' import files
-    const DString cxxhdr_ext;   // for C/C++ 'header' files
-    const DString json_ext;     // for JSON files
-    const DString map_ext;      // for .map files
-    bool run_noext;             // allow -run sources without extensions.
-
 
     const DString copyright;
     const DString written;
@@ -384,6 +332,12 @@ struct Global
     Array<class Identifier*>* debugids;   // command line debug versions and predefined versions
 
 #if IN_LLVM
+    DString ldc_version;
+    DString llvm_version;
+
+    bool gaggedForInlining; // Set for functionSemantic3 for external inlining
+                            // candidates
+
     unsigned recursionLimit; // number of recursive template expansions before abort
 #endif
 

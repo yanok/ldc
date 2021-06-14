@@ -1,7 +1,7 @@
 /**
  * Do mangling for C++ linkage for Digital Mars C++ and Microsoft Visual C++.
  *
- * Copyright: Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright: Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * Authors: Walter Bright, http://www.digitalmars.com
  * License:   $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/cppmanglewin.d, _cppmanglewin.d)
@@ -41,7 +41,7 @@ extern (C++):
 
 const(char)* toCppMangleMSVC(Dsymbol s)
 {
-    scope VisualCPPMangler v = new VisualCPPMangler(!global.params.mscoff);
+    scope VisualCPPMangler v = new VisualCPPMangler(!target.mscoff);
     return v.mangleOf(s);
 }
 
@@ -52,7 +52,7 @@ version (IN_LLVM)
 {
     // Return the mangled name of the RTTI Type Descriptor.
     // Reverse-engineered using a few C++ exception classes.
-    scope VisualCPPMangler v = new VisualCPPMangler(!global.params.mscoff);
+    scope VisualCPPMangler v = new VisualCPPMangler(!target.mscoff);
     v.buf.writestring("\1??_R0?AV");
     v.mangleIdent(s);
     v.buf.writestring("@8");
@@ -154,6 +154,18 @@ public:
             return;
 
         buf.writestring("$$T");
+        flags &= ~IS_NOT_TOP_TYPE;
+        flags &= ~IGNORE_CONST;
+    }
+
+    override void visit(TypeNoreturn type)
+    {
+        if (checkImmutableShared(type))
+            return;
+        if (checkTypeSaved(type))
+            return;
+
+        buf.writeByte('X');             // yes, mangle it like `void`
         flags &= ~IS_NOT_TOP_TYPE;
         flags &= ~IGNORE_CONST;
     }
@@ -342,7 +354,7 @@ else
                 buf.writeByte('Q'); // const
             else
                 buf.writeByte('P'); // mutable
-            if (global.params.is64bit)
+            if (target.is64bit)
                 buf.writeByte('E');
             flags |= IS_NOT_TOP_TYPE;
             mangleArray(cast(TypeSArray)type.next);
@@ -361,7 +373,7 @@ else
             {
                 buf.writeByte('P'); // mutable
             }
-            if (global.params.is64bit)
+            if (target.is64bit)
                 buf.writeByte('E');
             flags |= IS_NOT_TOP_TYPE;
             type.next.accept(this);
@@ -378,7 +390,7 @@ else
             return;
 
         buf.writeByte('A'); // mutable
-        if (global.params.is64bit)
+        if (target.is64bit)
             buf.writeByte('E');
         flags |= IS_NOT_TOP_TYPE;
         assert(type.next);
@@ -482,7 +494,7 @@ else
             buf.writeByte('Q');
         else
             buf.writeByte('P');
-        if (global.params.is64bit)
+        if (target.is64bit)
             buf.writeByte('E');
         flags |= IS_NOT_TOP_TYPE;
         mangleModifier(type);
@@ -514,6 +526,23 @@ else
 
 private:
 extern(D):
+
+    void mangleVisibility(Declaration d, string privProtDef)
+    {
+        switch (d.visibility.kind)
+        {
+            case Visibility.Kind.private_:
+                buf.writeByte(privProtDef[0]);
+                break;
+            case Visibility.Kind.protected_:
+                buf.writeByte(privProtDef[1]);
+                break;
+            default:
+                buf.writeByte(privProtDef[2]);
+                break;
+        }
+    }
+
     void mangleFunction(FuncDeclaration d)
     {
         // <function mangle> ? <qualified name> <flags> <return type> <arg list>
@@ -527,35 +556,13 @@ extern(D):
                 //d.toChars(), d.isVirtualMethod(), d.isVirtual(), cast(int)d.vtblIndex, d.interfaceVirtual);
             if ((d.isVirtual() && (d.vtblIndex != -1 || d.interfaceVirtual || d.overrideInterface())) || (d.isDtorDeclaration() && d.parent.isClassDeclaration() && !d.isFinal()))
             {
-                switch (d.protection.kind)
-                {
-                case Prot.Kind.private_:
-                    buf.writeByte('E');
-                    break;
-                case Prot.Kind.protected_:
-                    buf.writeByte('M');
-                    break;
-                default:
-                    buf.writeByte('U');
-                    break;
-                }
+                mangleVisibility(d, "EMU");
             }
             else
             {
-                switch (d.protection.kind)
-                {
-                case Prot.Kind.private_:
-                    buf.writeByte('A');
-                    break;
-                case Prot.Kind.protected_:
-                    buf.writeByte('I');
-                    break;
-                default:
-                    buf.writeByte('Q');
-                    break;
-                }
+                mangleVisibility(d, "AIQ");
             }
-            if (global.params.is64bit)
+            if (target.is64bit)
                 buf.writeByte('E');
             if (d.type.isConst())
             {
@@ -569,18 +576,7 @@ extern(D):
         else if (d.isMember2()) // static function
         {
             // <flags> ::= <virtual/protection flag> <calling convention flag>
-            switch (d.protection.kind)
-            {
-            case Prot.Kind.private_:
-                buf.writeByte('C');
-                break;
-            case Prot.Kind.protected_:
-                buf.writeByte('K');
-                break;
-            default:
-                buf.writeByte('S');
-                break;
-            }
+            mangleVisibility(d, "CKS");
         }
         else // top-level function
         {
@@ -615,37 +611,18 @@ extern(D):
         }
         else
         {
-            switch (d.protection.kind)
-            {
-            case Prot.Kind.private_:
-                buf.writeByte('0');
-                break;
-            case Prot.Kind.protected_:
-                buf.writeByte('1');
-                break;
-            default:
-                buf.writeByte('2');
-                break;
-            }
+            mangleVisibility(d, "012");
         }
-        char cv_mod = 0;
         Type t = d.type;
 
         if (checkImmutableShared(t))
             return;
 
-        if (t.isConst())
-        {
-            cv_mod = 'B'; // const
-        }
-        else
-        {
-            cv_mod = 'A'; // mutable
-        }
+        const cv_mod = t.isConst() ? 'B' : 'A';
         if (t.ty != Tpointer)
             t = t.mutableOf();
         t.accept(this);
-        if ((t.ty == Tpointer || t.ty == Treference || t.ty == Tclass) && global.params.is64bit)
+        if ((t.ty == Tpointer || t.ty == Treference || t.ty == Tclass) && target.is64bit)
         {
             buf.writeByte('E');
         }
@@ -938,6 +915,14 @@ extern(D):
         auto ti = sym.isTemplateInstance();
         if (!ti)
         {
+            if (auto ag = sym.isAggregateDeclaration())
+            {
+                if (ag.mangleOverride)
+                {
+                    writeName(ag.mangleOverride.id);
+                    return;
+                }
+            }
             writeName(sym.ident);
             return;
         }
@@ -949,6 +934,37 @@ extern(D):
         // test for special symbols
         if (mangleOperator(ti,symName,firstTemplateArg))
             return;
+        TemplateInstance actualti = ti;
+        bool needNamespaces;
+        if (auto ag = ti.aliasdecl ? ti.aliasdecl.isAggregateDeclaration() : null)
+        {
+            if (ag.mangleOverride)
+            {
+                if (ag.mangleOverride.agg)
+                {
+                    if (auto aggti = ag.mangleOverride.agg.isInstantiated())
+                        actualti = aggti;
+                    else
+                    {
+                        writeName(ag.mangleOverride.id);
+                        if (sym.parent && !sym.parent.needThis())
+                            for (auto ns = ag.mangleOverride.agg.toAlias().cppnamespace; ns !is null && ns.ident !is null; ns = ns.cppnamespace)
+                                writeName(ns.ident);
+                        return;
+                    }
+                    id = ag.mangleOverride.id;
+                    symName = id.toString();
+                    needNamespaces = true;
+                }
+                else
+                {
+                    writeName(ag.mangleOverride.id);
+                    for (auto ns = ti.toAlias().cppnamespace; ns !is null && ns.ident !is null; ns = ns.cppnamespace)
+                        writeName(ns.ident);
+                    return;
+                }
+            }
+        }
 
         scope VisualCPPMangler tmp = new VisualCPPMangler((flags & IS_DMC) ? true : false);
         tmp.buf.writeByte('?');
@@ -963,15 +979,15 @@ extern(D):
             is_dmc_template = true;
         }
         bool is_var_arg = false;
-        for (size_t i = firstTemplateArg; i < ti.tiargs.dim; i++)
+        for (size_t i = firstTemplateArg; i < actualti.tiargs.dim; i++)
         {
-            RootObject o = (*ti.tiargs)[i];
+            RootObject o = (*actualti.tiargs)[i];
             TemplateParameter tp = null;
             TemplateValueParameter tv = null;
             TemplateTupleParameter tt = null;
             if (!is_var_arg)
             {
-                TemplateDeclaration td = ti.tempdecl.isTemplateDeclaration();
+                TemplateDeclaration td = actualti.tempdecl.isTemplateDeclaration();
                 assert(td);
                 tp = (*td.parameters)[i];
                 tv = tp.isTemplateValueParameter();
@@ -984,15 +1000,16 @@ extern(D):
             }
             if (tv)
             {
-                tmp.manlgeTemplateValue(o, tv, sym, is_dmc_template);
+                tmp.manlgeTemplateValue(o, tv, actualti, is_dmc_template);
             }
-            else if (!tp || tp.isTemplateTypeParameter())
+            else
+            if (!tp || tp.isTemplateTypeParameter())
             {
                 tmp.mangleTemplateType(o);
             }
             else if (tp.isTemplateAliasParameter())
             {
-                tmp.mangleTemplateAlias(o, sym);
+                tmp.mangleTemplateAlias(o, actualti);
             }
             else
             {
@@ -1000,7 +1017,13 @@ extern(D):
                 fatal();
             }
         }
+
         writeName(Identifier.idPool(tmp.buf.extractSlice()));
+        if (needNamespaces && actualti != ti)
+        {
+            for (auto ns = ti.toAlias().cppnamespace; ns !is null && ns.ident !is null; ns = ns.cppnamespace)
+                writeName(ns.ident);
+        }
     }
 
     // returns true if name already saved
@@ -1175,7 +1198,7 @@ extern(D):
     {
         scope VisualCPPMangler tmp = new VisualCPPMangler(this);
         // Calling convention
-        if (global.params.is64bit) // always Microsoft x64 calling convention
+        if (target.is64bit) // always Microsoft x64 calling convention
         {
             tmp.buf.writeByte('A');
         }

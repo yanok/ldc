@@ -52,6 +52,22 @@ bool IrAggr::suppressTypeInfo() const {
 
 //////////////////////////////////////////////////////////////////////////////
 
+bool IrAggr::useDLLImport() const {
+  if (!global.params.targetTriple->isOSWindows())
+    return false;
+
+  if (global.params.dllimport || aggrdecl->isExport()) {
+    // dllimport, unless defined in a root module (=> no extra indirection for
+    // other root modules, assuming *all* root modules will be linked together
+    // to one or more binaries).
+    return aggrdecl->inNonRoot();
+  }
+
+  return false;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 LLConstant *IrAggr::getInitSymbol(bool define) {
   if (!init) {
     const auto irMangle = getIRMangledInitSymbolName(aggrdecl);
@@ -67,16 +83,19 @@ LLConstant *IrAggr::getInitSymbol(bool define) {
     // declaration when compiling the rt.util.typeinfo unittests.
     auto initGlobal = gIR->module.getGlobalVariable(irMangle);
     if (initGlobal) {
-      assert(isBuiltinTypeInfo && !initGlobal->hasInitializer() &&
-             "existing global expected to be a built-in TypeInfo forward "
-             "declaration");
+      assert(!initGlobal->hasInitializer() &&
+             "existing init symbol not expected to be defined");
+      assert((isBuiltinTypeInfo ||
+              initGlobal->getType()->getPointerElementType() ==
+                  getLLStructType()) &&
+             "type of existing init symbol declaration doesn't match");
     } else {
       // Init symbols of built-in TypeInfos need to be kept mutable as the type
       // is not declared as immutable on the D side, and e.g. synchronized() can
       // be used on the implicit monitor.
-      initGlobal =
-          declareGlobal(aggrdecl->loc, gIR->module, getLLStructType(), irMangle,
-                        /*isConstant=*/!isBuiltinTypeInfo);
+      const bool isConstant = !isBuiltinTypeInfo;
+      initGlobal = declareGlobal(aggrdecl->loc, gIR->module, getLLStructType(),
+                                 irMangle, isConstant, false, useDLLImport());
     }
 
     initGlobal->setAlignment(LLMaybeAlign(DtoAlignment(type)));

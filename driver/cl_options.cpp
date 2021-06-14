@@ -60,12 +60,16 @@ static cl::opt<bool, true>
     createSharedLib("shared", cl::desc("Create shared library (DLL)"),
                     cl::ZeroOrMore, cl::location(global.params.dll));
 
-cl::opt<unsigned char> defaultToHiddenVisibility(
-    "fvisibility", cl::ZeroOrMore,
-    cl::desc("Default visibility of symbols (not relevant for Windows)"),
-    cl::values(clEnumValN(0, "default", "Export all symbols"),
-               clEnumValN(1, "hidden",
-                          "Only export symbols marked with 'export'")));
+cl::opt<SymbolVisibility> symbolVisibility(
+    "fvisibility", cl::ZeroOrMore, cl::desc("Default visibility of symbols"),
+    cl::init(SymbolVisibility::default_),
+    cl::values(
+        clEnumValN(
+            SymbolVisibility::default_, "default",
+            "Hidden for Windows targets without -shared, otherwise public"),
+        clEnumValN(SymbolVisibility::hidden, "hidden",
+                   "Only export symbols marked with 'export'"),
+        clEnumValN(SymbolVisibility::public_, "public", "Export all symbols")));
 
 static cl::opt<bool, true> verbose("v", cl::desc("Verbose"), cl::ZeroOrMore,
                                    cl::location(global.params.verbose));
@@ -531,9 +535,8 @@ cl::opt<unsigned, true> nestedTemplateDepth(
     cl::desc("Set maximum number of nested template instantiations"));
 
 // legacy options superseded by `-preview=dip<N>`
-static cl::opt<bool, true>
-    useDIP25("dip25", cl::ZeroOrMore, cl::location(global.params.useDIP25),
-             cl::desc("Implement DIP25 (sealed references)"), cl::ReallyHidden);
+cl::opt<bool> useDIP25("dip25", cl::ZeroOrMore, cl::ReallyHidden,
+                       cl::desc("Implement DIP25 (sealed references)"));
 static cl::opt<bool, true>
     useDIP1000("dip1000", cl::ZeroOrMore, cl::location(global.params.vsafe),
                cl::desc("Implement DIP1000 (scoped pointers)"),

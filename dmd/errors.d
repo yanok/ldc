@@ -1,7 +1,7 @@
 /**
  * Functions for raising errors.
  *
- * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/errors.d, _errors.d)
@@ -26,7 +26,7 @@ nothrow:
 /**
  * Color highlighting to classify messages
  */
-enum Classification
+enum Classification : Color
 {
     error = Color.brightRed,          /// for errors
     gagged = Color.brightBlue,        /// for gagged errors
@@ -34,6 +34,34 @@ enum Classification
     deprecation = Color.brightCyan,   /// for deprecations
     tip = Color.brightGreen,          /// for tip messages
 }
+
+
+static if (__VERSION__ < 2092)
+    private extern (C++) void noop(const ref Loc loc, const(char)* format, ...) {}
+else
+    pragma(printf) private extern (C++) void noop(const ref Loc loc, const(char)* format, ...) {}
+
+
+package auto previewErrorFunc(bool isDeprecated, FeatureState featureState) @safe @nogc pure nothrow
+{
+    if (featureState == FeatureState.enabled)
+        return &error;
+    else if (featureState == FeatureState.disabled || isDeprecated)
+        return &noop;
+    else
+        return &deprecation;
+}
+
+package auto previewSupplementalFunc(bool isDeprecated, FeatureState featureState) @safe @nogc pure nothrow
+{
+    if (featureState == FeatureState.enabled)
+        return &errorSupplemental;
+    else if (featureState == FeatureState.disabled || isDeprecated)
+        return &noop;
+    else
+        return &deprecationSupplemental;
+}
+
 
 /**
  * Print an error message, increasing the global error count.
@@ -316,7 +344,7 @@ private void verrorPrint(const ref Loc loc, Color headerColor, const(char)* head
 
     if (global.params.showGaggedErrors && global.gag)
         fprintf(stderr, "(spec:%d) ", global.gag);
-    Console* con = cast(Console*)global.console;
+    Console con = cast(Console) global.console;
     const p = loc.toChars();
     if (con)
         con.setColorBright(true);
@@ -368,9 +396,18 @@ private void verrorPrint(const ref Loc loc, Color headerColor, const(char)* head
             if (loc.charnum < line.length)
             {
                 fprintf(stderr, "%.*s\n", cast(int)line.length, line.ptr);
-                foreach (_; 1 .. loc.charnum)
+                // The number of column bytes and the number of display columns
+                // occupied by a character are not the same for non-ASCII charaters.
+                // https://issues.dlang.org/show_bug.cgi?id=21849
+                size_t c = 0;
+                while (c < loc.charnum - 1)
+                {
+                    import dmd.utf : utf_decodeChar;
+                    dchar u;
+                    const msg = utf_decodeChar(line, c, u);
+                    assert(msg is null, msg);
                     fputc(' ', stderr);
-
+                }
                 fputc('^', stderr);
                 fputc('\n', stderr);
             }
@@ -654,19 +691,18 @@ private void colorSyntaxHighlight(ref OutBuffer buf)
                 {
                     inBacktick = false;
                     OutBuffer codebuf;
-                    codebuf.write(buf[iCodeStart + 1 .. i]);
+                    codebuf.write(buf[iCodeStart .. i]);
                     codebuf.writeByte(0);
                     // escape the contents, but do not perform highlighting except for DDOC_PSYMBOL
                     colorHighlightCode(codebuf);
-                    buf.remove(iCodeStart, i - iCodeStart + 1); // also trimming off the current `
+                    buf.remove(iCodeStart, i - iCodeStart);
                     immutable pre = "";
                     i = buf.insert(iCodeStart, pre);
                     i = buf.insert(i, codebuf[]);
-                    i--; // point to the ending ) so when the for loop does i++, it will see the next character
                     break;
                 }
                 inBacktick = true;
-                iCodeStart = i;
+                iCodeStart = i + 1;
                 break;
 
             default:
@@ -772,7 +808,7 @@ private void colorHighlightCode(ref OutBuffer buf)
  * Params:
  *      buf = highlighted text
  */
-private void writeHighlights(Console* con, ref const OutBuffer buf)
+private void writeHighlights(Console con, ref const OutBuffer buf)
 {
     bool colors;
     scope (exit)

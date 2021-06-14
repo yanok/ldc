@@ -28,7 +28,7 @@
  *   arguments, and uses it if found.
  * - Otherwise, the rest of semantic is run on the `TemplateInstance`.
  *
- * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/dtemplate.d, _dtemplate.d)
@@ -561,7 +561,7 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
     bool isTrivialAliasSeq; /// matches pattern `template AliasSeq(T...) { alias AliasSeq = T; }`
     bool isTrivialAlias;    /// matches pattern `template Alias(T) { alias Alias = qualifiers(T); }`
     bool deprecated_;       /// this template declaration is deprecated
-    Prot protection;
+    Visibility visibility;
     int inuse;              /// for recursive expansion detection
 
     // threaded list of previous instantiation attempts on stack
@@ -604,7 +604,7 @@ version (IN_LLVM)
         this.literal = literal;
         this.ismixin = ismixin;
         this.isstatic = true;
-        this.protection = Prot(Prot.Kind.undefined);
+        this.visibility = Visibility(Visibility.Kind.undefined);
 
         // Compute in advance for Ddoc's use
         // https://issues.dlang.org/show_bug.cgi?id=11153: ident could be NULL if parsing fails.
@@ -654,7 +654,7 @@ version (IN_LLVM)
         }
     }
 
-    override Dsymbol syntaxCopy(Dsymbol)
+    override TemplateDeclaration syntaxCopy(Dsymbol)
     {
         //printf("TemplateDeclaration.syntaxCopy()\n");
         TemplateParameters* p = null;
@@ -788,9 +788,9 @@ else
         return buf.extractChars();
     }
 
-    override Prot prot() pure nothrow @nogc @safe
+    override Visibility visible() pure nothrow @nogc @safe
     {
-        return protection;
+        return visibility;
     }
 
     /****************************
@@ -824,7 +824,9 @@ else
              */
             for (Scope* scx = paramscope.callsc; scx; scx = scx.callsc)
             {
-                if (scx == p.sc)
+                // The first scx might be identical for nested eponymeous templates, e.g.
+                // template foo() { void foo()() {...} }
+                if (scx == p.sc && scx !is paramscope.callsc)
                     return false;
             }
             /* BUG: should also check for ref param differences
@@ -841,6 +843,11 @@ else
         scx.parent = ti;
         scx.tinst = null;
         scx.minst = null;
+        // Set SCOPE.constraint before declaring function parameters for the static condition
+        // (previously, this was immediately before calling evalStaticCondition), so the
+        // semantic pass knows not to issue deprecation warnings for these throw-away decls.
+        // https://issues.dlang.org/show_bug.cgi?id=21831
+        scx.flags |= SCOPE.constraint;
 
         assert(!ti.symtab);
         if (fd)
@@ -896,7 +903,6 @@ else
 
         assert(ti.inst is null);
         ti.inst = ti; // temporary instantiation to enable genIdent()
-        scx.flags |= SCOPE.constraint;
         bool errors;
         const bool result = evalStaticCondition(scx, constraint, lastConstraint, errors, &lastConstraintNegs);
         if (result || errors)
@@ -1176,7 +1182,7 @@ else
             if (fd)
             {
                 assert(fd.type.ty == Tfunction);
-                TypeFunction tf = cast(TypeFunction)fd.type.syntaxCopy();
+                TypeFunction tf = (cast(TypeFunction) fd.type).syntaxCopy();
 
                 fd = new FuncDeclaration(fd.loc, fd.endloc, fd.ident, fd.storage_class, tf);
                 fd.parent = ti;
@@ -1920,10 +1926,11 @@ else
                     if (m == MATCH.nomatch)
                     {
                         AggregateDeclaration ad = isAggregate(farg.type);
-                        if (ad && ad.aliasthis && argtype != att)
+                        if (ad && ad.aliasthis && !isRecursiveAliasThis(att, argtype))
                         {
-                            if (!att && argtype.checkAliasThisRec())   // https://issues.dlang.org/show_bug.cgi?id=12537
-                                att = argtype;
+                            // https://issues.dlang.org/show_bug.cgi?id=12537
+                            // The isRecursiveAliasThis() call above
+
                             /* If a semantic error occurs while doing alias this,
                              * eg purity(https://issues.dlang.org/show_bug.cgi?id=7295),
                              * just regard it as not a match.
@@ -1943,6 +1950,10 @@ else
                             if ((farg.op == TOK.string_ || farg.op == TOK.slice) && (prmtype.ty == Tsarray || prmtype.ty == Taarray))
                             {
                                 // Allow conversion from T[lwr .. upr] to ref T[upr-lwr]
+                            }
+                            else if (global.params.rvalueRefParam)
+                            {
+                                // Allow implicit conversion to ref
                             }
                             else
                                 return nomatch();
@@ -2710,104 +2721,104 @@ void functionResolve(ref MatchAccumulator m, Dsymbol dstart, Loc loc, Scope* sc,
         }
         MATCH mfa = tf.callMatch(tthis_fd, fargs_, 0, pMessage, sc);
         //printf("test1: mfa = %d\n", mfa);
-        if (mfa > MATCH.nomatch)
+        if (mfa <= MATCH.nomatch)
+            return 0;
+
+        if (mfa > m.last) goto LfIsBetter;
+        if (mfa < m.last) goto LlastIsBetter;
+
+        /* See if one of the matches overrides the other.
+         */
+        assert(m.lastf);
+        if (m.lastf.overrides(fd)) goto LlastIsBetter;
+        if (fd.overrides(m.lastf)) goto LfIsBetter;
+
+        /* Try to disambiguate using template-style partial ordering rules.
+         * In essence, if f() and g() are ambiguous, if f() can call g(),
+         * but g() cannot call f(), then pick f().
+         * This is because f() is "more specialized."
+         */
         {
-            if (mfa > m.last) goto LfIsBetter;
-            if (mfa < m.last) goto LlastIsBetter;
-
-            /* See if one of the matches overrides the other.
-             */
-            assert(m.lastf);
-            if (m.lastf.overrides(fd)) goto LlastIsBetter;
-            if (fd.overrides(m.lastf)) goto LfIsBetter;
-
-            /* Try to disambiguate using template-style partial ordering rules.
-             * In essence, if f() and g() are ambiguous, if f() can call g(),
-             * but g() cannot call f(), then pick f().
-             * This is because f() is "more specialized."
-             */
-            {
-                MATCH c1 = fd.leastAsSpecialized(m.lastf);
-                MATCH c2 = m.lastf.leastAsSpecialized(fd);
-                //printf("c1 = %d, c2 = %d\n", c1, c2);
-                if (c1 > c2) goto LfIsBetter;
-                if (c1 < c2) goto LlastIsBetter;
-            }
-
-            /* The 'overrides' check above does covariant checking only
-             * for virtual member functions. It should do it for all functions,
-             * but in order to not risk breaking code we put it after
-             * the 'leastAsSpecialized' check.
-             * In the future try moving it before.
-             * I.e. a not-the-same-but-covariant match is preferred,
-             * as it is more restrictive.
-             */
-            if (!m.lastf.type.equals(fd.type))
-            {
-                //printf("cov: %d %d\n", m.lastf.type.covariant(fd.type), fd.type.covariant(m.lastf.type));
-                const int lastCovariant = m.lastf.type.covariant(fd.type);
-                const int firstCovariant = fd.type.covariant(m.lastf.type);
-
-                if (lastCovariant == 1 || lastCovariant == 2)
-                {
-                    if (firstCovariant != 1 && firstCovariant != 2)
-                    {
-                        goto LlastIsBetter;
-                    }
-                }
-                else if (firstCovariant == 1 || firstCovariant == 2)
-                {
-                    goto LfIsBetter;
-                }
-            }
-
-            /* If the two functions are the same function, like:
-             *    int foo(int);
-             *    int foo(int x) { ... }
-             * then pick the one with the body.
-             *
-             * If none has a body then don't care because the same
-             * real function would be linked to the decl (e.g from object file)
-             */
-            if (tf.equals(m.lastf.type) &&
-                fd.storage_class == m.lastf.storage_class &&
-                fd.parent == m.lastf.parent &&
-                fd.protection == m.lastf.protection &&
-                fd.linkage == m.lastf.linkage)
-            {
-                if (fd.fbody && !m.lastf.fbody)
-                    goto LfIsBetter;
-                if (!fd.fbody)
-                    goto LlastIsBetter;
-            }
-
-            // https://issues.dlang.org/show_bug.cgi?id=14450
-            // Prefer exact qualified constructor for the creating object type
-            if (isCtorCall && tf.mod != m.lastf.type.mod)
-            {
-                if (tthis.mod == tf.mod) goto LfIsBetter;
-                if (tthis.mod == m.lastf.type.mod) goto LlastIsBetter;
-            }
-
-            m.nextf = fd;
-            m.count++;
-            return 0;
-
-        LlastIsBetter:
-            return 0;
-
-        LfIsBetter:
-            td_best = null;
-            ti_best = null;
-            ta_last = MATCH.exact;
-            m.last = mfa;
-            m.lastf = fd;
-            tthis_best = tthis_fd;
-            ov_index = 0;
-            m.count = 1;
-            return 0;
+            MATCH c1 = fd.leastAsSpecialized(m.lastf);
+            MATCH c2 = m.lastf.leastAsSpecialized(fd);
+            //printf("c1 = %d, c2 = %d\n", c1, c2);
+            if (c1 > c2) goto LfIsBetter;
+            if (c1 < c2) goto LlastIsBetter;
         }
+
+        /* The 'overrides' check above does covariant checking only
+         * for virtual member functions. It should do it for all functions,
+         * but in order to not risk breaking code we put it after
+         * the 'leastAsSpecialized' check.
+         * In the future try moving it before.
+         * I.e. a not-the-same-but-covariant match is preferred,
+         * as it is more restrictive.
+         */
+        if (!m.lastf.type.equals(fd.type))
+        {
+            //printf("cov: %d %d\n", m.lastf.type.covariant(fd.type), fd.type.covariant(m.lastf.type));
+            const int lastCovariant = m.lastf.type.covariant(fd.type);
+            const int firstCovariant = fd.type.covariant(m.lastf.type);
+
+            if (lastCovariant == 1 || lastCovariant == 2)
+            {
+                if (firstCovariant != 1 && firstCovariant != 2)
+                {
+                    goto LlastIsBetter;
+                }
+            }
+            else if (firstCovariant == 1 || firstCovariant == 2)
+            {
+                goto LfIsBetter;
+            }
+        }
+
+        /* If the two functions are the same function, like:
+         *    int foo(int);
+         *    int foo(int x) { ... }
+         * then pick the one with the body.
+         *
+         * If none has a body then don't care because the same
+         * real function would be linked to the decl (e.g from object file)
+         */
+        if (tf.equals(m.lastf.type) &&
+            fd.storage_class == m.lastf.storage_class &&
+            fd.parent == m.lastf.parent &&
+            fd.visibility == m.lastf.visibility &&
+            fd.linkage == m.lastf.linkage)
+        {
+            if (fd.fbody && !m.lastf.fbody)
+                goto LfIsBetter;
+            if (!fd.fbody)
+                goto LlastIsBetter;
+        }
+
+        // https://issues.dlang.org/show_bug.cgi?id=14450
+        // Prefer exact qualified constructor for the creating object type
+        if (isCtorCall && tf.mod != m.lastf.type.mod)
+        {
+            if (tthis.mod == tf.mod) goto LfIsBetter;
+            if (tthis.mod == m.lastf.type.mod) goto LlastIsBetter;
+        }
+
+        m.nextf = fd;
+        m.count++;
         return 0;
+
+    LlastIsBetter:
+        return 0;
+
+    LfIsBetter:
+        td_best = null;
+        ti_best = null;
+        ta_last = MATCH.exact;
+        m.last = mfa;
+        m.lastf = fd;
+        tthis_best = tthis_fd;
+        ov_index = 0;
+        m.count = 1;
+        return 0;
+
     }
 
     int applyTemplate(TemplateDeclaration td)
@@ -4875,6 +4886,8 @@ MATCH deduceType(RootObject o, Scope* sc, Type tparam, TemplateParameters* param
                 if (Type tsa = toStaticArrayType(e))
                 {
                     tsa.accept(this);
+                    if (result > MATCH.convert)
+                        result = MATCH.convert; // match with implicit conversion at most
                     return;
                 }
             }
@@ -5389,7 +5402,7 @@ extern (C++) class TemplateTypeParameter : TemplateParameter
         return this;
     }
 
-    override TemplateParameter syntaxCopy()
+    override TemplateTypeParameter syntaxCopy()
     {
         return new TemplateTypeParameter(loc, ident, specType ? specType.syntaxCopy() : null, defaultType ? defaultType.syntaxCopy() : null);
     }
@@ -5475,7 +5488,7 @@ extern (C++) final class TemplateThisParameter : TemplateTypeParameter
         return this;
     }
 
-    override TemplateParameter syntaxCopy()
+    override TemplateThisParameter syntaxCopy()
     {
         return new TemplateThisParameter(loc, ident, specType ? specType.syntaxCopy() : null, defaultType ? defaultType.syntaxCopy() : null);
     }
@@ -5513,7 +5526,7 @@ extern (C++) final class TemplateValueParameter : TemplateParameter
         return this;
     }
 
-    override TemplateParameter syntaxCopy()
+    override TemplateValueParameter syntaxCopy()
     {
         return new TemplateValueParameter(loc, ident,
             valType.syntaxCopy(),
@@ -5616,7 +5629,7 @@ extern (C++) final class TemplateAliasParameter : TemplateParameter
         return this;
     }
 
-    override TemplateParameter syntaxCopy()
+    override TemplateAliasParameter syntaxCopy()
     {
         return new TemplateAliasParameter(loc, ident, specType ? specType.syntaxCopy() : null, objectSyntaxCopy(specAlias), objectSyntaxCopy(defaultAlias));
     }
@@ -5698,7 +5711,7 @@ extern (C++) final class TemplateTupleParameter : TemplateParameter
         return this;
     }
 
-    override TemplateParameter syntaxCopy()
+    override TemplateTupleParameter syntaxCopy()
     {
         return new TemplateTupleParameter(loc, ident);
     }
@@ -5885,7 +5898,7 @@ extern (C++) class TemplateInstance : ScopeDsymbol
         return a;
     }
 
-    override Dsymbol syntaxCopy(Dsymbol s)
+    override TemplateInstance syntaxCopy(Dsymbol s)
     {
         TemplateInstance ti = s ? cast(TemplateInstance)s : new TemplateInstance(loc, name, null);
         ti.tiargs = arraySyntaxCopy(tiargs);
@@ -6874,6 +6887,16 @@ if(!IN_WEKA)
         return false;
     }
 
+    /**********************************
+     * Find the TemplateDeclaration that matches this TemplateInstance best.
+     *
+     * Params:
+     *   sc    = the scope this TemplateInstance resides in
+     *   fargs = function arguments in case of a template function, null otherwise
+     *
+     * Returns:
+     *   `true` if a match was found, `false` otherwise
+     */
     extern (D) final bool findBestMatch(Scope* sc, Expressions* fargs)
     {
         if (havetempdecl)
@@ -7055,7 +7078,37 @@ if(!IN_WEKA)
                         .tip(tip);
                 }
                 else
+                {
                     error("%s `%s`", msg, tmsg);
+
+                    if (tdecl.parameters.dim == tiargs.dim)
+                    {
+                        // https://issues.dlang.org/show_bug.cgi?id=7352
+                        // print additional information, e.g. `foo` is not a type
+                        foreach (i, param; *tdecl.parameters)
+                        {
+                            MATCH match = param.matchArg(loc, sc, tiargs, i, tdecl.parameters, &dedtypes, null);
+                            auto arg = (*tiargs)[i];
+                            auto sym = arg.isDsymbol;
+                            auto exp = arg.isExpression;
+
+                            if (exp)
+                                exp = exp.optimize(WANTvalue);
+
+                            if (match == MATCH.nomatch &&
+                                ((sym && sym.isFuncDeclaration) ||
+                                 (exp && exp.isVarExp)))
+                            {
+                                if (param.isTemplateTypeParameter)
+                                    errorSupplemental(loc, "`%s` is not a type", arg.toChars);
+                                else if (auto tvp = param.isTemplateValueParameter)
+                                    errorSupplemental(loc, "`%s` is not of a value of type `%s`",
+                                                      arg.toChars, tvp.valType.toChars);
+
+                            }
+                        }
+                    }
+                }
             }
             else
                 .error(loc, "%s `%s.%s` does not match any template declaration", tempdecl.kind(), tempdecl.parent.toPrettyChars(), tempdecl.ident.toChars());
@@ -7652,9 +7705,9 @@ extern (C++) final class TemplateMixin : TemplateInstance
         this.tqual = tqual;
     }
 
-    override Dsymbol syntaxCopy(Dsymbol s)
+    override TemplateInstance syntaxCopy(Dsymbol s)
     {
-        auto tm = new TemplateMixin(loc, ident, cast(TypeQualified)tqual.syntaxCopy(), tiargs);
+        auto tm = new TemplateMixin(loc, ident, tqual.syntaxCopy(), tiargs);
         return TemplateInstance.syntaxCopy(tm);
     }
 
@@ -8380,7 +8433,7 @@ void printTemplateStats()
             ss.ts.allInstances)
         {
             message(ss.td.loc,
-                    "vtemplate: %u (%u unique) instantiation(s) of template `%s` found, they are:",
+                    "vtemplate: %u (%u distinct) instantiation(s) of template `%s` found, they are:",
                     ss.ts.numInstantiations,
                     ss.ts.uniqueInstantiations,
                     ss.td.toCharsNoConstraints());
@@ -8395,7 +8448,7 @@ void printTemplateStats()
         else
         {
             message(ss.td.loc,
-                    "vtemplate: %u (%u unique) instantiation(s) of template `%s` found",
+                    "vtemplate: %u (%u distinct) instantiation(s) of template `%s` found",
                     ss.ts.numInstantiations,
                     ss.ts.uniqueInstantiations,
                     ss.td.toCharsNoConstraints());

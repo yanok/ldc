@@ -109,7 +109,7 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
 
   // specify that the image will contain a table of safe exception handlers
   // and can handle addresses >2GB (32bit only)
-  if (!global.params.is64bit) {
+  if (global.params.targetTriple->isArch32Bit()) {
     args.push_back("/SAFESEH");
     args.push_back("/LARGEADDRESSAWARE");
   }
@@ -142,6 +142,12 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
   // object files
   for (auto objfile : global.params.objfiles) {
     args.push_back(objfile);
+  }
+
+  // add precompiled rt.dso_windows object file (in lib directory) when linking
+  // against shared druntime
+  if (!defaultLibNames.empty() && linkAgainstSharedDefaultLibs()) {
+    args.push_back("dso_windows.obj");
   }
 
   // .res/.def files

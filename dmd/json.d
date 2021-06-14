@@ -1,7 +1,7 @@
 /**
  * Code for generating .json descriptions of the module when passing the `-X` flag to dmd.
  *
- * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/json.d, _json.d)
@@ -35,6 +35,7 @@ import dmd.mtype;
 import dmd.root.outbuffer;
 import dmd.root.rootobject;
 import dmd.root.string;
+import dmd.target;
 import dmd.visitor;
 
 version(Windows) {
@@ -418,10 +419,21 @@ public:
         if (!s.isTemplateDeclaration()) // TemplateDeclaration::kind() acts weird sometimes
         {
             property("name", s.toString());
-            property("kind", s.kind.toDString);
+            if (s.isStaticCtorDeclaration())
+            {
+                property("kind", s.isSharedStaticCtorDeclaration()
+                         ? "shared static constructor" : "static constructor");
+            }
+            else if (s.isStaticDtorDeclaration())
+            {
+                property("kind", s.isSharedStaticDtorDeclaration()
+                         ? "shared static destructor" : "static destructor");
+            }
+            else
+                property("kind", s.kind.toDString);
         }
-        if (s.prot().kind != Prot.Kind.public_) // TODO: How about package(names)?
-            property("protection", protectionToString(s.prot().kind));
+        // TODO: How about package(names)?
+        property("protection", visibilityToString(s.visible().kind));
         if (EnumMember em = s.isEnumMember())
         {
             if (em.origValue)
@@ -497,14 +509,9 @@ public:
         objectStart();
         propertyStart("name");
         stringStart();
-        if (s.packages && s.packages.dim)
-        {
-            for (size_t i = 0; i < s.packages.dim; i++)
-            {
-                const pid = (*s.packages)[i];
-                stringPart(pid.toString());
-                buf.writeByte('.');
-            }
+        foreach (const pid; s.packages){
+            stringPart(pid.toString());
+            buf.writeByte('.');
         }
         stringPart(s.id.toString());
         stringEnd();
@@ -512,8 +519,8 @@ public:
         property("kind", s.kind.toDString);
         property("comment", s.comment.toDString);
         property("line", "char", s.loc);
-        if (s.prot().kind != Prot.Kind.public_)
-            property("protection", protectionToString(s.prot().kind));
+        if (s.visible().kind != Visibility.Kind.public_)
+            property("protection", visibilityToString(s.visible().kind));
         if (s.aliasId)
             property("alias", s.aliasId.toString());
         bool hasRenamed = false;
@@ -835,28 +842,28 @@ public:
         property("size_t", size_t.sizeof);
         propertyStart("platforms");
         arrayStart();
-        if (global.params.targetOS == TargetOS.Windows)
+        if (target.os == Target.OS.Windows)
         {
             item("windows");
         }
         else
         {
             item("posix");
-            if (global.params.targetOS == TargetOS.linux)
+            if (target.os == Target.OS.linux)
                 item("linux");
-            else if (global.params.targetOS == TargetOS.OSX)
+            else if (target.os == Target.OS.OSX)
                 item("osx");
-            else if (global.params.targetOS == TargetOS.FreeBSD)
+            else if (target.os == Target.OS.FreeBSD)
             {
                 item("freebsd");
                 item("bsd");
             }
-            else if (global.params.targetOS == TargetOS.OpenBSD)
+            else if (target.os == Target.OS.OpenBSD)
             {
                 item("openbsd");
                 item("bsd");
             }
-            else if (global.params.targetOS == TargetOS.Solaris)
+            else if (target.os == Target.OS.Solaris)
             {
                 item("solaris");
                 item("bsd");

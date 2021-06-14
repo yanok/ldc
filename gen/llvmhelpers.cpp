@@ -152,7 +152,9 @@ void DtoDeleteArray(const Loc &loc, DValue *arr) {
 unsigned DtoAlignment(Type *type) {
   structalign_t alignment = type->alignment();
   if (alignment == STRUCTALIGN_DEFAULT) {
-    alignment = type->alignsize();
+    auto ts = type->toBasetype()->isTypeStruct();
+    if (!ts || ts->sym->members) // not an opaque struct
+      alignment = type->alignsize();
   }
   return (alignment == STRUCTALIGN_DEFAULT ? 0 : alignment);
 }
@@ -724,6 +726,7 @@ DValue *DtoCast(const Loc &loc, DValue *val, Type *to) {
   case Tstruct:
     return DtoCastStruct(loc, val, to);
   case Tnull:
+  case Tnoreturn:
     return DtoNullValue(to, loc);
   default:
     error(loc, "invalid cast from `%s` to `%s`", val->type->toChars(),
@@ -1670,7 +1673,8 @@ std::string llvmTypeToString(llvm::Type *type) {
 llvm::GlobalVariable *declareGlobal(const Loc &loc, llvm::Module &module,
                                     llvm::Type *type,
                                     llvm::StringRef mangledName,
-                                    bool isConstant, bool isThreadLocal) {
+                                    bool isConstant, bool isThreadLocal,
+                                    bool useDLLImport) {
   // No TLS support for WebAssembly and AVR; spare users from having to add
   // __gshared everywhere.
   const auto arch = global.params.targetTriple->getArch();
@@ -1712,9 +1716,14 @@ llvm::GlobalVariable *declareGlobal(const Loc &loc, llvm::Module &module,
                                        : clThreadModel.getValue())
           : llvm::GlobalVariable::NotThreadLocal;
 
-  return new llvm::GlobalVariable(module, type, isConstant,
-                                  llvm::GlobalValue::ExternalLinkage, nullptr,
-                                  mangledName, nullptr, tlsModel);
+  auto gvar = new llvm::GlobalVariable(module, type, isConstant,
+                                       llvm::GlobalValue::ExternalLinkage,
+                                       nullptr, mangledName, nullptr, tlsModel);
+
+  if (useDLLImport && global.params.targetTriple->isOSWindows())
+    gvar->setDLLStorageClass(LLGlobalValue::DLLImportStorageClass);
+
+  return gvar;
 }
 
 void defineGlobal(llvm::GlobalVariable *global, llvm::Constant *init,
@@ -1732,8 +1741,9 @@ llvm::GlobalVariable *defineGlobal(const Loc &loc, llvm::Module &module,
                                    llvm::GlobalValue::LinkageTypes linkage,
                                    bool isConstant, bool isThreadLocal) {
   assert(init);
-  auto global = declareGlobal(loc, module, init->getType(), mangledName,
-                              isConstant, isThreadLocal);
+  auto global =
+      declareGlobal(loc, module, init->getType(), mangledName, isConstant,
+                    isThreadLocal, /*useDLLImport*/ false);
   defineGlobal(global, init, nullptr);
   global->setLinkage(linkage);
   return global;

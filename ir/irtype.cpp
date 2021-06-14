@@ -11,6 +11,7 @@
 
 #include "dmd/expression.h"
 #include "dmd/mtype.h"
+#include "dmd/target.h"
 #include "gen/irstate.h"
 #include "gen/logger.h"
 #include "gen/llvmhelpers.h"
@@ -46,38 +47,12 @@ LLType *IrTypeBasic::getComplexType(llvm::LLVMContext &ctx, LLType *type) {
   return llvm::StructType::get(ctx, types, false);
 }
 
-namespace {
-llvm::Type *getReal80Type(llvm::LLVMContext &ctx) {
-  const auto &triple = *global.params.targetTriple;
-  const auto a = triple.getArch();
-  const bool anyX86 = (a == llvm::Triple::x86) || (a == llvm::Triple::x86_64);
-  const bool anyAarch64 =
-      (a == llvm::Triple::aarch64) || (a == llvm::Triple::aarch64_be);
-  const bool isAndroid = triple.getEnvironment() == llvm::Triple::Android;
-
-  // Only x86 has 80-bit extended precision.
-  // MSVC and Android/x86 use double precision, Android/x64 quadruple.
-  if (anyX86 && !triple.isWindowsMSVCEnvironment() && !isAndroid) {
-    return llvm::Type::getX86_FP80Ty(ctx);
-  }
-
-  // AArch64 targets except Darwin (64-bit) use 128-bit quadruple precision.
-  // FIXME: PowerPC, SystemZ, ...
-  if ((anyAarch64 && !triple.isOSDarwin()) ||
-      (isAndroid && a == llvm::Triple::x86_64)) {
-    return llvm::Type::getFP128Ty(ctx);
-  }
-
-  // 64-bit double precision for all other targets.
-  return llvm::Type::getDoubleTy(ctx);
-}
-}
-
 llvm::Type *IrTypeBasic::basic2llvm(Type *t) {
   llvm::LLVMContext &ctx = getGlobalContext();
 
   switch (t->ty) {
   case Tvoid:
+  case Tnoreturn:
     return llvm::Type::getVoidTy(ctx);
 
   case Tint8:
@@ -113,7 +88,7 @@ llvm::Type *IrTypeBasic::basic2llvm(Type *t) {
 
   case Tfloat80:
   case Timaginary80:
-    return getReal80Type(ctx);
+    return target.realType;
 
   case Tcomplex32:
     return getComplexType(ctx, llvm::Type::getFloatTy(ctx));
@@ -122,7 +97,7 @@ llvm::Type *IrTypeBasic::basic2llvm(Type *t) {
     return getComplexType(ctx, llvm::Type::getDoubleTy(ctx));
 
   case Tcomplex80:
-    return getComplexType(ctx, getReal80Type(ctx));
+    return getComplexType(ctx, target.realType);
 
   case Tbool:
     return llvm::Type::getInt1Ty(ctx);

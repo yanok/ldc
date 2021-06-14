@@ -97,7 +97,8 @@ LLType *DtoType(Type *t) {
   case Tbool:
   case Tchar:
   case Twchar:
-  case Tdchar: {
+  case Tdchar:
+  case Tnoreturn: {
     return IrTypeBasic::get(t)->getLLType();
   }
 
@@ -279,8 +280,22 @@ void setLinkageAndVisibility(Dsymbol *sym, llvm::GlobalObject *obj) {
 }
 
 void setVisibility(Dsymbol *sym, llvm::GlobalObject *obj) {
-  if (opts::defaultToHiddenVisibility && !sym->isExport())
-    obj->setVisibility(LLGlobalValue::HiddenVisibility);
+  if (global.params.targetTriple->isOSWindows()) {
+    bool isExported = sym->isExport();
+    if (!isExported && global.params.dllexport) {
+      const auto l = obj->getLinkage();
+      isExported = l == LLGlobalValue::ExternalLinkage ||
+                   l == LLGlobalValue::WeakODRLinkage ||
+                   l == LLGlobalValue::WeakAnyLinkage;
+    }
+    obj->setDLLStorageClass(isExported ? LLGlobalValue::DLLExportStorageClass
+                                       : LLGlobalValue::DefaultStorageClass);
+  } else {
+    if (opts::symbolVisibility == opts::SymbolVisibility::hidden &&
+        !sym->isExport()) {
+      obj->setVisibility(LLGlobalValue::HiddenVisibility);
+    }
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

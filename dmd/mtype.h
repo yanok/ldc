@@ -1,6 +1,6 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
  * http://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
@@ -101,6 +101,8 @@ enum ENUMTY
     Tint128,
     Tuns128,
     Ttraits,
+    Tmixin,
+    Tnoreturn,
     TMAX
 };
 typedef unsigned char TY;       // ENUMTY
@@ -187,6 +189,7 @@ public:
     static Type *tdstring;              // immutable(dchar)[]
     static Type *terror;                // for error recovery
     static Type *tnull;                 // for null type
+    static Type *tnoreturn;             // for bottom type typeof(*null)
 
     static Type *tsize_t;               // matches size_t alias
     static Type *tptrdiff_t;            // matches ptrdiff_t alias
@@ -309,6 +312,7 @@ public:
     virtual int hasWild() const;
     virtual bool hasPointers();
     virtual bool hasVoidInitPointers();
+    virtual bool hasInvariant();
     virtual Type *nextOf();
     Type *baseElemOf();
     uinteger_t sizemask();
@@ -341,6 +345,7 @@ public:
     TypeNull *isTypeNull();
     TypeMixin *isTypeMixin();
     TypeTraits *isTypeTraits();
+    TypeNoreturn *isTypeNoreturn();
 
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -349,7 +354,7 @@ class TypeError : public Type
 {
 public:
     const char *kind();
-    Type *syntaxCopy();
+    TypeError *syntaxCopy();
 
     d_uns64 size(const Loc &loc);
     Expression *defaultInitLiteral(const Loc &loc);
@@ -386,7 +391,7 @@ public:
     unsigned flags;
 
     const char *kind();
-    Type *syntaxCopy();
+    TypeBasic *syntaxCopy();
     d_uns64 size(const Loc &loc) /*const*/;
     unsigned alignsize();
     bool isintegral();
@@ -411,7 +416,7 @@ public:
 
     static TypeVector *create(Type *basetype);
     const char *kind();
-    Type *syntaxCopy();
+    TypeVector *syntaxCopy();
     d_uns64 size(const Loc &loc);
     unsigned alignsize();
     bool isintegral();
@@ -440,7 +445,7 @@ public:
     Expression *dim;
 
     const char *kind();
-    Type *syntaxCopy();
+    TypeSArray *syntaxCopy();
     d_uns64 size(const Loc &loc);
     unsigned alignsize();
     bool isString();
@@ -450,6 +455,7 @@ public:
     MATCH implicitConvTo(Type *to);
     Expression *defaultInitLiteral(const Loc &loc);
     bool hasPointers();
+    bool hasInvariant();
     bool needsDestruction();
     bool needsCopyOrPostblit();
     bool needsNested();
@@ -462,7 +468,7 @@ class TypeDArray : public TypeArray
 {
 public:
     const char *kind();
-    Type *syntaxCopy();
+    TypeDArray *syntaxCopy();
     d_uns64 size(const Loc &loc) /*const*/;
     unsigned alignsize() /*const*/;
     bool isString();
@@ -482,7 +488,7 @@ public:
 
     static TypeAArray *create(Type *t, Type *index);
     const char *kind();
-    Type *syntaxCopy();
+    TypeAArray *syntaxCopy();
     d_uns64 size(const Loc &loc);
     bool isZeroInit(const Loc &loc) /*const*/;
     bool isBoolean() /*const*/;
@@ -498,7 +504,7 @@ class TypePointer : public TypeNext
 public:
     static TypePointer *create(Type *t);
     const char *kind();
-    Type *syntaxCopy();
+    TypePointer *syntaxCopy();
     d_uns64 size(const Loc &loc) /*const*/;
     MATCH implicitConvTo(Type *to);
     MATCH constConv(Type *to);
@@ -513,7 +519,7 @@ class TypeReference : public TypeNext
 {
 public:
     const char *kind();
-    Type *syntaxCopy();
+    TypeReference *syntaxCopy();
     d_uns64 size(const Loc &loc) /*const*/;
     bool isZeroInit(const Loc &loc) /*const*/;
     void accept(Visitor *v) { v->visit(this); }
@@ -596,7 +602,7 @@ public:
 
     static TypeFunction *create(Parameters *parameters, Type *treturn, VarArg varargs, LINK linkage, StorageClass stc = 0);
     const char *kind();
-    Type *syntaxCopy();
+    TypeFunction *syntaxCopy();
     void purityLevel();
     bool hasLazyParameters();
     bool isDstyleVariadic() const;
@@ -605,6 +611,7 @@ public:
     Type *addStorageClass(StorageClass stc);
 
     Type *substWildTo(unsigned mod);
+    MATCH constConv(Type *to);
 
     bool isnothrow() const;
     void isnothrow(bool v);
@@ -642,7 +649,7 @@ public:
 
     static TypeDelegate *create(Type *t);
     const char *kind();
-    Type *syntaxCopy();
+    TypeDelegate *syntaxCopy();
     Type *addStorageClass(StorageClass stc);
     d_uns64 size(const Loc &loc) /*const*/;
     unsigned alignsize() /*const*/;
@@ -663,7 +670,7 @@ class TypeTraits : public Type
     Dsymbol *sym;
 
     const char *kind();
-    Type *syntaxCopy();
+    TypeTraits *syntaxCopy();
     d_uns64 size(const Loc &loc);
     Dsymbol *toDsymbol(Scope *sc);
     void accept(Visitor *v) { v->visit(this); }
@@ -673,9 +680,10 @@ class TypeMixin : public Type
 {
     Loc loc;
     Expressions *exps;
+    RootObject *obj;
 
     const char *kind();
-    Type *syntaxCopy();
+    TypeMixin *syntaxCopy();
     Dsymbol *toDsymbol(Scope *sc);
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -704,7 +712,7 @@ public:
     Dsymbol *originalSymbol; // The symbol representing this identifier, before alias resolution
 
     const char *kind();
-    Type *syntaxCopy();
+    TypeIdentifier *syntaxCopy();
     Dsymbol *toDsymbol(Scope *sc);
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -717,7 +725,7 @@ public:
     TemplateInstance *tempinst;
 
     const char *kind();
-    Type *syntaxCopy();
+    TypeInstance *syntaxCopy();
     Dsymbol *toDsymbol(Scope *sc);
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -729,7 +737,7 @@ public:
     int inuse;
 
     const char *kind();
-    Type *syntaxCopy();
+    TypeTypeof *syntaxCopy();
     Dsymbol *toDsymbol(Scope *sc);
     d_uns64 size(const Loc &loc);
     void accept(Visitor *v) { v->visit(this); }
@@ -739,7 +747,7 @@ class TypeReturn : public TypeQualified
 {
 public:
     const char *kind();
-    Type *syntaxCopy();
+    TypeReturn *syntaxCopy();
     Dsymbol *toDsymbol(Scope *sc);
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -767,7 +775,7 @@ public:
     const char *kind();
     d_uns64 size(const Loc &loc);
     unsigned alignsize();
-    Type *syntaxCopy();
+    TypeStruct *syntaxCopy();
     Dsymbol *toDsymbol(Scope *sc);
     structalign_t alignment();
     Expression *defaultInitLiteral(const Loc &loc);
@@ -779,6 +787,7 @@ public:
     bool needsNested();
     bool hasPointers();
     bool hasVoidInitPointers();
+    bool hasInvariant();
     MATCH implicitConvTo(Type *to);
     MATCH constConv(Type *to);
     unsigned char deduceWild(Type *t, bool isRef);
@@ -793,7 +802,7 @@ public:
     EnumDeclaration *sym;
 
     const char *kind();
-    Type *syntaxCopy();
+    TypeEnum *syntaxCopy();
     d_uns64 size(const Loc &loc);
     unsigned alignsize();
     Type *memType(const Loc &loc = Loc());
@@ -816,6 +825,7 @@ public:
     bool isZeroInit(const Loc &loc);
     bool hasPointers();
     bool hasVoidInitPointers();
+    bool hasInvariant();
     Type *nextOf();
 
     void accept(Visitor *v) { v->visit(this); }
@@ -830,7 +840,7 @@ public:
 
     const char *kind();
     d_uns64 size(const Loc &loc) /*const*/;
-    Type *syntaxCopy();
+    TypeClass *syntaxCopy();
     Dsymbol *toDsymbol(Scope *sc);
     ClassDeclaration *isClassHandle();
     bool isBaseOf(Type *t, int *poffset);
@@ -859,7 +869,7 @@ public:
     static TypeTuple *create(Type *t1);
     static TypeTuple *create(Type *t1, Type *t2);
     const char *kind();
-    Type *syntaxCopy();
+    TypeTuple *syntaxCopy();
     bool equals(const RootObject *o) const;
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -871,7 +881,7 @@ public:
     Expression *upr;
 
     const char *kind();
-    Type *syntaxCopy();
+    TypeSlice *syntaxCopy();
     void accept(Visitor *v) { v->visit(this); }
 };
 
@@ -880,11 +890,24 @@ class TypeNull : public Type
 public:
     const char *kind();
 
-    Type *syntaxCopy();
+    TypeNull *syntaxCopy();
     MATCH implicitConvTo(Type *to);
     bool isBoolean() /*const*/;
 
     d_uns64 size(const Loc &loc) /*const*/;
+    void accept(Visitor *v) { v->visit(this); }
+};
+
+class TypeNoreturn final : public Type
+{
+public:
+    const char *kind();
+    TypeNoreturn *syntaxCopy();
+    MATCH implicitConvTo(Type* to);
+    bool isBoolean() /* const */;
+    d_uns64 size(const Loc& loc) /* const */;
+    unsigned alignsize();
+
     void accept(Visitor *v) { v->visit(this); }
 };
 

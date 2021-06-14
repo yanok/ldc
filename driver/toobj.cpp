@@ -87,7 +87,13 @@ void codegenModule(llvm::TargetMachine &Target, llvm::Module &m,
   }
 
   std::error_code errinfo;
-  llvm::raw_fd_ostream out(filename, errinfo, llvm::sys::fs::F_None);
+  llvm::raw_fd_ostream out(filename, errinfo,
+#if LDC_LLVM_VER >= 900
+                           llvm::sys::fs::OF_None
+#else
+                           llvm::sys::fs::F_None
+#endif
+                           );
   if (errinfo) {
     error(Loc(), "cannot write file '%s': %s", filename,
           errinfo.message().c_str());
@@ -356,10 +362,16 @@ void writeModule(llvm::Module *m, const char *filename) {
   if (global.params.output_bc || emitBitcodeAsObjectFile) {
     std::string bcpath = emitBitcodeAsObjectFile
                              ? filename
-                             : replaceExtensionWith(global.bc_ext, filename);
+                             : replaceExtensionWith(bc_ext, filename);
     Logger::println("Writing LLVM bitcode to: %s\n", bcpath.c_str());
     std::error_code errinfo;
-    llvm::raw_fd_ostream bos(bcpath.c_str(), errinfo, llvm::sys::fs::F_None);
+    llvm::raw_fd_ostream bos(bcpath.c_str(), errinfo,
+#if LDC_LLVM_VER >= 900
+                             llvm::sys::fs::OF_None
+#else
+                             llvm::sys::fs::F_None
+#endif
+                             );
     if (bos.has_error()) {
       error(Loc(), "cannot write LLVM bitcode file '%s': %s", bcpath.c_str(),
             errinfo.message().c_str());
@@ -391,10 +403,16 @@ void writeModule(llvm::Module *m, const char *filename) {
 
   // write LLVM IR
   if (global.params.output_ll) {
-    const auto llpath = replaceExtensionWith(global.ll_ext, filename);
+    const auto llpath = replaceExtensionWith(ll_ext, filename);
     Logger::println("Writing LLVM IR to: %s\n", llpath.c_str());
     std::error_code errinfo;
-    llvm::raw_fd_ostream aos(llpath.c_str(), errinfo, llvm::sys::fs::F_None);
+    llvm::raw_fd_ostream aos(llpath.c_str(), errinfo,
+#if LDC_LLVM_VER >= 900
+                             llvm::sys::fs::OF_None
+#else
+                             llvm::sys::fs::F_None
+#endif
+                             );
     if (aos.has_error()) {
       error(Loc(), "cannot write LLVM IR file '%s': %s", llpath.c_str(),
             errinfo.message().c_str());
@@ -413,7 +431,7 @@ void writeModule(llvm::Module *m, const char *filename) {
       llvm::sys::fs::createUniqueFile("ldc-%%%%%%%.s", buffer);
       spath = {buffer.data(), buffer.size()};
     } else {
-      spath = replaceExtensionWith(global.s_ext, filename);
+      spath = replaceExtensionWith(s_ext, filename);
     }
 
     Logger::println("Writing asm to: %s\n", spath.c_str());

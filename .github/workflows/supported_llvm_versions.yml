@@ -7,23 +7,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - job_name: Ubuntu 16.04, LLVM 11, latest LDC beta
-            os: ubuntu-16.04
+          - job_name: Ubuntu 18.04, LLVM 12, latest LDC beta
+            os: ubuntu-18.04
+            host_dc: ldc-beta
+            llvm_version: "12.0.0"
+            cmake_opts: ""
+          - job_name: Ubuntu 18.04, LLVM 11, latest LDC beta
+            os: ubuntu-18.04
             host_dc: ldc-beta
             llvm_version: "11.0.1"
             cmake_opts: "-DRT_SUPPORT_SANITIZERS=ON"
-          - job_name: Ubuntu 16.04, LLVM 9, latest LDC beta
-            os: ubuntu-16.04
+          - job_name: Ubuntu 18.04, LLVM 9, latest LDC beta
+            os: ubuntu-18.04
             host_dc: ldc-beta
-            llvm_version: "9.0.0"
+            llvm_version: "9.0.1"
             cmake_opts: "-DBUILD_SHARED_LIBS=ON -DRT_SUPPORT_SANITIZERS=ON"
+          # LDC v0.17.6: C parts of Phobos not compiled with -fPIC, needs Ubuntu 16.04
           - job_name: Ubuntu 16.04, LLVM 8, LDC 0.17.6
             os: ubuntu-16.04
             host_dc: ldc-0.17.6
             llvm_version: "8.0.0"
             cmake_opts: "-DBUILD_SHARED_LIBS=OFF -DLDC_LINK_MANUALLY=ON"
-          - job_name: Ubuntu 16.04, LLVM 6, latest DMD beta
-            os: ubuntu-16.04
+          - job_name: Ubuntu 18.04, LLVM 6, latest DMD beta
+            os: ubuntu-18.04
             host_dc: dmd-beta
             llvm_version: "6.0.1"
             cmake_opts: "-DLIB_SUFFIX=64 -DLDC_LINK_MANUALLY=ON"
@@ -44,6 +50,11 @@ jobs:
         with:
           submodules: true
           fetch-depth: 50
+      - name: Set up Python 3.x
+        if: matrix.os == 'ubuntu-16.04'
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
       - name: Install ninja
         uses: seanmiddleditch/gha-setup-ninja@v3
       - name: Install D host compiler
@@ -55,19 +66,25 @@ jobs:
       - name: Install lit
         run: |
           set -euxo pipefail
-          curl -OL https://bootstrap.pypa.io/2.7/get-pip.py
-          python get-pip.py --user
-          python -m pip install --user lit
-          python -c "import lit.main; lit.main.main();" --version . | head -n 1
+          python3 -m pip install --user lit
+          python3 -c "import lit.main; lit.main.main();" --version . | head -n 1
       - name: "Linux: Install gdb"
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install gdb
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          if [[ '${{ matrix.os }}' == 'ubuntu-18.04' ]]; then
+            # Don't use latest gdb v10 from Ubuntu toolchain PPA with regressions, use official v8
+            sudo apt-get install gdb=8.1.1-0ubuntu1
+          else
+            sudo apt-get install gdb
+          fi
 
       - name: Try to restore cached LLVM
         uses: actions/cache@v2
         with:
           path: llvm
-          key: llvm-${{ matrix.llvm_version }}-${{ matrix.os }}
+          key: llvm-${{ matrix.llvm_version }}-ubuntu-16.04
 
       - name: Download & extract prebuilt vanilla LLVM ${{ matrix.llvm_version }}
         run: |
@@ -79,15 +96,15 @@ jobs:
           if [[ '${{ runner.os }}' == 'macOS' ]]; then
             suffix='x86_64-apple-darwin'
           else
-            suffix='x86_64-linux-gnu-${{ matrix.os }}'
+            suffix='x86_64-linux-gnu-ubuntu-16.04'
           fi
           version='${{ matrix.llvm_version }}'
-          if [[ "$version" == 1?.* ]]; then
+          if [[ "$version" =~ ^(1.|9)\. ]]; then
             llvm_url="https://github.com/llvm/llvm-project/releases/download/llvmorg-$version/clang+llvm-$version-$suffix.tar.xz"
           else
             llvm_url="http://releases.llvm.org/$version/clang+llvm-$version-$suffix.tar.xz"
           fi
-          curl -L -o llvm.tar.xz $llvm_url
+          curl --max-time 300 --retry 3 -L -o llvm.tar.xz $llvm_url
           mkdir -p llvm
           tar -xf llvm.tar.xz --strip 1 -C llvm
           rm llvm.tar.xz
@@ -106,7 +123,13 @@ jobs:
       - name: Run LDC D unittests
         run: ctest --output-on-failure -R "ldc2-unittest"
       - name: Run LIT testsuite
-        run: ctest -V -R "lit-tests"
+        run: |
+          set -euxo pipefail
+          # LLVM 9: libclang_rt.fuzzer-x86_64.a not compiled with -fPIC
+          if [[ '${{ matrix.llvm_version }}' == 9.* ]]; then
+            echo "config.available_features.remove('Fuzzer')" >> tests/sanitizers/lit.local.cfg
+          fi
+          ctest -V -R "lit-tests"
       - name: Run DMD testsuite
         run: |
           set -euxo pipefail
@@ -115,11 +138,19 @@ jobs:
             rm tests/d2/dmd-testsuite/runnable/{testptrref,xtest46}_gc.d
             rm tests/d2/dmd-testsuite/fail_compilation/mixin_gc.d
             # The @live tests neither (LDC segfaults)
-            rm tests/d2/dmd-testsuite/compilable/ob1.d
+            rm tests/d2/dmd-testsuite/compilable/ob{1,2}.d
             rm tests/d2/dmd-testsuite/fail_compilation/fob{1,2}.d
-            # A __traits(getOverloads) test neither
-            rm tests/d2/dmd-testsuite/compilable/test21050.d
+            rm tests/d2/dmd-testsuite/fail_compilation/failob2.d
+            # Some __traits(getOverloads) tests neither
+            rm tests/d2/dmd-testsuite/compilable/{test21050,test21743}.d
           fi
           ctest -V -R "dmd-testsuite"
       - name: Run defaultlib unittests & druntime integration tests
-        run: ctest -j2 --output-on-failure -E "dmd-testsuite|lit-tests|ldc2-unittest"
+        run: |
+          set -euxo pipefail
+          excludes='dmd-testsuite|lit-tests|ldc2-unittest'
+          if [[ '${{ runner.os }}' == 'macOS' ]]; then
+            # https://github.com/ldc-developers/ldc/issues/3280
+            excludes+='|druntime-test-exceptions-debug'
+          fi
+          ctest -j2 --output-on-failure -E "$excludes"

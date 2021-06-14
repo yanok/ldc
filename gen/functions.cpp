@@ -100,7 +100,11 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
     if (abi->returnInArg(f, fd && fd->needThis())) {
       // sret return
       llvm::AttrBuilder sretAttrs;
+#if LDC_LLVM_VER >= 1200
+      sretAttrs.addStructRetAttr(DtoType(rt));
+#else
       sretAttrs.addAttribute(LLAttribute::StructRet);
+#endif
       sretAttrs.addAttribute(LLAttribute::NoAlias);
       if (unsigned alignment = DtoAlignment(rt))
         sretAttrs.addAlignmentAttr(alignment);
@@ -183,13 +187,26 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
       loweredDType = merge(ltd);
     } else if (passPointer) {
       // ref/out
-      attrs.addDereferenceableAttr(loweredDType->size());
+      auto ts = loweredDType->toBasetype()->isTypeStruct();
+      if (ts && !ts->sym->members) {
+        // opaque struct
+        attrs.addAttribute(LLAttribute::NonNull);
+#if LDC_LLVM_VER >= 1100
+        attrs.addAttribute(LLAttribute::NoUndef);
+#endif
+      } else {
+        attrs.addDereferenceableAttr(loweredDType->size());
+      }
     } else {
       if (abi->passByVal(f, loweredDType)) {
         // LLVM ByVal parameters are pointers to a copy in the function
         // parameters stack. The caller needs to provide a pointer to the
         // original argument.
+#if LDC_LLVM_VER >= 1200
+        attrs.addByValAttr(DtoType(loweredDType));
+#else
         attrs.addAttribute(LLAttribute::ByVal);
+#endif
         if (auto alignment = DtoAlignment(loweredDType))
           attrs.addAlignmentAttr(alignment);
         passPointer = true;
@@ -650,12 +667,6 @@ void DtoDeclareFunction(FuncDeclaration *fdecl, const bool willDefine) {
 
   func->setCallingConv(gABI->callingConv(link, f, fdecl));
 
-  if (global.params.targetTriple->isOSWindows() && fdecl->isExport()) {
-    func->setDLLStorageClass(fdecl->isImportedSymbol()
-                                 ? LLGlobalValue::DLLImportStorageClass
-                                 : LLGlobalValue::DLLExportStorageClass);
-  }
-
   IF_LOG Logger::cout() << "func = " << *func << std::endl;
 
   // add func to IRFunc
@@ -665,9 +676,12 @@ void DtoDeclareFunction(FuncDeclaration *fdecl, const bool willDefine) {
   // such that they can be overridden by UDAs.
   applyTargetMachineAttributes(*func, *gTargetMachine);
   if (!fdecl->fbody && opts::noPLT) {
-      // Add `NonLazyBind` attribute to function declarations,
-      // the codegen options allow skipping PLT.
-      func->addFnAttr(LLAttribute::NonLazyBind);
+    // Add `NonLazyBind` attribute to function declarations,
+    // the codegen options allow skipping PLT.
+    func->addFnAttr(LLAttribute::NonLazyBind);
+  }
+  if (f->next->toBasetype()->ty == Tnoreturn) {
+    func->addFnAttr(LLAttribute::NoReturn);
   }
 
   applyFuncDeclUDAs(fdecl, irFunc);
@@ -940,7 +954,7 @@ bool eraseDummyAfterReturnBB(llvm::BasicBlock *bb) {
  * to be found.
  */
 void emulateWeakAnyLinkageForMSVC(LLFunction *func, LINK linkage) {
-  const bool isWin32 = !global.params.is64bit;
+  const bool isWin32 = global.params.targetTriple->isArch32Bit();
 
   std::string mangleBuffer;
   llvm::StringRef finalMangle = func->getName();
@@ -1012,9 +1026,10 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
     assert(func);
     if (!linkageAvailableExternally &&
         (func->getLinkage() == llvm::GlobalValue::AvailableExternallyLinkage)) {
-      // Fix linkage
+      // Fix linkage and visibility
       const auto lwc = lowerFuncLinkage(fd);
       setLinkage(lwc, func);
+      setVisibility(fd, func);
     }
     return;
   }
@@ -1140,10 +1155,6 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
     return;
   }
 
-  if (opts::defaultToHiddenVisibility && !fd->isExport()) {
-    func->setVisibility(LLGlobalValue::HiddenVisibility);
-  }
-
   // if this function is naked, we take over right away! no standard processing!
   if (fd->naked) {
     DtoDefineNakedFunction(fd);
@@ -1180,9 +1191,8 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
            lwc.first != llvm::GlobalValue::LinkOnceAnyLinkage);
   } else {
     setLinkage(lwc, func);
+    setVisibility(fd, func);
   }
-
-  assert(!func->hasDLLImportStorageClass());
 
   // function attributes
   if (gABI->needsUnwindTables()) {
@@ -1241,8 +1251,8 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
     emitDMDStyleFunctionTrace(*gIR, fd, funcGen);
   }
 
-  // disable frame-pointer-elimination for functions with inline asm
-  if (fd->hasReturnExp & 8) // has inline asm
+  // disable frame-pointer-elimination for functions with DMD-style inline asm
+  if (fd->hasReturnExp & 32)
   {
 #if LDC_LLVM_VER >= 800
     func->addFnAttr(
@@ -1372,6 +1382,7 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   }
 
   if (func->getLinkage() == LLGlobalValue::WeakAnyLinkage &&
+      !func->hasDLLExportStorageClass() &&
       global.params.targetTriple->isWindowsMSVCEnvironment()) {
     emulateWeakAnyLinkageForMSVC(func, fd->linkage);
   }

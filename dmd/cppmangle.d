@@ -4,7 +4,7 @@
  * This is the POSIX side of the implementation.
  * It exports two functions to C++, `toCppMangleItanium` and `cppTypeInfoMangleItanium`.
  *
- * Copyright: Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright: Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * Authors: Walter Bright, http://www.digitalmars.com
  * License:   $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/cppmangle.d, _cppmangle.d)
@@ -614,8 +614,10 @@ private final class CppMangleVisitor : Visitor
 
         if (!ti)
         {
+            auto ag = s.isAggregateDeclaration();
+            const ident = (ag && ag.mangleOverride) ? ag.mangleOverride.id : s.ident;
             this.writeNamespace(s.cppnamespace, () {
-                this.writeIdentifier(s.ident);
+                this.writeIdentifier(ident);
                 this.abiTags.writeSymbol(s, this);
                 },
                 haveNE);
@@ -641,12 +643,30 @@ private final class CppMangleVisitor : Visitor
             template_args(ti);
             if (!haveNE && isNested)
                 buf.writeByte('E');
+            return;
         }
         else if (this.writeStdSubstitution(ti, needsTa))
         {
             this.abiTags.writeSymbol(ti, this);
             if (needsTa)
                 template_args(ti);
+            return;
+        }
+
+        auto ag = ti.aliasdecl ? ti.aliasdecl.isAggregateDeclaration() : null;
+        if (ag && ag.mangleOverride)
+        {
+            this.writeNamespace(
+                ti.toAlias().cppnamespace, () {
+                    this.writeIdentifier(ag.mangleOverride.id);
+                    if (ag.mangleOverride.agg && ag.mangleOverride.agg.isInstantiated())
+                    {
+                        auto to = ag.mangleOverride.agg.isInstantiated();
+                        append(to);
+                        this.abiTags.writeSymbol(to.tempdecl, this);
+                        template_args(to);
+                    }
+              }, haveNE);
         }
         else
         {
@@ -1623,6 +1643,14 @@ extern(C++):
         writeBasicType(t, 'D', 'n');
     }
 
+    override void visit(TypeNoreturn t)
+    {
+        if (t.isImmutable() || t.isShared())
+            return error(t);
+
+        writeBasicType(t, 0, 'v');      // mangle like `void`
+    }
+
     override void visit(TypeBasic t)
     {
         if (t.isImmutable() || t.isShared())
@@ -1835,7 +1863,7 @@ extern(C++):
         if (t.isImmutable() || t.isShared())
             return error(t);
 
-        /* __c_(u)long(long) get special mangling
+        /* __c_(u)long(long) and others get special mangling
          */
         const id = t.sym.ident;
         //printf("enum id = '%s'\n", id.toChars());
@@ -1849,6 +1877,12 @@ extern(C++):
             return writeBasicType(t, 0, 'x');
         else if (id == Id.__c_ulonglong)
             return writeBasicType(t, 0, 'y');
+        else if (id == Id.__c_complex_float)
+            return writeBasicType(t, 'C', 'f');
+        else if (id == Id.__c_complex_double)
+            return writeBasicType(t, 'C', 'd');
+        else if (id == Id.__c_complex_real)
+            return writeBasicType(t, 'C', 'e');
 
         doSymbol(t);
     }

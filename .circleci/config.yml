@@ -20,36 +20,33 @@ commonSteps: &commonSteps
             apt-get -yq install \
               git-core cmake ninja-build $gcc_pkg \
               llvm-dev zlib1g-dev libclang-common-$LIBCLANG_COMMON_VERSION-dev \
-              $libcurl_pkg curl gdb python tzdata unzip zip \
+              $libcurl_pkg curl gdb python3 python3-pip tzdata unzip zip \
               $EXTRA_APT_PACKAGES
           else
             # Download & extract CMake
-            curl -L -o cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v3.19.4/cmake-3.19.4-macos-universal.tar.gz
+            curl --max-time 300 --retry 3 -L -o cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v3.20.3/cmake-3.20.3-macos-universal.tar.gz
             mkdir cmake
             tar -xf cmake.tar.gz --strip 3 -C cmake
             rm cmake.tar.gz
             # Download & extract Ninja
-            curl -OL https://github.com/ninja-build/ninja/releases/download/v1.10.2/ninja-mac.zip
+            curl --max-time 60 --retry 3 -OL https://github.com/ninja-build/ninja/releases/download/v1.10.2/ninja-mac.zip
             mkdir ninja
             tar -xf ninja-mac.zip -C ninja
             rm ninja-mac.zip
             # Download & extract LDC-flavoured LLVM with enabled assertions
-            curl -L -o llvm.tar.xz https://github.com/ldc-developers/llvm-project/releases/download/ldc-v$LLVM_VERSION/llvm-$LLVM_VERSION-osx-x86_64-withAsserts.tar.xz
+            curl --max-time 300 --retry 3 -L -o llvm.tar.xz https://github.com/ldc-developers/llvm-project/releases/download/ldc-v$LLVM_VERSION/llvm-$LLVM_VERSION-osx-x86_64-withAsserts.tar.xz
             mkdir llvm
             tar -xf llvm.tar.xz --strip 1 -C llvm
             rm llvm.tar.xz
             # Add CMake, Ninja and LLVM to PATH for future steps
             echo "export PATH=$PWD/cmake/bin:$PWD/ninja:$PWD/llvm/bin:$PATH" >> $BASH_ENV
           fi
-          # Install pip
-          curl --max-time 300 --retry 3 -OL https://bootstrap.pypa.io/2.7/get-pip.py
-          python get-pip.py --user
-          rm get-pip.py
           # Install lit
-          python -m pip install --user lit
-          python -c "import lit.main; lit.main.main();" --version . | head -n 1
+          python3 --version
+          python3 -m pip install --user lit
+          python3 -c "import lit.main; lit.main.main();" --version . | head -n 1
           # Download & extract host LDC
-          curl -L -o ldc2.tar.xz https://github.com/ldc-developers/ldc/releases/download/v$HOST_LDC_VERSION/ldc2-$HOST_LDC_VERSION-$CI_OS-x86_64.tar.xz
+          curl --max-time 300 --retry 3 -L -o ldc2.tar.xz https://github.com/ldc-developers/ldc/releases/download/v$HOST_LDC_VERSION/ldc2-$HOST_LDC_VERSION-$CI_OS-x86_64.tar.xz
           mkdir host-ldc
           tar -xf ldc2.tar.xz --strip 1 -C host-ldc
           rm ldc2.tar.xz
@@ -71,10 +68,10 @@ commonSteps: &commonSteps
             -DD_COMPILER=$PWD/../host-ldc/bin/ldmd2 \
             -DLDC_LINK_MANUALLY=OFF \
             $EXTRA_CMAKE_FLAGS
-          # Work around out-of-memory errors - retry twice with parallelization and one last time serially
+          # Work around out-of-memory errors - retry once with parallelization and one last time serially
           targets='all ldc2-unittest all-test-runners'
-          for i in {1..3}; do
-            ninja -j$PARALLELISM $targets && break || true
+          for i in {1..2}; do
+            ninja -j$PARALLELISM -k0 $targets && break || true
           done
           ninja -j1 $targets
           bin/ldc2 -version
@@ -85,7 +82,7 @@ commonSteps: &commonSteps
     - run:
         name: Run LIT testsuite
         when: always
-        command: cd ../build/tests && python runlit.py -v -j $PARALLELISM .
+        command: cd ../build/tests && python3 runlit.py -v -j $PARALLELISM .
     - run:
         name: Run DMD testsuite
         when: always
@@ -131,7 +128,7 @@ jobs:
     environment:
       - PARALLELISM: 4
       - CI_OS: osx
-      - LLVM_VERSION: 11.0.1
+      - LLVM_VERSION: 12.0.0
       - HOST_LDC_VERSION: 1.24.0
       - EXTRA_CMAKE_FLAGS: "-DBUILD_LTO_LIBS=ON"
   macOS-x64-sharedLibsOnly:
@@ -141,7 +138,7 @@ jobs:
     environment:
       - PARALLELISM: 4
       - CI_OS: osx
-      - LLVM_VERSION: 11.0.1
+      - LLVM_VERSION: 12.0.0
       - HOST_LDC_VERSION: 1.24.0
       - EXTRA_CMAKE_FLAGS: "-DBUILD_SHARED_LIBS=ON -DBUILD_LTO_LIBS=ON"
 

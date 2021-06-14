@@ -178,6 +178,7 @@ Where:\n\
 #endif
 "  -fPIC             generate position independent code\n\
   -g                add symbolic debug info\n\
+  -gdwarf=<version> add DWARF symbolic debug info\n\
   -gf               emit debug info for all referenced types\n\
   -gs               always emit stack frame\n"
 #if 0
@@ -400,38 +401,55 @@ void translateArgs(const llvm::SmallVectorImpl<const char *> &ldmdArgs,
         // Parse:
         //      -check=[assert|bounds|in|invariant|out|switch][=[on|off]]
         const char *arg = p + 7;
-        const auto argLength = strlen(arg);
-        bool enabled = false;
-        size_t kindLength = 0;
-        if (argLength > 3 && memcmp(arg + argLength - 3, "=on", 3) == 0) {
-          enabled = true;
-          kindLength = argLength - 3;
-        } else if (argLength > 4 &&
-                   memcmp(arg + argLength - 4, "=off", 4) == 0) {
-          enabled = false;
-          kindLength = argLength - 4;
+        if (strcmp(arg, "on") == 0) {
+          ldcArgs.push_back("-boundscheck=on");
+          ldcArgs.push_back("-enable-asserts");
+          ldcArgs.push_back("-enable-preconditions");
+          ldcArgs.push_back("-enable-invariants");
+          ldcArgs.push_back("-enable-postconditions");
+          ldcArgs.push_back("-enable-switch-errors");
+        } else if (strcmp(arg, "off") == 0) {
+          ldcArgs.push_back("-boundscheck=off");
+          ldcArgs.push_back("-disable-asserts");
+          ldcArgs.push_back("-disable-preconditions");
+          ldcArgs.push_back("-disable-invariants");
+          ldcArgs.push_back("-disable-postconditions");
+          ldcArgs.push_back("-disable-switch-errors");
         } else {
-          enabled = true;
-          kindLength = argLength;
-        }
-
-        const auto check = [&](size_t dmdLength, const char *dmd,
-                               const char *ldc) {
-          if (kindLength == dmdLength && memcmp(arg, dmd, dmdLength) == 0) {
-            ldcArgs.push_back(concat(enabled ? "-enable-" : "-disable-", ldc));
-            return true;
+          const auto argLength = strlen(arg);
+          bool enabled = false;
+          size_t kindLength = 0;
+          if (argLength > 3 && memcmp(arg + argLength - 3, "=on", 3) == 0) {
+            enabled = true;
+            kindLength = argLength - 3;
+          } else if (argLength > 4 &&
+                     memcmp(arg + argLength - 4, "=off", 4) == 0) {
+            enabled = false;
+            kindLength = argLength - 4;
+          } else {
+            enabled = true;
+            kindLength = argLength;
           }
-          return false;
-        };
 
-        if (kindLength == 6 && memcmp(arg, "bounds", 6) == 0) {
-          ldcArgs.push_back(enabled ? "-boundscheck=on" : "-boundscheck=off");
-        } else if (!(check(6, "assert", "asserts") ||
-                     check(2, "in", "preconditions") ||
-                     check(9, "invariant", "invariants") ||
-                     check(3, "out", "postconditions") ||
-                     check(6, "switch", "switch-errors"))) {
-          goto Lerror;
+          const auto check = [&](size_t dmdLength, const char *dmd,
+                                 const char *ldc) {
+            if (kindLength == dmdLength && memcmp(arg, dmd, dmdLength) == 0) {
+              ldcArgs.push_back(
+                  concat(enabled ? "-enable-" : "-disable-", ldc));
+              return true;
+            }
+            return false;
+          };
+
+          if (kindLength == 6 && memcmp(arg, "bounds", 6) == 0) {
+            ldcArgs.push_back(enabled ? "-boundscheck=on" : "-boundscheck=off");
+          } else if (!(check(6, "assert", "asserts") ||
+                       check(2, "in", "preconditions") ||
+                       check(9, "invariant", "invariants") ||
+                       check(3, "out", "postconditions") ||
+                       check(6, "switch", "switch-errors"))) {
+            goto Lerror;
+          }
         }
       }
       /* -checkaction
@@ -475,7 +493,11 @@ void translateArgs(const llvm::SmallVectorImpl<const char *> &ldmdArgs,
       /* -g
        * -gc
        */
-      else if (strcmp(p + 1, "gf") == 0) {
+      else if (startsWith(p + 1, "gdwarf=")) {
+        ldcArgs.push_back("-gdwarf"); // implies -g and enforces DWARF for MSVC
+        ldcArgs.push_back("-dwarf-version");
+        ldcArgs.push_back(p + 8);
+      } else if (strcmp(p + 1, "gf") == 0) {
         ldcArgs.push_back("-g");
       } else if (strcmp(p + 1, "gs") == 0) {
 #if LDC_LLVM_VER >= 1100

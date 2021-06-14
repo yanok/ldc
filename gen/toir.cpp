@@ -965,8 +965,8 @@ public:
       // Also, private/package methods are always non-virtual.
       const bool nonFinal = !fdecl->isFinalFunc() &&
                             (fdecl->isAbstract() || fdecl->isVirtual()) &&
-                            fdecl->prot().kind != Prot::private_ &&
-                            fdecl->prot().kind != Prot::package_;
+                            fdecl->visibility.kind != Visibility::private_ &&
+                            fdecl->visibility.kind != Visibility::package_;
 
       // Get the actual function value to call.
       LLValue *funcval = nullptr;
@@ -1984,7 +1984,7 @@ public:
 
     Type *dtype = e->type->toBasetype();
     LLValue *retPtr = nullptr;
-    if (dtype->ty != Tvoid) {
+    if (!(dtype->ty == Tvoid || dtype->ty == Tnoreturn)) {
       // allocate a temporary for pointer to the final result.
       retPtr = DtoAlloca(dtype->pointerTo(), "condtmp");
     }
@@ -2004,7 +2004,7 @@ public:
     p->ir->SetInsertPoint(condtrue);
     PGO.emitCounterIncrement(e);
     DValue *u = toElem(e->e1);
-    if (retPtr) {
+    if (retPtr && u->type->toBasetype()->ty != Tnoreturn) {
       LLValue *lval = makeLValue(e->loc, u);
       DtoStore(lval, DtoBitCast(retPtr, lval->getType()->getPointerTo()));
     }
@@ -2012,7 +2012,7 @@ public:
 
     p->ir->SetInsertPoint(condfalse);
     DValue *v = toElem(e->e2);
-    if (retPtr) {
+    if (retPtr && v->type->toBasetype()->ty != Tnoreturn) {
       LLValue *lval = makeLValue(e->loc, v);
       DtoStore(lval, DtoBitCast(retPtr, lval->getType()->getPointerTo()));
     }
@@ -2743,28 +2743,6 @@ bool basetypesAreEqualWithoutModifiers(Type *l, Type *r) {
   r = stripModifiers(r->toBasetype(), true);
   return l->equals(r);
 }
-
-Expression *getCommaHead(CommaExp *e) {
-  auto l = e->e1;
-  for (;;) {
-    if (auto ce = l->isCommaExp())
-      l = ce->e1;
-    else
-      break;
-  }
-  return l;
-}
-
-Expression *getCommaTail(CommaExp *e) {
-  auto r = e->e2;
-  for (;;) {
-    if (auto ce = r->isCommaExp())
-      r = ce->e2;
-    else
-      break;
-  }
-  return r;
-}
 }
 
 bool toInPlaceConstruction(DLValue *lhs, Expression *rhs) {
@@ -2861,8 +2839,8 @@ bool toInPlaceConstruction(DLValue *lhs, Expression *rhs) {
   // temporary structs and static arrays too
   if (DtoIsInMemoryOnly(lhsBasetype)) {
     if (auto ce = rhs->isCommaExp()) {
-      Expression *head = getCommaHead(ce);
-      Expression *tail = getCommaTail(ce);
+      Expression *head = ce->getHead();
+      Expression *tail = ce->getTail();
 
       if (auto de = head->isDeclarationExp()) {
         if (auto vd = de->declaration->isVarDeclaration()) {

@@ -427,9 +427,13 @@ void parseCommandLine(Strings &sourceFiles) {
   if (global.params.useDIP1021) // DIP1021 implies DIP1000
     global.params.vsafe = true;
   if (global.params.vsafe) // DIP1000 implies DIP25
-    global.params.useDIP25 = true;
-  if (global.params.noDIP25)
-    global.params.useDIP25 = false;
+    global.params.useDIP25 = FeatureState::enabled;
+  // legacy -dip25 option
+  if (global.params.useDIP25 == FeatureState::default_ &&
+      opts::useDIP25.getNumOccurrences()) {
+    global.params.useDIP25 =
+        opts::useDIP25 ? FeatureState::enabled : FeatureState::disabled;
+  }
 
   global.params.output_o =
       (opts::output_o == cl::BOU_UNSET &&
@@ -499,19 +503,19 @@ void parseCommandLine(Strings &sourceFiles) {
     if (!ext) {
       // keep things as they are
     } else if (opts::output_ll.getNumOccurrences() == 0 &&
-               strcmp(ext, global.ll_ext.ptr) == 0) {
+               strcmp(ext, ll_ext.ptr) == 0) {
       global.params.output_ll = OUTPUTFLAGset;
       global.params.output_o = OUTPUTFLAGno;
     } else if (opts::output_bc.getNumOccurrences() == 0 &&
-               strcmp(ext, global.bc_ext.ptr) == 0) {
+               strcmp(ext, bc_ext.ptr) == 0) {
       global.params.output_bc = OUTPUTFLAGset;
       global.params.output_o = OUTPUTFLAGno;
     } else if (opts::output_s.getNumOccurrences() == 0 &&
-               strcmp(ext, global.s_ext.ptr) == 0) {
+               strcmp(ext, s_ext.ptr) == 0) {
       global.params.output_s = OUTPUTFLAGset;
       global.params.output_o = OUTPUTFLAGno;
     } else if (opts::output_mlir.getNumOccurrences() == 0 &&
-               strcmp(ext, global.mlir_ext.ptr) == 0) {
+               strcmp(ext, mlir_ext.ptr) == 0) {
       global.params.output_mlir = OUTPUTFLAGset;
       global.params.output_o = OUTPUTFLAGno;
     }
@@ -725,7 +729,7 @@ void registerPredefinedTargetVersions() {
   }
 
   // Set versions for arch bitwidth
-  if (global.params.isLP64) {
+  if (gDataLayout->getPointerSizeInBits() == 64) {
     VersionCondition::addPredefinedGlobalIdent("D_LP64");
   } else if (triple.isArch16Bit()) {
     VersionCondition::addPredefinedGlobalIdent("D_P16");
@@ -752,8 +756,8 @@ void registerPredefinedTargetVersions() {
   switch (triple.getOS()) {
   case llvm::Triple::Win32:
     VersionCondition::addPredefinedGlobalIdent("Windows");
-    VersionCondition::addPredefinedGlobalIdent(global.params.is64bit ? "Win64"
-                                                                     : "Win32");
+    VersionCondition::addPredefinedGlobalIdent(triple.isArch64Bit() ? "Win64"
+                                                                    : "Win32");
     if (triple.isWindowsMSVCEnvironment()) {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Microsoft");
       VersionCondition::addPredefinedGlobalIdent("CppRuntime_Microsoft");
@@ -1078,63 +1082,32 @@ int cppmain() {
   static llvm::DataLayout DL = gTargetMachine->createDataLayout();
   gDataLayout = &DL;
 
-  {
-    llvm::Triple *triple = new llvm::Triple(gTargetMachine->getTargetTriple());
-    global.params.targetTriple = triple;
+  llvm::Triple *triple = new llvm::Triple(gTargetMachine->getTargetTriple());
+  global.params.targetTriple = triple;
 
-    if (triple->isOSLinux()) {
-      global.params.targetOS = TargetOS_linux;
-    } else if (triple->isOSDarwin()) {
-      global.params.targetOS = TargetOS_OSX;
-    } else if (triple->isOSWindows()) {
-      global.params.targetOS = TargetOS_Windows;
-    } else if (triple->isOSFreeBSD()) {
-      global.params.targetOS = TargetOS_FreeBSD;
-    } else if (triple->isOSOpenBSD()) {
-      global.params.targetOS = TargetOS_OpenBSD;
-    } else if (triple->isOSDragonFly()) {
-      global.params.targetOS = TargetOS_DragonFlyBSD;
-    } else if (triple->isOSSolaris()) {
-      global.params.targetOS = TargetOS_Solaris;
-    }
-
-    global.params.isLP64 = gDataLayout->getPointerSizeInBits() == 64;
-    global.params.is64bit = triple->isArch64Bit();
-    global.params.hasObjectiveC = objc_isSupported(*triple);
-    global.params.dwarfVersion = gTargetMachine->Options.MCOptions.DwarfVersion;
-    // mscoff enables slightly different handling of interface functions
-    // in the front end
-    global.params.mscoff = triple->isKnownWindowsMSVCEnvironment();
-    if (global.params.mscoff)
-      global.obj_ext = {3, "obj"};
-  }
+  global.params.dwarfVersion = gTargetMachine->Options.MCOptions.DwarfVersion;
 
   // -gdwarf implies -g if not specified explicitly
   if (opts::emitDwarfDebugInfo && global.params.symdebug == 0) {
     global.params.symdebug = 1;
   }
 
+  if (triple->isOSWindows()) {
+    const auto v = opts::symbolVisibility.getValue();
+    global.params.dllexport =
+        v == opts::SymbolVisibility::public_ ||
+        // default with -shared
+        (v == opts::SymbolVisibility::default_ && global.params.dll);
+    global.params.dllimport =
+        v == opts::SymbolVisibility::public_ ||
+        // enforced when linking against shared default libs
+        linkAgainstSharedDefaultLibs();
+  }
+
   // allocate the target abi
   gABI = TargetABI::getTarget();
 
-  if (global.params.targetTriple->isOSWindows()) {
-    global.dll_ext = {3, "dll"};
-    if (global.params.mscoff) {
-      global.lib_ext = {3, "lib"};
-    } else {
-      global.lib_ext = {1, "a"};
-    }
-  } else {
-    if (global.params.targetTriple->isOSDarwin()) {
-      global.dll_ext = {5, "dylib"};
-    } else {
-      global.dll_ext = {2, "so"};
-    }
-    global.lib_ext = {1, "a"};
-  }
-
-  opts::initializeInstrumentationOptionsFromCmdline(
-      *global.params.targetTriple);
+  opts::initializeInstrumentationOptionsFromCmdline(*triple);
 
   loadAllPlugins();
 

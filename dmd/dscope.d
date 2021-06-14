@@ -3,7 +3,7 @@
  *
  * Not to be confused with the `scope` storage class.
  *
- * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/dscope.d, _dscope.d)
@@ -36,12 +36,13 @@ import dmd.root.outbuffer;
 import dmd.root.rmem;
 import dmd.root.speller;
 import dmd.statement;
+import dmd.target;
 import dmd.tokens;
 
 //version=LOGSEARCH;
 
 
-// Flags that would not be inherited beyond scope nesting
+// List of flags that can be applied to this `Scope`
 enum SCOPE
 {
     ctor          = 0x0001,   /// constructor type
@@ -68,10 +69,11 @@ enum SCOPE
     scanf         = 0x8_0000, /// scanf-style function
 }
 
-// Flags that are carried along with a scope push()
-enum SCOPEpush = SCOPE.contract | SCOPE.debug_ | SCOPE.ctfe | SCOPE.compile | SCOPE.constraint |
-                 SCOPE.noaccesscheck | SCOPE.onlysafeaccess | SCOPE.ignoresymbolvisibility |
-                 SCOPE.printf | SCOPE.scanf;
+/// Flags that are carried along with a scope push()
+private enum PersistentFlags =
+    SCOPE.contract | SCOPE.debug_ | SCOPE.ctfe | SCOPE.compile | SCOPE.constraint |
+    SCOPE.noaccesscheck | SCOPE.onlysafeaccess | SCOPE.ignoresymbolvisibility |
+    SCOPE.printf | SCOPE.scanf;
 
 struct Scope
 {
@@ -121,9 +123,9 @@ struct Scope
     /// inlining strategy for functions
     PragmaDeclaration inlining;
 
-    /// protection for class members
-    Prot protection = Prot(Prot.Kind.public_);
-    int explicitProtection;         /// set if in an explicit protection attribute
+    /// visibility for class members
+    Visibility visibility = Visibility(Visibility.Kind.public_);
+    int explicitVisibility;         /// set if in an explicit visibility attribute
 
     StorageClass stc;               /// storage class
 
@@ -213,7 +215,7 @@ version (IN_LLVM)
         s.slabel = null;
         s.nofree = false;
         s.ctorflow.fieldinit = ctorflow.fieldinit.arraydup;
-        s.flags = (flags & SCOPEpush);
+        s.flags = (flags & PersistentFlags);
         s.lastdc = null;
         assert(&this != s);
         return s;
@@ -559,7 +561,7 @@ version (IN_LLVM)
             if (scopesym != s.parent)
             {
                 ++cost; // got to the symbol through an import
-                if (s.prot().kind == Prot.Kind.private_)
+                if (s.visible().kind == Visibility.Kind.private_)
                     return null;
             }
             return s;
@@ -582,6 +584,7 @@ version (IN_LLVM)
      */
     extern (D) static const(char)* search_correct_C(Identifier ident)
     {
+        import dmd.mtype : Twchar;
         TOK tok;
         if (ident == Id.NULL)
             tok = TOK.null_;
@@ -592,7 +595,7 @@ version (IN_LLVM)
         else if (ident == Id.unsigned)
             tok = TOK.uns32;
         else if (ident == Id.wchar_t)
-            tok = global.params.targetOS == TargetOS.Windows ? TOK.wchar_ : TOK.dchar_;
+            tok = target.c.wchar_tsize == 2 ? TOK.wchar_ : TOK.dchar_;
         else
             return null;
         return Token.toChars(tok);
@@ -699,7 +702,7 @@ version (IN_LLVM)
     *
     * Returns: `true` if this or any parent scope is deprecated, `false` otherwise`
     */
-    extern(C++) bool isDeprecated() const
+    extern(C++) bool isDeprecated() @safe @nogc pure nothrow const
     {
         for (const(Dsymbol)* sp = &(this.parent); *sp; sp = &(sp.parent))
         {

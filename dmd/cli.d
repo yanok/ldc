@@ -5,7 +5,7 @@
  * However, this file will be used to generate the
  * $(LINK2 https://dlang.org/dmd-linux.html, online documentation) and MAN pages.
  *
- * Copyright:   Copyright (C) 1999-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/cli.d, _cli.d)
@@ -35,8 +35,8 @@ enum TargetOS : ubyte
     DragonFlyBSD = 0x40,
 
     // Combination masks
-    all = linux | Windows | OSX | FreeBSD | Solaris | DragonFlyBSD,
-    Posix = linux | OSX | FreeBSD | Solaris | DragonFlyBSD,
+    all = linux | Windows | OSX | OpenBSD | FreeBSD | Solaris | DragonFlyBSD,
+    Posix = linux | OSX | OpenBSD | FreeBSD | Solaris | DragonFlyBSD,
 }
 
 // Detect the current TargetOS
@@ -51,6 +51,10 @@ else version(Windows)
 else version(OSX)
 {
     private enum targetOS = TargetOS.OSX;
+}
+else version(OpenBSD)
+{
+    private enum targetOS = TargetOS.OpenBSD;
 }
 else version(FreeBSD)
 {
@@ -351,6 +355,10 @@ dmd -cov -unittest myprog.d
             "generate position independent code",
             cast(TargetOS) (TargetOS.all & ~(TargetOS.Windows | TargetOS.OSX))
         ),
+        Option("fPIE",
+            "generate position independent executables",
+            cast(TargetOS) (TargetOS.all & ~(TargetOS.Windows | TargetOS.OSX))
+        ),
         Option("g",
             "add symbolic debug info",
             `$(WINDOWS
@@ -358,10 +366,15 @@ dmd -cov -unittest myprog.d
                 $(LINK2 http://dlang.org/windbg.html, Debugging on Windows).
             )
             $(UNIX
-                Add symbolic debug info in Dwarf format
+                Add symbolic debug info in DWARF format
                 for debuggers such as
                 $(D gdb)
             )`,
+        ),
+        Option("gdwarf=<version>",
+            "add DWARF symbolic debug info",
+            "The value of version may be 3, 4 or 5, defaulting to 3.",
+            cast(TargetOS) (TargetOS.all & ~cast(uint)TargetOS.Windows)
         ),
         Option("gf",
             "emit debug info for all referenced types",
@@ -764,7 +777,7 @@ dmd -cov -unittest myprog.d
         Feature("field", "vfield",
             "list all non-mutable fields which occupy an object instance"),
         Feature("complex", "vcomplex",
-            "give deprecation messages about all usages of complex or imaginary types"),
+            "give deprecation messages about all usages of complex or imaginary types", false, true),
         Feature("tls", "vtls",
             "list all variables going into thread local storage"),
         Feature("vmarkdown", "vmarkdown",
@@ -773,8 +786,9 @@ dmd -cov -unittest myprog.d
 
     /// Returns all available reverts
     static immutable reverts = [
-        Feature("dip25", "noDIP25", "revert DIP25 changes https://github.com/dlang/DIPs/blob/master/DIPs/archive/DIP25.md"),
+        Feature("dip25", "useDIP25", "revert DIP25 changes https://github.com/dlang/DIPs/blob/master/DIPs/archive/DIP25.md"),
         Feature("markdown", "markdown", "disable Markdown replacements in Ddoc"),
+        Feature("dtorfields", "dtorFields", "don't destruct fields of partially constructed objects"),
     ];
 
     /// Returns all available previews
@@ -793,7 +807,7 @@ dmd -cov -unittest myprog.d
         Feature("intpromote", "fix16997",
             "fix integral promotions for unary + - ~ operators"),
         Feature("dtorfields", "dtorFields",
-            "destruct fields of partially constructed objects"),
+            "destruct fields of partially constructed objects", false, false),
         Feature("rvaluerefparam", "rvalueRefParam",
             "enable rvalue arguments to ref parameters"),
         Feature("nosharedaccess", "noSharedAccess",
@@ -802,6 +816,8 @@ dmd -cov -unittest myprog.d
             "`in` on parameters means `scope const [ref]` and accepts rvalues"),
         Feature("inclusiveincontracts", "inclusiveInContracts",
             "'in' contracts of overridden methods must be a superset of parent contract"),
+        Feature("shortenedMethods", "shortenedMethods",
+            "allow use of => for methods and top-level functions in addition to lambdas"),
         // DEPRECATED previews
         // trigger deprecation message once D repositories don't use this flag anymore
         Feature("markdown", "markdown", "enable Markdown replacements in Ddoc", false, false),
@@ -938,5 +954,14 @@ version (IN_LLVM) {} else
   =silent               Silently ignore non-exern(C[++]) declarations
   =verbose              Add a comment for ignored non-exern(C[++]) declarations
 ";
+
+    /// Options supported by -gdwarf
+    enum gdwarfUsage = "Available DWARF versions:
+  =[h|help|?]           List information on choices
+  =3                    Emit DWARF version 3 debug information
+  =4                    Emit DWARF version 4 debug information
+  =5                    Emit DWARF version 5 debug information
+";
+
 } // !IN_LLVM
 }

@@ -26,7 +26,7 @@ if(MULTILIB AND "${TARGET_SYSTEM}" MATCHES "APPLE")
         set(druntime_path "${CMAKE_BINARY_DIR}/lib${LIB_SUFFIX}/libdruntime-ldc.a")
     endif()
 else()
-    set(shared_druntime_path "$<TARGET_FILE:druntime-ldc${SHARED_LIB_SUFFIX}>")
+    set(shared_druntime_path "$<TARGET_LINKER_FILE:druntime-ldc${SHARED_LIB_SUFFIX}>")
     if(${BUILD_SHARED_LIBS} STREQUAL "ON")
         set(druntime_path ${shared_druntime_path})
     else()
@@ -55,17 +55,29 @@ endif()
 list(REMOVE_ITEM testnames uuid) # MSVC only, custom Makefile (win64.mak)
 
 foreach(name ${testnames})
-    set(outdir ${PROJECT_BINARY_DIR}/druntime-test-${name})
-    add_test(NAME clean-druntime-test-${name}
-        COMMAND ${CMAKE_COMMAND} -E remove_directory ${outdir}
-    )
-    add_test(NAME druntime-test-${name}
-        COMMAND ${GNU_MAKE_BIN} -C ${PROJECT_SOURCE_DIR}/druntime/test/${name}
-            ROOT=${outdir} DMD=${LDMD_EXE_FULL} MODEL=default
-            DRUNTIME=${druntime_path} DRUNTIMESO=${shared_druntime_path}
-            ${cflags_base} ${linkdl}
-    )
-    set_tests_properties(druntime-test-${name}
-        PROPERTIES DEPENDS clean-druntime-test-${name}
-    )
+    foreach(build debug release)
+        set(druntime_path_build ${druntime_path})
+        set(shared_druntime_path_build ${shared_druntime_path})
+        if(${build} STREQUAL "debug")
+            string(REPLACE "druntime-ldc" "druntime-ldc-debug" druntime_path_build ${druntime_path_build})
+            string(REPLACE "druntime-ldc" "druntime-ldc-debug" shared_druntime_path_build ${shared_druntime_path_build})
+        endif()
+
+        set(fullname druntime-test-${name}-${build})
+        set(outdir ${PROJECT_BINARY_DIR}/${fullname})
+        add_test(NAME clean-${fullname}
+            COMMAND ${CMAKE_COMMAND} -E remove_directory ${outdir}
+        )
+        add_test(NAME ${fullname}
+            COMMAND ${GNU_MAKE_BIN} -C ${PROJECT_SOURCE_DIR}/druntime/test/${name}
+                ROOT=${outdir} DMD=${LDMD_EXE_FULL} MODEL=default BUILD=${build}
+                DRUNTIME=${druntime_path_build} DRUNTIMESO=${shared_druntime_path_build}
+                ${cflags_base} ${linkdl}
+        )
+        set_tests_properties(${fullname} PROPERTIES DEPENDS clean-${fullname})
+    endforeach()
 endforeach()
+
+# HACK: there's a race condition for the debug/release coverage tests
+#       (temporary in-place modification of source file)
+set_tests_properties(druntime-test-coverage-release PROPERTIES DEPENDS druntime-test-coverage-debug)

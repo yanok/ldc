@@ -1,6 +1,6 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 2013-2020 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 2013-2021 by The D Language Foundation, All Rights Reserved
  * written by Iain Buclaw
  * http://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
@@ -21,22 +21,74 @@ class Dsymbol;
 class Expression;
 class FuncDeclaration;
 class Parameter;
+class Statement;
 class Type;
 class TypeTuple;
 class TypeFunction;
 
+#if IN_LLVM
+namespace llvm { class Type; }
+#endif
+
+enum class CPU
+{
+    x87,
+    mmx,
+    sse,
+    sse2,
+    sse3,
+    ssse3,
+    sse4_1,
+    sse4_2,
+    avx,                // AVX1 instruction set
+    avx2,               // AVX2 instruction set
+    avx512,             // AVX-512 instruction set
+
+    // Special values that don't survive past the command line processing
+    baseline,           // (default) the minimum capability CPU
+    native              // the machine the compiler is being run on
+};
+
 struct TargetC
 {
+    enum class Runtime : unsigned char
+    {
+        Unspecified,
+        Bionic,
+        DigitalMars,
+        Glibc,
+        Microsoft,
+        Musl,
+        Newlib,
+        UClibc,
+        WASI,
+    };
     unsigned longsize;            // size of a C 'long' or 'unsigned long' type
     unsigned long_doublesize;     // size of a C 'long double'
-    unsigned criticalSectionSize; // size of os critical section
+    unsigned wchar_tsize;         // size of a C 'wchar_t' type
+#if !IN_LLVM
+    Runtime runtime;
+#endif
 };
 
 struct TargetCPP
 {
+    enum class Runtime : unsigned char
+    {
+        Unspecified,
+        Clang,
+        DigitalMars,
+        Gcc,
+        Microsoft,
+        Sun
+    };
     bool reverseOverloads;    // with dmc and cl, overloaded functions are grouped and in reverse order
     bool exceptions;          // set if catching C++ exceptions is supported
     bool twoDtorInVtable;     // target C++ ABI puts deleting and non-deleting destructor into vtable
+    bool wrapDtorInExternD;   // set if C++ dtors require a D wrapper to be callable from runtime
+#if !IN_LLVM
+    Runtime runtime;
+#endif
 
     const char *toMangle(Dsymbol *s);
     const char *typeInfoMangle(ClassDeclaration *cd);
@@ -44,6 +96,7 @@ struct TargetCPP
     const char *typeMangle(Type *t);
     Type *parameterType(Parameter *p);
     bool fundamentalType(const Type *t, bool& isFundamental);
+    unsigned derivedClassOffset(ClassDeclaration *baseClass);
 };
 
 struct TargetObjC
@@ -53,8 +106,32 @@ struct TargetObjC
 
 struct Target
 {
+    typedef unsigned char OS;
+    enum
+    {
+        /* These are mutually exclusive; one and only one is set.
+         * Match spelling and casing of corresponding version identifiers
+         */
+        OS_Freestanding = 0,
+        OS_linux        = 1,
+        OS_Windows      = 2,
+        OS_OSX          = 4,
+        OS_OpenBSD      = 8,
+        OS_FreeBSD      = 0x10,
+        OS_Solaris      = 0x20,
+        OS_DragonFlyBSD = 0x40,
+
+        // Combination masks
+        all = OS_linux | OS_Windows | OS_OSX | OS_OpenBSD | OS_FreeBSD | OS_Solaris | OS_DragonFlyBSD,
+        Posix = OS_linux | OS_OSX | OS_OpenBSD | OS_FreeBSD | OS_Solaris | OS_DragonFlyBSD,
+    };
+
+    OS os;
     // D ABI
     unsigned ptrsize;
+#if IN_LLVM
+    llvm::Type *realType;
+#endif
     unsigned realsize;           // size a real consumes in memory
     unsigned realpad;            // 'padding' added to the CPU real size to bring it up to realsize
     unsigned realalignsize;      // alignment for reals
@@ -71,6 +148,16 @@ struct Target
     TargetObjC objc;
 
     DString architectureName;    // name of the platform architecture (e.g. X86_64)
+    CPU cpu;                // CPU instruction set to target
+    bool is64bit;           // generate 64 bit code for x86_64; true by default for 64 bit dmd
+    bool isLP64;            // pointers are 64 bits
+
+    // Environmental
+    DString obj_ext;    /// extension for object files
+    DString lib_ext;    /// extension for static library files
+    DString dll_ext;    /// extension for dynamic library files
+    bool run_noext;     /// allow -run sources without extensions
+    bool mscoff;        /// for Win32: write COFF object files instead of OMF
 
     template <typename T>
     struct FPTypeProperties
@@ -106,11 +193,6 @@ public:
     // Type sizes and support.
     unsigned alignsize(Type *type);
     unsigned fieldalign(Type *type);
-#if IN_LLVM
-    unsigned critsecsize(const Loc &loc);
-#else
-    unsigned critsecsize();
-#endif
     Type *va_listType(const Loc &loc, Scope *sc);  // get type of va_list
     int isVectorTypeSupported(int sz, Type *type);
     bool isVectorOpSupported(Type *type, TOK op, Type *t2 = NULL);
@@ -121,6 +203,9 @@ public:
     d_uns64 parameterSize(const Loc& loc, Type *t);
     bool preferPassByRef(Type *t);
     Expression *getTargetInfo(const char* name, const Loc& loc);
+    bool isCalleeDestroyingArgs(TypeFunction* tf);
+    bool libraryObjectMonitors(FuncDeclaration *fd, Statement *fbody);
+    void addPredefinedGlobalIdentifiers() const;
 };
 
 extern Target target;
