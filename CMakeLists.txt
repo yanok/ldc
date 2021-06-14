@@ -379,7 +379,6 @@ set(DRV_SRC
     driver/dcomputecodegenerator.cpp
     driver/exe_path.cpp
     driver/targetmachine.cpp
-    driver/timetrace.cpp
     driver/toobj.cpp
     driver/tool.cpp
     driver/archiver.cpp
@@ -623,6 +622,9 @@ if(LDC_WITH_LLD)
     endif()
 endif()
 
+# Allow user to specify mimalloc.o location
+set(ALTERNATIVE_MALLOC_O   ""     CACHE STRING "If specified, adds ALTERNATIVE_MALLOC_O object file to LDC link, to override the CRT malloc.")
+
 # Plugin support
 if(UNIX)
     set(LDC_ENABLE_PLUGINS_DEFAULT ON)
@@ -671,7 +673,7 @@ build_d_executable(
     "${LDC_EXE_FULL}"
     "${LDC_D_SOURCE_FILES}"
     "${DFLAGS_BUILD_TYPE} ${DFLAGS_LDC}"
-    "${LDC_LINKERFLAG_LIST}"
+    "${ALTERNATIVE_MALLOC_O};${LDC_LINKERFLAG_LIST}"
     "${FE_RES}"
     "${LDC_LIB}"
     ${COMPILE_D_MODULES_SEPARATELY}
