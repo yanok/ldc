@@ -2110,7 +2110,7 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
                         if (f)
                         {
                             if (f.tookAddressOf)
-                                f.tookAddressOf--;
+                                --f.tookAddressOf;
                             //printf("--tookAddressOf = %d\n", f.tookAddressOf);
                         }
                     }
