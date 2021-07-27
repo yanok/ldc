@@ -625,9 +625,6 @@ if(LDC_WITH_LLD)
     endif()
 endif()
 
-# Allow user to specify mimalloc.o location
-set(ALTERNATIVE_MALLOC_O   ""     CACHE STRING "If specified, adds ALTERNATIVE_MALLOC_O object file to LDC link, to override the CRT malloc.")
-
 # Plugin support
 if(UNIX)
     set(LDC_ENABLE_PLUGINS_DEFAULT ON)
