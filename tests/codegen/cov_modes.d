@@ -7,6 +7,17 @@
 // RUN: %ldc --cov --cov-increment=non-atomic --output-ll -of=%t.nonatomic.ll %s && FileCheck --check-prefix=ALL --check-prefix=NONATOMIC %s < %t.nonatomic.ll
 // RUN: %ldc --cov --cov-increment=boolean    --output-ll -of=%t.boolean.ll   %s && FileCheck --check-prefix=ALL --check-prefix=BOOLEAN   %s < %t.boolean.ll
 
+
+// REQUIRES: Linux
+// RUN: mkdir %t
+// RUN: mkdir %t/atomic    && %ldc --cov --cov-increment=atomic     --run %s --DRT-covopt="dstpath:%t/atomic"
+// RUN: mkdir %t/nonatomic && %ldc --cov --cov-increment=non-atomic --run %s --DRT-covopt="dstpath:%t/nonatomic"
+// RUN: mkdir %t/boolean   && %ldc --cov --cov-increment=boolean    --run %s --DRT-covopt="dstpath:%t/boolean"
+// Some sed xargs magic to replace '/' with '-' in the filename, and replace the extension '.d' with '.lst'
+// RUN: echo %s | sed -e "s,/,-,g" -e "s,\(.*\).d,\1.lst," | xargs printf "%%s%%s" "%t/atomic/"    | xargs cat | FileCheck --check-prefix=ATOMIC_LST %s
+// RUN: echo %s | sed -e "s,/,-,g" -e "s,\(.*\).d,\1.lst," | xargs printf "%%s%%s" "%t/nonatomic/" | xargs cat | FileCheck --check-prefix=NONATOMIC_LST %s
+// RUN: echo %s | sed -e "s,/,-,g" -e "s,\(.*\).d,\1.lst," | xargs printf "%%s%%s" "%t/boolean/"   | xargs cat | FileCheck --check-prefix=BOOLEAN_LST %s
+
 void f2()
 {
 }
@@ -27,4 +38,7 @@ void main()
 {
     foreach (i; 0..10)
         f1();
+    // ATOMIC_LST: {{^ *}}10|        f1();
+    // NONATOMIC_LST: {{^ *}}10|        f1();
+    // BOOLEAN_LST: {{^ *}}1|        f1();
 }

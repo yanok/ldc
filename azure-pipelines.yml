@@ -1,7 +1,7 @@
 # syntax: https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema
 
 variables:
-  LLVM_VERSION: 12.0.0
+  LLVM_VERSION: 12.0.1
   CLANG_VERSION: 11.1.0
   HOST_LDC_VERSION: 1.24.0
 
@@ -123,7 +123,9 @@ jobs:
         installed/bin/ldc2 -mtriple="arm64-apple-macos" hello.d -of=hello_arm64
         installed/bin/ldc2 -mtriple="arm64-apple-macos" hello.d -of=hello_arm64_shared -link-defaultlib-shared
         installed/bin/ldc2 -mtriple="arm64-apple-ios$IOS_DEPLOYMENT_TARGET" hello.d -of=hello_ios_arm64
+        installed/bin/ldc2 -mtriple="arm64-apple-ios$IOS_DEPLOYMENT_TARGET" hello.d -of=hello_ios_arm64_shared -link-defaultlib-shared
         installed/bin/ldc2 -mtriple="x86_64-apple-ios$IOS_DEPLOYMENT_TARGET" hello.d -of=hello_ios_x86_64
+        installed/bin/ldc2 -mtriple="x86_64-apple-ios$IOS_DEPLOYMENT_TARGET" hello.d -of=hello_ios_x86_64_shared -link-defaultlib-shared
       displayName: 'Cross-compile & -link hello-world for arm64 and iOS'
     - template: .azure-pipelines/6-package.yml
 

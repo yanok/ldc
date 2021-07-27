@@ -602,7 +602,6 @@ void DtoDeclareFunction(FuncDeclaration *fdecl, const bool willDefine) {
     Logger::println("Function is inside a linkonce_odr template, will be "
                     "defined after declaration.");
     if (fdecl->semanticRun < PASSsemantic3done) {
-      // this can e.g. happen for special __xtoHash member functions
       Logger::println("Function hasn't had sema3 run yet, running it now.");
       const bool semaSuccess = fdecl->functionSemantic3();
       (void)semaSuccess;
@@ -1155,6 +1154,13 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
     return;
   }
 
+  gIR->funcGenStates.emplace_back(new FuncGenState(*irFunc, *gIR));
+  auto &funcGen = gIR->funcGen();
+  SCOPE_EXIT {
+    assert(&gIR->funcGen() == &funcGen);
+    gIR->funcGenStates.pop_back();
+  };
+
   // if this function is naked, we take over right away! no standard processing!
   if (fd->naked) {
     DtoDefineNakedFunction(fd);
@@ -1171,12 +1177,6 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   gIR->DBuilder.EmitSubProgram(fd);
 
   IF_LOG Logger::println("Doing function body for: %s", fd->toChars());
-  gIR->funcGenStates.emplace_back(new FuncGenState(*irFunc, *gIR));
-  auto &funcGen = gIR->funcGen();
-  SCOPE_EXIT {
-    assert(&gIR->funcGen() == &funcGen);
-    gIR->funcGenStates.pop_back();
-  };
 
   const auto f = static_cast<TypeFunction *>(fd->type->toBasetype());
   IrFuncTy &irFty = irFunc->irFty;

@@ -997,22 +997,23 @@ public:
 
     VarDeclaration *vd = nullptr;
 
-    // special cases: `this(int) { this(); }` and `this(int) { super(); }`
-    if (!e->var) {
+    if (e->var) {
+      vd = e->var->isVarDeclaration();
+    } else {
+      // special cases: `this(int) { this(); }` and `this(int) { super(); }`
       Logger::println("this exp without var declaration");
       if (auto thisArg = p->func()->thisArg) {
         result = new DLValue(e->type, thisArg);
         return;
       }
       // use the inner-most parent's `vthis`
-      for (int i = p->funcGenStates.size() - 2; i >= 0; --i) {
-        if (auto vthis = p->funcGenStates[i]->irFunc.decl->vthis) {
+      for (auto fd = getParentFunc(p->func()->decl); fd;
+           fd = getParentFunc(fd)) {
+        if (auto vthis = fd->vthis) {
           vd = vthis;
           break;
         }
       }
-    } else {
-      vd = e->var->isVarDeclaration();
     }
 
     assert(vd);
@@ -2743,6 +2744,18 @@ bool basetypesAreEqualWithoutModifiers(Type *l, Type *r) {
   r = stripModifiers(r->toBasetype(), true);
   return l->equals(r);
 }
+
+VarDeclaration *isTemporaryVar(Expression *e) {
+  if (auto ce = e->isCommaExp())
+    if (auto de = ce->getHead()->isDeclarationExp())
+      if (auto vd = de->declaration->isVarDeclaration())
+        if (vd->storage_class & STCtemp)
+          if (auto ve = ce->getTail()->isVarExp())
+            if (ve->var == vd)
+              return vd;
+
+  return nullptr;
+}
 }
 
 bool toInPlaceConstruction(DLValue *lhs, Expression *rhs) {
@@ -2754,13 +2767,11 @@ bool toInPlaceConstruction(DLValue *lhs, Expression *rhs) {
   // to initialize a `S[1]` lhs with a `S` rhs.
   if (auto ve = rhs->isVarExp()) {
     if (auto symdecl = ve->var->isSymbolDeclaration()) {
-      Type *t = symdecl->type->toBasetype();
-      if (auto ts = t->isTypeStruct()) {
-        // this is the static initializer for a struct (init symbol)
-        StructDeclaration *sd = ts->sym;
+      // exclude void[]-typed `__traits(initSymbol)` (LDC extension)
+      if (symdecl->type->toBasetype()->ty == Tstruct) {
+        auto sd = symdecl->dsym->isStructDeclaration();
         assert(sd);
         DtoResolveStruct(sd);
-
         if (sd->zeroInit) {
           Logger::println("success, zeroing out");
           DtoMemSetZero(DtoLVal(lhs));
@@ -2793,74 +2804,53 @@ bool toInPlaceConstruction(DLValue *lhs, Expression *rhs) {
       return true;
     }
 
-    // DMD issue 17457: detect structliteral.ctor(args)
+    // detect <structliteral | temporary>.ctor(args)
     if (auto dve = ce->e1->isDotVarExp()) {
       auto fd = dve->var->isFuncDeclaration();
       if (fd && fd->isCtorDeclaration()) {
-        if (auto sle = dve->e1->isStructLiteralExp()) {
-          Logger::println("success, in-place-constructing struct literal and "
-                          "invoking ctor");
-          // emit the struct literal directly into the lhs lvalue...
-          auto lval = DtoLVal(lhs);
-          ToElemVisitor::emitStructLiteral(sle, lval);
-          // ... and invoke the ctor directly on it
-          auto fnval = new DFuncValue(fd, DtoCallee(fd), lval);
+        Logger::println("is a constructor call, checking lhs of DotVarExp");
+        if (toInPlaceConstruction(lhs, dve->e1)) {
+          Logger::println("success, calling ctor on in-place constructed lhs");
+          auto fnval = new DFuncValue(fd, DtoCallee(fd), DtoLVal(lhs));
           DtoCallFunction(ce->loc, ce->type, fnval, ce->arguments);
           return true;
         }
       }
     }
   }
-
   // emit struct literals directly into the lhs lvalue
-  if (auto sle = rhs->isStructLiteralExp()) {
+  else if (auto sle = rhs->isStructLiteralExp()) {
     Logger::println("success, in-place-constructing struct literal");
     ToElemVisitor::emitStructLiteral(sle, DtoLVal(lhs));
     return true;
   }
-
-  // static array literals too
-  Type *lhsBasetype = lhs->type->toBasetype();
-  if (auto al = rhs->isArrayLiteralExp()) {
-    if (lhsBasetype->ty == Tsarray) {
+  // and static array literals
+  else if (auto al = rhs->isArrayLiteralExp()) {
+    if (lhs->type->toBasetype()->ty == Tsarray) {
       Logger::println("success, in-place-constructing array literal");
       initializeArrayLiteral(gIR, al, DtoLVal(lhs));
       return true;
     }
   }
-
-  // vector literals too
-  if (auto ve = rhs->isVectorExp()) {
+  // and vector literals
+  else if (auto ve = rhs->isVectorExp()) {
     Logger::println("success, in-place-constructing vector");
     ToElemVisitor::emitVector(ve, DtoLVal(lhs));
     return true;
   }
-
-  // temporary structs and static arrays too
-  if (DtoIsInMemoryOnly(lhsBasetype)) {
-    if (auto ce = rhs->isCommaExp()) {
-      Expression *head = ce->getHead();
-      Expression *tail = ce->getTail();
-
-      if (auto de = head->isDeclarationExp()) {
-        if (auto vd = de->declaration->isVarDeclaration()) {
-          if (auto ve = tail->isVarExp()) {
-            if (ve->var == vd) {
-              Logger::println("success, in-place-constructing temporary");
-              auto lhsLVal = DtoLVal(lhs);
-              auto rhsLVal = DtoLVal(rhs);
-              if (!llvm::isa<llvm::AllocaInst>(rhsLVal)) {
-                error(rhs->loc, "lvalue of temporary is not an alloca, please "
-                                "file an LDC issue");
-                fatal();
-              }
-              rhsLVal->replaceAllUsesWith(lhsLVal);
-              return true;
-            }
-          }
-        }
-      }
+  // and temporaries
+  else if (isTemporaryVar(rhs)) {
+    Logger::println("success, in-place-constructing temporary");
+    auto lhsLVal = DtoLVal(lhs);
+    auto rhsLVal = DtoLVal(rhs);
+    if (!llvm::isa<llvm::AllocaInst>(rhsLVal)) {
+      error(rhs->loc, "lvalue of temporary is not an alloca, please "
+                      "file an LDC issue");
+      fatal();
     }
+    if (lhsLVal != rhsLVal)
+      rhsLVal->replaceAllUsesWith(lhsLVal);
+    return true;
   }
 
   return false;

@@ -2139,6 +2139,12 @@ public:
         }
         else if (SymbolDeclaration s = d.isSymbolDeclaration())
         {
+version (IN_LLVM)
+{
+            // exclude void[]-typed `__traits(initSymbol)` (LDC extension)
+            if (s.type.toBasetype().ty != Tstruct)
+                return CTFEExp.cantexp;
+}
             // Struct static initializers, for example
             e = s.dsym.type.defaultInitLiteral(loc);
             if (e.op == TOK.error)
@@ -2214,6 +2220,15 @@ public:
         result = getVarExp(e.loc, istate, e.var, goal);
         if (exceptionOrCant(result))
             return;
+
+        // Visit the default initializer for noreturn variables
+        // (Custom initializers would abort the current function call and exit above)
+        if (result.type.ty == Tnoreturn)
+        {
+            result.accept(this);
+            return;
+        }
+
         if ((e.var.storage_class & (STC.ref_ | STC.out_)) == 0 && e.type.baseElemOf().ty != Tstruct)
         {
             /* Ultimately, STC.ref_|STC.out_ check should be enough to see the

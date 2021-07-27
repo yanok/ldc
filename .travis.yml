@@ -8,12 +8,12 @@ matrix:
   include:
     - os: linux
       arch: arm64
-      d: ldc-beta
+      d: ldc-1.26.0
       env: LLVM_VERSION=12.0.0 CC=gcc-8 CXX=g++-8 OPTS="-DLDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH=aarch64 -DADDITIONAL_DEFAULT_LDC_SWITCHES='\"-linker=bfd\",' -DCOMPILE_ALL_D_FILES_AT_ONCE=OFF"
 
 cache:
   directories:
-    - llvm-11.0.1
+    - llvm-$LLVM_VERSION
 
 addons:
   apt:
@@ -40,6 +40,7 @@ before_install:
 
 install:
   # Install lit
+  - python3 -m pip install --user setuptools wheel
   - python3 -m pip install --user lit
   - |
     set -o pipefail

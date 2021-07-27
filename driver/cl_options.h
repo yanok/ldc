@@ -85,6 +85,7 @@ extern FloatABI::Type floatABI;
 extern cl::opt<bool> disableLinkerStripDead;
 enum class SymbolVisibility { default_, hidden, public_ };
 extern cl::opt<SymbolVisibility> symbolVisibility;
+extern cl::opt<DLLImport, true> dllimport;
 extern cl::opt<bool> noPLT;
 extern cl::opt<bool> useDIP25;
 
@@ -100,7 +101,6 @@ extern std::vector<std::string> debugArgs;
 void createClashingOptions();
 void hideLLVMOptions();
 
-#if IN_WEKA
 enum class CoverageIncrement
 {
     _default,
@@ -109,7 +109,6 @@ enum class CoverageIncrement
     boolean
 };
 extern cl::opt<CoverageIncrement> coverageIncrement;
-#endif
 
 // Compilation time tracing options
 extern cl::opt<bool> fTimeTrace;

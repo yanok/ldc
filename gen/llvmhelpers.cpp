@@ -1573,23 +1573,32 @@ DValue *DtoSymbolAddress(const Loc &loc, Type *type, Declaration *decl) {
   }
 
   if (SymbolDeclaration *sdecl = decl->isSymbolDeclaration()) {
-    // this seems to be the static initialiser for structs
-    Type *sdecltype = sdecl->type->toBasetype();
-    IF_LOG Logger::print("Sym: type=%s\n", sdecltype->toChars());
-    assert(sdecltype->ty == Tstruct);
-    TypeStruct *ts = static_cast<TypeStruct *>(sdecltype);
-    StructDeclaration *sd = ts->sym;
-    assert(sd);
-    DtoResolveStruct(sd);
+    // this is the static initialiser (init symbol) for aggregates
+    AggregateDeclaration *ad = sdecl->dsym;
+    IF_LOG Logger::print("Sym: ad=%s\n", ad->toChars());
+    DtoResolveDsymbol(ad);
+    auto sd = ad->isStructDeclaration();
 
+    // LDC extension: void[]-typed `__traits(initSymbol)`, for classes too
+    auto tb = sdecl->type->toBasetype();
+    if (tb->ty != Tstruct) {
+      assert(tb->ty == Tarray && tb->nextOf()->ty == Tvoid);
+      const auto size = DtoConstSize_t(ad->structsize);
+      llvm::Constant *ptr =
+          sd && sd->zeroInit
+              ? getNullValue(getVoidPtrType())
+              : DtoBitCast(getIrAggr(ad)->getInitSymbol(), getVoidPtrType());
+      return new DSliceValue(type, size, ptr);
+    }
+
+    assert(sd);
     if (sd->zeroInit) {
       error(loc, "no init symbol for zero-initialized struct");
       fatal();
     }
 
     LLValue *initsym = getIrAggr(sd)->getInitSymbol();
-    initsym = DtoBitCast(initsym, DtoType(ts->pointerTo()));
-    return new DLValue(type, initsym);
+    return new DLValue(type, DtoBitCast(initsym, DtoPtrToType(sd->type)));
   }
 
   llvm_unreachable("Unimplemented VarExp type");
@@ -1668,6 +1677,38 @@ std::string llvmTypeToString(llvm::Type *type) {
   stream << *type;
   stream.flush();
   return result;
+}
+
+// Is the specified symbol defined in the druntime/Phobos libs?
+// Note: fuzzy semantics for instantiated symbols, except with
+// -linkonce-templates.
+static bool isDefaultLibSymbol(Dsymbol *sym) {
+  if (defineOnDeclare(sym))
+    return false;
+
+  auto mod = sym->getModule();
+  if (!mod)
+    return false;
+
+  auto md = mod->md;
+  if (!md)
+    return false;
+
+  if (md->packages.length == 0)
+    return md->id == Id::object || md->id == Id::std;
+
+  auto p = md->packages.ptr[0];
+  return p == Id::core || p == Id::etc || p == Id::ldc ||
+         (p == Id::std &&
+          // 3rd-party package: std.io (https://github.com/MartinNowak/io/)
+          !((md->packages.length == 1 && md->id == Id::io) ||
+            (md->packages.length > 1 && md->packages.ptr[1] == Id::io)));
+}
+
+bool dllimportSymbol(Dsymbol *sym) {
+  return sym->isExport() || global.params.dllimport == DLLImport::all ||
+         (global.params.dllimport == DLLImport::defaultLibsOnly &&
+          isDefaultLibSymbol(sym));
 }
 
 llvm::GlobalVariable *declareGlobal(const Loc &loc, llvm::Module &module,

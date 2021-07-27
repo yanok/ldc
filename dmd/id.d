@@ -520,7 +520,8 @@ immutable Msgtable[] msgtable =
     // IN_LLVM: LDC-specific traits.
     { "targetCPU" },
     { "targetHasFeature" },
-    
+    { "initSymbol" },
+
     // IN_LLVM: LDC-specific attributes
     { "ldc" },
     { "attributes" },
@@ -544,6 +545,9 @@ immutable Msgtable[] msgtable =
     { "dcPointer", "Pointer" },
     { "dcReflect", "__dcompute_reflect" },
     { "RTInfoImpl" },
+
+    // IN_LLVM
+    { "io" },
 ];
 
 
