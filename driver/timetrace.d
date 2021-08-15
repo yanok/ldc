@@ -68,7 +68,7 @@ const(char)[] getTimeTraceProfileFilename(const(char)* filename_cstr)
     }
     if (filename.length == 0)
     {
-        if (global.params.objfiles[0])
+        if (global.params.objfiles.length)
         {
             filename = global.params.objfiles[0].toDString() ~ ".time-trace";
         }
@@ -112,7 +112,7 @@ void writeTimeTraceProfile(const(char)* filename_cstr)
 extern(C++)
 void timeTraceProfilerBegin(const(char)* name_ptr, const(char)* detail_ptr, Loc loc)
 {
-    import dmd.root.rmem;
+    import dmd.root.rmem : xarraydup;
     import core.stdc.string : strdup;
 
     assert(timeTraceProfiler);
@@ -121,8 +121,8 @@ void timeTraceProfilerBegin(const(char)* name_ptr, const(char)* detail_ptr, Loc 
     if (loc.filename)
         loc.filename = strdup(loc.filename);
 
-    timeTraceProfiler.beginScope(mem.xstrdup(name_ptr).toDString(),
-                                 mem.xstrdup(detail_ptr).toDString(), loc);
+    timeTraceProfiler.beginScope(xarraydup(name_ptr.toDString()),
+                                 xarraydup(detail_ptr.toDString()), loc);
 }
 
 extern(C++)
@@ -136,69 +136,58 @@ void timeTraceProfilerEnd()
 
 struct TimeTraceProfiler
 {
-    uint timeGranularity;
+    import core.time;
+    alias long TimeTicks;
+
+    TimeTicks timeGranularity;
     uint memoryGranularity;
     const(char)[] processName;
     const(char)[] pidtid_string = `"pid":101,"tid":101`;
 
-    timer_t beginningOfTime;
+    TimeTicks beginningOfTime;
     Array!CounterEvent counterEvents;
     Array!DurationEvent durationEvents;
     Array!DurationEvent durationStack;
 
-    // timeBegin / time_scale = time in microseconds
-    static if (is(typeof(&QueryPerformanceFrequency)))
-        timer_t time_scale = 1_000;
-    else
-        enum time_scale = 1_000;
-
     struct CounterEvent
     {
         size_t memoryInUse;
-        size_t allocatedMemory;
+        ulong allocatedMemory;
         size_t numberOfGCCollections;
-        timer_t timepoint;
+        TimeTicks timepoint;
     }
     struct DurationEvent
     {
         const(char)[] name;
         const(char)[] details;
         Loc loc;
-        timer_t timeBegin;
-        timer_t timeDuration;
+        TimeTicks timeBegin;
+        TimeTicks timeDuration;
     }
 
     @disable this();
     @disable this(this);
 
-    this(uint timeGranularity, uint memoryGranularity, const(char)* processName)
+    this(uint timeGranularity_usecs, uint memoryGranularity, const(char)* processName)
     {
-        this.timeGranularity = timeGranularity;
+        this.timeGranularity = timeGranularity_usecs * (MonoTime.ticksPerSecond() / 1_000_000);
         this.memoryGranularity = memoryGranularity;
         this.processName = processName.toDString();
+        this.beginningOfTime = getTimeTicks();
+    }
 
-        static if (is(typeof(&QueryPerformanceFrequency)))
-        {
-            timer_t freq;
-            QueryPerformanceFrequency(&freq);
-            time_scale = freq / 1_000_000;
-        }
-
-        timer_t time;
-        QueryPerformanceCounter(&time);
-        this.beginningOfTime = time / time_scale;
+    TimeTicks getTimeTicks()
+    {
+        return MonoTime.currTime().ticks();
     }
 
     void beginScope(const(char)[] name, const(char)[] details, Loc loc)
     {
-        timer_t time;
-        QueryPerformanceCounter(&time);
-
         DurationEvent event;
         event.name = name;
         event.details = details;
         event.loc = loc;
-        event.timeBegin = time / time_scale;
+        event.timeBegin = getTimeTicks();
         durationStack.push(event);
 
         //counterEvents.push(generateCounterEvent(event.timeBegin));
@@ -206,9 +195,7 @@ struct TimeTraceProfiler
 
     void endScope()
     {
-        timer_t timeEnd;
-        QueryPerformanceCounter(&timeEnd);
-        timeEnd /= time_scale;
+        TimeTicks timeEnd = getTimeTicks();
 
         DurationEvent event = durationStack.pop();
         event.timeDuration = timeEnd - event.timeBegin;
@@ -221,19 +208,22 @@ struct TimeTraceProfiler
         }
     }
 
-    CounterEvent generateCounterEvent(timer_t timepoint)
+    CounterEvent generateCounterEvent(TimeTicks timepoint)
     {
         static import dmd.root.rmem;
         CounterEvent counters;
         if (dmd.root.rmem.mem.isGCEnabled)
         {
-            import core.memory : GC;
-            auto stats = GC.stats();
-            auto profileStats = GC.profileStats();
+            static if (__VERSION__ >= 2085)
+            {
+                import core.memory : GC;
+                auto stats = GC.stats();
+                auto profileStats = GC.profileStats();
 
-            counters.allocatedMemory = stats.allocatedInCurrentThread;
-            counters.memoryInUse = stats.usedSize;
-            counters.numberOfGCCollections = profileStats.numCollections;
+                counters.allocatedMemory = stats.usedSize + stats.freeSize;
+                counters.memoryInUse = stats.usedSize;
+                counters.numberOfGCCollections = profileStats.numCollections;
+            }
         }
         else
         {
@@ -253,8 +243,11 @@ struct TimeTraceProfiler
 
     void writePrologue(OutBuffer* buf)
     {
+        // Time is to be output in microseconds
+        long timescale = MonoTime.ticksPerSecond() / 1_000_000;
+
         buf.write("{\n\"beginningOfTime\":");
-        buf.print(beginningOfTime);
+        buf.print(beginningOfTime / timescale);
         buf.write(",\n\"traceEvents\": [\n");
     }
 
@@ -296,10 +289,13 @@ struct TimeTraceProfiler
     {
         // {"ph":"C","name":"ctr","ts":111,"args": {"Allocated_Memory_bytes":  0, "hello":  0}},
 
-        foreach (event; counterEvents)
+        // Time is to be output in microseconds
+        long timescale = MonoTime.ticksPerSecond() / 1_000_000;
+
+        foreach (const ref event; counterEvents)
         {
             buf.write(`{"ph":"C","name":"ctr","ts":`);
-            buf.print(event.timepoint);
+            buf.print(event.timepoint / timescale);
             buf.write(`,"args": {"memoryInUse_bytes":`);
             buf.print(event.memoryInUse);
             buf.write(`,"allocatedMemory_bytes":`);
@@ -333,14 +329,17 @@ struct TimeTraceProfiler
             }
         }
 
+        // Time is to be output in microseconds
+        long timescale = MonoTime.ticksPerSecond() / 1_000_000;
+
         foreach (event; durationEvents)
         {
             buf.write(`{"ph":"X","name": "`);
             writeEscapeJSONString(buf, event.name);
             buf.write(`","ts":`);
-            buf.print(event.timeBegin);
+            buf.print(event.timeBegin / timescale);
             buf.write(`,"dur":`);
-            buf.print(event.timeDuration);
+            buf.print(event.timeDuration / timescale);
             buf.write(`,"loc":"`);
             writeLocation(event.loc);
             buf.write(`","args":{"detail": "`);
@@ -438,85 +437,3 @@ private void writeEscapeJSONString(OutBuffer* buf, const(char[]) str)
 }
 
 
-/// Implementation of clock based on rt/trace.d:
-/**
- * Contains support code for code profiling.
- *
- * Copyright: Copyright Digital Mars 1995 - 2017.
- * License: Distributed under the
- *      $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost Software License 1.0).
- *    (See accompanying file LICENSE)
- * Authors:   Walter Bright, Sean Kelly, the LDC team
- * Source: $(DRUNTIMESRC rt/_trace.d)
- */
-
-alias long timer_t;
-
-version (Windows)
-{
-    extern (Windows)
-    {
-        export int QueryPerformanceCounter(timer_t *);
-        export int QueryPerformanceFrequency(timer_t *);
-    }
-}
-else version (AArch64)
-{
-    // We cannot use ldc.intrinsics.llvm_readcyclecounter because that is not an accurate
-    // time counter (it is a counter of CPU cycles, where here we want a time clock).
-    // Also, priviledged execution rights are needed to enable correct counting with
-    // ldc.intrinsics.llvm_readcyclecounter on AArch64.
-    extern (D) void QueryPerformanceCounter(timer_t* ctr)
-    {
-        asm { "mrs %0, cntvct_el0" : "=r" (*ctr); }
-    }
-    extern (D) void QueryPerformanceFrequency(timer_t* freq)
-    {
-        asm { "mrs %0, cntfrq_el0" : "=r" (*freq); }
-    }
-}
-else version (LDC)
-{
-    extern (D) void QueryPerformanceCounter(timer_t* ctr)
-    {
-        import ldc.intrinsics: llvm_readcyclecounter;
-        *ctr = llvm_readcyclecounter();
-    }
-}
-else
-{
-    extern (D) void QueryPerformanceCounter(timer_t* ctr)
-    {
-        version (D_InlineAsm_X86)
-        {
-            asm
-            {
-                naked                   ;
-                mov       ECX,EAX       ;
-                rdtsc                   ;
-                mov   [ECX],EAX         ;
-                mov   4[ECX],EDX        ;
-                ret                     ;
-            }
-        }
-        else version (D_InlineAsm_X86_64)
-        {
-            asm
-            {
-                naked                   ;
-                // rdtsc can produce skewed results without preceding lfence/mfence.
-                // this is what GNU/Linux does, but only use mfence here.
-                // see https://github.com/torvalds/linux/blob/03b9730b769fc4d87e40f6104f4c5b2e43889f19/arch/x86/include/asm/msr.h#L130-L154
-                mfence                  ; // serialize rdtsc instruction.
-                rdtsc                   ;
-                mov   [RDI],EAX         ;
-                mov   4[RDI],EDX        ;
-                ret                     ;
-            }
-        }
-        else
-        {
-            static assert(0);
-        }
-    }
-}

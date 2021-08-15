@@ -19,7 +19,8 @@ import ldc.intrinsics;
 // FINE: ftime-trace.d:[[@LINE+1]]
 int foo()
 {
-    return 1;
+    enum s = ctfe();
+    return s;
 }
 
 void main()
@@ -28,4 +29,4 @@ void main()
 }
 
 // ALL-DAG: ExecuteCompiler
-// ALL-DAG: Linking executable
+// FINE-DAG: Linking executable
