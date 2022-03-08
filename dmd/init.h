@@ -1,10 +1,10 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
- * http://www.digitalmars.com
+ * https://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
- * http://www.boost.org/LICENSE_1_0.txt
+ * https://www.boost.org/LICENSE_1_0.txt
  * https://github.com/dlang/dmd/blob/master/src/dmd/init.h
  */
 
@@ -23,6 +23,7 @@ class VoidInitializer;
 class StructInitializer;
 class ArrayInitializer;
 class ExpInitializer;
+class CInitializer;
 
 enum NeedInterpret { INITnointerpret, INITinterpret };
 
@@ -39,6 +40,7 @@ public:
     StructInitializer  *isStructInitializer();
     ArrayInitializer   *isArrayInitializer();
     ExpInitializer     *isExpInitializer();
+    CInitializer       *isCInitializer();
 
     void accept(Visitor *v) { v->visit(this); }
 };
@@ -86,6 +88,28 @@ class ExpInitializer : public Initializer
 public:
     bool expandTuples;
     Expression *exp;
+
+    void accept(Visitor *v) { v->visit(this); }
+};
+
+struct Designator
+{
+    Expression *exp;
+    Identifier *ident;
+};
+
+struct DesigInit
+{
+    Designators *designatorList;
+    Initializer *initializer;
+};
+
+class CInitializer : public Initializer
+{
+public:
+    DesigInits initializerList;
+    Type *type;         // type that array will be used to initialize
+    bool sem;           // true if semantic() is run
 
     void accept(Visitor *v) { v->visit(this); }
 };

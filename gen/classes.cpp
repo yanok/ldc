@@ -30,6 +30,7 @@
 #include "gen/structs.h"
 #include "gen/tollvm.h"
 #include "ir/iraggr.h"
+#include "ir/irdsymbol.h"
 #include "ir/irfunction.h"
 #include "ir/irtypeclass.h"
 
@@ -79,20 +80,9 @@ DValue *DtoNewClass(const Loc &loc, TypeClass *tc, NewExp *newexp) {
   LLValue *mem;
   bool doInit = true;
   if (newexp->onstack) {
-    unsigned alignment = tc->sym->alignsize;
-    if (alignment == STRUCTALIGN_DEFAULT)
-      alignment = 0;
-    mem = DtoRawAlloca(DtoType(tc)->getContainedType(0), alignment,
+    mem = DtoRawAlloca(DtoType(tc)->getContainedType(0), tc->sym->alignsize,
                        ".newclass_alloca");
-  }
-  // custom allocator
-  else if (newexp->allocator) {
-    DFuncValue dfn(newexp->allocator, DtoCallee(newexp->allocator));
-    DValue *res = DtoCallFunction(newexp->loc, nullptr, &dfn, newexp->newargs);
-    mem = DtoBitCast(DtoRVal(res), DtoType(tc), ".newclass_custom");
-  }
-  // default allocator
-  else {
+  } else {
     const bool useEHAlloc = global.params.ehnogc && newexp->thrownew;
     llvm::Function *fn = getRuntimeFunction(
         loc, gIR->module, useEHAlloc ? "_d_newThrowable" : "_d_allocclass");
@@ -231,14 +221,14 @@ DValue *DtoCastClass(const Loc &loc, DValue *val, Type *_to) {
   Type *to = _to->toBasetype();
 
   // class -> pointer
-  if (to->ty == Tpointer) {
+  if (to->ty == TY::Tpointer) {
     IF_LOG Logger::println("to pointer");
     LLType *tolltype = DtoType(_to);
     LLValue *rval = DtoBitCast(DtoRVal(val), tolltype);
     return new DImValue(_to, rval);
   }
   // class -> bool
-  if (to->ty == Tbool) {
+  if (to->ty == TY::Tbool) {
     IF_LOG Logger::println("to bool");
     LLValue *llval = DtoRVal(val);
     LLValue *zero = LLConstant::getNullValue(llval->getType());
@@ -257,13 +247,13 @@ DValue *DtoCastClass(const Loc &loc, DValue *val, Type *_to) {
     return DtoCastInt(loc, &im, _to);
   }
   // class -> typeof(null)
-  if (to->ty == Tnull) {
+  if (to->ty == TY::Tnull) {
     IF_LOG Logger::println("to %s", to->toChars());
     return new DImValue(_to, LLConstant::getNullValue(DtoType(_to)));
   }
 
   // must be class/interface
-  assert(to->ty == Tclass);
+  assert(to->ty == TY::Tclass);
   TypeClass *tc = static_cast<TypeClass *>(to);
 
   // from type
@@ -288,10 +278,9 @@ DValue *DtoCastClass(const Loc &loc, DValue *val, Type *_to) {
     LLValue *orig = DtoRVal(val);
     LLValue *v = orig;
     if (offset != 0) {
+      assert(offset > 0);
       v = DtoBitCast(v, getVoidPtrType());
-      LLValue *off =
-          LLConstantInt::get(LLType::getInt32Ty(gIR->context()), offset);
-      v = gIR->ir->CreateGEP(v, off);
+      v = DtoGEP1(v, DtoConstUint(offset));
     }
     IF_LOG {
       Logger::cout() << "V = " << *v << std::endl;
@@ -416,7 +405,7 @@ LLValue *DtoVirtualFunctionPointer(DValue *inst, FuncDeclaration *fdecl) {
   // sanity checks
   assert(fdecl->isVirtual());
   assert(!fdecl->isFinalFunc());
-  assert(inst->type->toBasetype()->ty == Tclass);
+  assert(inst->type->toBasetype()->ty == TY::Tclass);
   // slot 0 is always ClassInfo/Interface* unless it is a CPP class
   assert(fdecl->vtblIndex > 0 ||
          (fdecl->vtblIndex == 0 &&

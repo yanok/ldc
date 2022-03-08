@@ -1,45 +1,131 @@
 /**
  * An expandable buffer in which you can write text or binary data.
  *
- * Copyright: Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:   Walter Bright, http://www.digitalmars.com
- * License:   $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright: Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:   Walter Bright, https://www.digitalmars.com
+ * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/root/outbuffer.d, root/_outbuffer.d)
  * Documentation: https://dlang.org/phobos/dmd_root_outbuffer.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/root/outbuffer.d
  */
 
-module dmd.root.outbuffer;
+module dmd.common.outbuffer;
 
 import core.stdc.stdarg;
 import core.stdc.stdio;
 import core.stdc.string;
-import dmd.root.rmem;
-import dmd.root.rootobject;
-import dmd.root.string;
+import core.stdc.stdlib;
+
+// In theory these functions should also restore errno, but we don't care because
+// we abort application on error anyway.
+extern (C) private pure @system @nogc nothrow
+{
+    pragma(mangle, "malloc") void* pureMalloc(size_t);
+    pragma(mangle, "realloc") void* pureRealloc(void* ptr, size_t size);
+    pragma(mangle, "free") void pureFree(void* ptr);
+}
 
 debug
 {
     debug = stomp; // flush out dangling pointer problems by stomping on unused memory
 }
 
+/**
+`OutBuffer` is a write-only output stream of untyped data. It is backed up by
+a contiguous array or a memory-mapped file.
+*/
 struct OutBuffer
 {
+    import dmd.common.file : FileMapping, touchFile, writeFile;
+
+    // IMPORTANT: PLEASE KEEP STATE AND DESTRUCTOR IN SYNC WITH DEFINITION IN ./outbuffer.h.
+    // state {
     private ubyte[] data;
     private size_t offset;
     private bool notlinehead;
-
+    /// File mapping, if any. Use a pointer for ABI compatibility with the C++ counterpart.
+    /// If the pointer is non-null the store is a memory-mapped file, otherwise the store is RAM.
+    private FileMapping!ubyte* fileMapping;
     /// Whether to indent
     bool doindent;
     /// Whether to indent by 4 spaces or by tabs;
     bool spaces;
     /// Current indent level
     int level;
+    // state }
 
-    extern (C++) ~this() pure nothrow
+    /**
+    Construct given size.
+    */
+    this(size_t initialSize) nothrow
     {
-        debug (stomp) memset(data.ptr, 0xFF, data.length);
-        mem.xfree(data.ptr);
+        reserve(initialSize);
+    }
+
+    /**
+    Construct from filename. Will map the file into memory (or create it anew
+    if necessary) and start writing at the beginning of it.
+
+    Params:
+    filename = zero-terminated name of file to map into memory
+    */
+    @trusted this(const(char)* filename)
+    {
+        FileMapping!ubyte model;
+        fileMapping = cast(FileMapping!ubyte*) malloc(model.sizeof);
+        memcpy(fileMapping, &model, model.sizeof);
+        fileMapping.__ctor(filename);
+        //fileMapping = new FileMapping!ubyte(filename);
+        data = (*fileMapping)[];
+    }
+
+    /**
+    Frees resources associated.
+    */
+    extern (C++) void dtor() nothrow @trusted
+    {
+        if (fileMapping)
+        {
+            if (fileMapping.active)
+                fileMapping.close();
+            fileMapping = null;
+        }
+        else
+        {
+            debug (stomp) memset(data.ptr, 0xFF, data.length);
+            free(data.ptr);
+        }
+    }
+
+    /**
+    Frees resources associated automatically.
+    */
+    extern (C++) ~this() pure nothrow @trusted
+    {
+        if (fileMapping)
+        {
+            if (fileMapping.active)
+                fileMapping.close();
+            fileMapping = null;
+        }
+        else
+        {
+            debug (stomp) memset(data.ptr, 0xFF, data.length);
+            pureFree(data.ptr);
+        }
+    }
+
+    /// For porting with ease from dmd.backend.outbuf.Outbuffer
+    ubyte* buf() nothrow {
+        return data.ptr;
+    }
+
+    /// For porting with ease from dmd.backend.outbuf.Outbuffer
+    ubyte** bufptr() nothrow {
+        static struct Array { size_t length; ubyte* ptr; }
+        auto a = cast(Array*) &data;
+        assert(a.length == data.length && a.ptr == data.ptr);
+        return &a.ptr;
     }
 
     extern (C++) size_t length() const pure @nogc @safe nothrow { return offset; }
@@ -57,35 +143,66 @@ struct OutBuffer
         return p;
     }
 
+    /**
+    Releases all resources associated with `this` and resets it as an empty
+    memory buffer. The config variables `notlinehead`, `doindent` etc. are
+    not changed.
+    */
     extern (C++) void destroy() pure nothrow @trusted
     {
-        debug (stomp) memset(data.ptr, 0xFF, data.length);
-        mem.xfree(extractData());
+        if (fileMapping && fileMapping.active)
+        {
+            fileMapping.close();
+            data = null;
+            offset = 0;
+        }
+        else
+        {
+            debug (stomp) memset(data.ptr, 0xFF, data.length);
+            pureFree(extractData());
+        }
     }
 
+    /**
+    Reserves `nbytes` bytes of additional memory (or file space) in advance.
+    The resulting capacity is at least the previous length plus `nbytes`.
+
+    Params:
+    nbytes = the number of additional bytes to reserve
+    */
     extern (C++) void reserve(size_t nbytes) pure nothrow
     {
         //debug (stomp) printf("OutBuffer::reserve: size = %lld, offset = %lld, nbytes = %lld\n", data.length, offset, nbytes);
-        if (data.length - offset < nbytes)
-        {
-            /* Increase by factor of 1.5; round up to 16 bytes.
-             * The odd formulation is so it will map onto single x86 LEA instruction.
-             */
-            const size = (((offset + nbytes) * 3 + 30) / 2) & ~15;
+        const minSize = offset + nbytes;
+        if (data.length >= minSize)
+            return;
 
+        /* Increase by factor of 1.5; round up to 16 bytes.
+            * The odd formulation is so it will map onto single x86 LEA instruction.
+            */
+        const size = ((minSize * 3 + 30) / 2) & ~15;
+
+        if (fileMapping && fileMapping.active)
+        {
+            fileMapping.resize(size);
+            data = (*fileMapping)[];
+        }
+        else
+        {
             debug (stomp)
             {
-                auto p = cast(ubyte*)mem.xmalloc(size);
+                auto p = cast(ubyte*) pureMalloc(size);
+                p || assert(0, "OutBuffer: out of memory.");
                 memcpy(p, data.ptr, offset);
                 memset(data.ptr, 0xFF, data.length);  // stomp old location
-                mem.xfree(data.ptr);
+                pureFree(data.ptr);
                 memset(p + offset, 0xff, size - offset); // stomp unused data
             }
             else
             {
-                auto p = cast(ubyte*)mem.xrealloc(data.ptr, size);
-                if (mem.isGCEnabled) // clear currently unused data to avoid false pointers
-                    memset(p + offset + nbytes, 0xff, size - offset - nbytes);
+                auto p = cast(ubyte*) pureRealloc(data.ptr, size);
+                p || assert(0, "OutBuffer: out of memory.");
+                memset(p + offset + nbytes, 0xff, size - offset - nbytes);
             }
             data = p[0 .. size];
         }
@@ -98,7 +215,7 @@ struct OutBuffer
      */
     extern (C++) void setsize(size_t size) pure nothrow @nogc @safe
     {
-        assert(size <= offset);
+        assert(size <= data.length);
         offset = size;
     }
 
@@ -119,6 +236,14 @@ struct OutBuffer
         notlinehead = true;
     }
 
+    // Write an array to the buffer, no reserve check
+    @trusted nothrow
+    void writen(const void *b, size_t len)
+    {
+        memcpy(data.ptr + offset, b, len);
+        offset += len;
+    }
+
     extern (C++) void write(const(void)* data, size_t nbytes) pure nothrow
     {
         write(data[0 .. nbytes]);
@@ -133,25 +258,88 @@ struct OutBuffer
         offset += buf.length;
     }
 
-    extern (C++) void writestring(const(char)* string) pure nothrow
+    /**
+     * Writes a 16 bit value, no reserve check.
+     */
+    @trusted nothrow
+    void write16n(int v)
     {
-        write(string.toDString);
+        auto x = cast(ushort) v;
+        data[offset] = x & 0x00FF;
+        data[offset + 1] = x >> 8u;
+        offset += 2;
     }
 
+    /**
+     * Writes a 16 bit value.
+     */
+    void write16(int v) nothrow
+    {
+        auto u = cast(ushort) v;
+        write(&u, u.sizeof);
+    }
+
+    /**
+     * Writes a 32 bit int.
+     */
+    void write32(int v) nothrow @trusted
+    {
+        write(&v, v.sizeof);
+    }
+
+    /**
+     * Writes a 64 bit int.
+     */
+    @trusted void write64(long v) nothrow
+    {
+        write(&v, v.sizeof);
+    }
+
+    /// NOT zero-terminated
+    extern (C++) void writestring(const(char)* s) pure nothrow
+    {
+        if (!s)
+            return;
+        import core.stdc.string : strlen;
+        write(s[0 .. strlen(s)]);
+    }
+
+    /// ditto
     void writestring(const(char)[] s) pure nothrow
     {
         write(s);
     }
 
+    /// ditto
     void writestring(string s) pure nothrow
     {
         write(s);
     }
 
-    void writestringln(const(char)[] s)
+    /// NOT zero-terminated, followed by newline
+    void writestringln(const(char)[] s) pure nothrow
     {
         writestring(s);
         writenl();
+    }
+
+    // Zero-terminated
+    void writeString(const(char)* s) pure nothrow @trusted
+    {
+        write(s[0 .. strlen(s)+1]);
+    }
+
+    /// ditto
+    void writeString(const(char)[] s) pure nothrow
+    {
+        write(s);
+        writeByte(0);
+    }
+
+    /// ditto
+    void writeString(string s) pure nothrow
+    {
+        writeString(cast(const(char)[])(s));
     }
 
     extern (C++) void prependstring(const(char)* string) pure nothrow
@@ -176,6 +364,38 @@ struct OutBuffer
         }
         if (doindent)
             notlinehead = false;
+    }
+
+    // Write n zeros; return pointer to start of zeros
+    @trusted
+    void *writezeros(size_t n) nothrow
+    {
+        reserve(n);
+        auto result = memset(data.ptr + offset, 0, n);
+        offset += n;
+        return result;
+    }
+
+    // Position buffer to accept the specified number of bytes at offset
+    @trusted
+    void position(size_t where, size_t nbytes) nothrow
+    {
+        if (where + nbytes > data.length)
+        {
+            reserve(where + nbytes - offset);
+        }
+        offset = where;
+
+        debug assert(offset + nbytes <= data.length);
+    }
+
+    /**
+     * Writes an 8 bit byte, no reserve check.
+     */
+    extern (C++) @trusted nothrow
+    void writeByten(int b)
+    {
+        this.data[offset++] = cast(ubyte) b;
     }
 
     extern (C++) void writeByte(uint b) pure nothrow
@@ -303,14 +523,6 @@ struct OutBuffer
         }
     }
 
-    extern (C++) void write(RootObject obj) /*nothrow*/
-    {
-        if (obj)
-        {
-            writestring(obj.toChars());
-        }
-    }
-
     extern (C++) void fill0(size_t nbytes) pure nothrow
     {
         reserve(nbytes);
@@ -362,8 +574,8 @@ struct OutBuffer
                 break;
         }
         offset += count;
-        if (mem.isGCEnabled)
-            memset(data.ptr + offset, 0xff, psize - count);
+        // if (mem.isGCEnabled)
+             memset(data.ptr + offset, 0xff, psize - count);
     }
 
     static if (__VERSION__ < 2092)
@@ -394,7 +606,6 @@ struct OutBuffer
      */
     extern (C++) void print(ulong u) pure nothrow
     {
-        //import core.internal.string;  // not available
         UnsignedStringBuf buf = void;
         writestring(unsignedToTempString(u, buf));
     }
@@ -454,17 +665,17 @@ struct OutBuffer
      * Returns:
      *   a non-owning const slice of the buffer contents
      */
-    extern (D) const(char)[] opSlice() const pure nothrow @nogc
+    extern (D) const(char)[] opSlice() const pure nothrow @nogc @safe
     {
         return cast(const(char)[])data[0 .. offset];
     }
 
-    extern (D) const(char)[] opSlice(size_t lwr, size_t upr) const pure nothrow @nogc
+    extern (D) const(char)[] opSlice(size_t lwr, size_t upr) const pure nothrow @nogc @safe
     {
         return cast(const(char)[])data[lwr .. upr];
     }
 
-    extern (D) char opIndex(size_t i) const pure nothrow @nogc
+    extern (D) char opIndex(size_t i) const pure nothrow @nogc @safe
     {
         return cast(char)data[i];
     }
@@ -492,6 +703,11 @@ struct OutBuffer
         return extractData()[0 .. length];
     }
 
+    extern (D) byte[] extractUbyteSlice(bool nullTerminate = false) pure nothrow
+    {
+        return cast(byte[]) extractSlice(nullTerminate);
+    }
+
     // Append terminating null if necessary and get view of internal buffer
     extern (C++) char* peekChars() pure nothrow
     {
@@ -509,6 +725,82 @@ struct OutBuffer
         if (!offset || data[offset - 1] != '\0')
             writeByte(0);
         return extractData();
+    }
+
+    void writesLEB128(int value) pure nothrow
+    {
+        while (1)
+        {
+            ubyte b = value & 0x7F;
+
+            value >>= 7;            // arithmetic right shift
+            if ((value == 0 && !(b & 0x40)) ||
+                (value == -1 && (b & 0x40)))
+            {
+                 writeByte(b);
+                 break;
+            }
+            writeByte(b | 0x80);
+        }
+    }
+
+    void writeuLEB128(uint value) pure nothrow
+    {
+        do
+        {
+            ubyte b = value & 0x7F;
+
+            value >>= 7;
+            if (value)
+                b |= 0x80;
+            writeByte(b);
+        } while (value);
+    }
+
+    /**
+    Destructively saves the contents of `this` to `filename`. As an
+    optimization, if the file already has identical contents with the buffer,
+    no copying is done. This is because on SSD drives reading is often much
+    faster than writing and because there's a high likelihood an identical
+    file is written during the build process.
+
+    Params:
+    filename = the name of the file to receive the contents
+
+    Returns: `true` iff the operation succeeded.
+    */
+    extern(D) bool moveToFile(const char* filename)
+    {
+        bool result = true;
+        const bool identical = this[] == FileMapping!(const ubyte)(filename)[];
+
+        if (fileMapping && fileMapping.active)
+        {
+            // Defer to corresponding functions in FileMapping.
+            if (identical)
+            {
+                result = fileMapping.discard();
+            }
+            else
+            {
+                // Resize to fit to get rid of the slack bytes at the end
+                fileMapping.resize(offset);
+                result = fileMapping.moveToFile(filename);
+            }
+            // Can't call destroy() here because the file mapping is already closed.
+            data = null;
+            offset = 0;
+        }
+        else
+        {
+            if (!identical)
+                writeFile(filename, this[]);
+            destroy();
+        }
+
+        return identical
+            ? result && touchFile(filename)
+            : result;
     }
 }
 
@@ -532,7 +824,7 @@ char[] unsignedToTempString(ulong value, char[] buf, uint radix = 10) @safe pure
         else
         {
             ubyte x = cast(ubyte)(value % radix);
-            value = value / radix;
+            value /= radix;
             buf[--i] = cast(char)((x < 10) ? x + '0' : x - 10 + 'a');
         }
     } while (value);

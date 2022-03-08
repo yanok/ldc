@@ -1,9 +1,9 @@
 /**
  * Read a file from disk and store it in memory.
  *
- * Copyright: Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:   Walter Bright, http://www.digitalmars.com
- * License:   $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright: Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:   Walter Bright, https://www.digitalmars.com
+ * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/root/file.d, root/_file.d)
  * Documentation:  https://dlang.org/phobos/dmd_root_file.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/root/file.d
@@ -14,9 +14,10 @@ module dmd.root.file;
 import core.stdc.errno;
 import core.stdc.stdio;
 import core.stdc.stdlib;
+import core.stdc.string : strerror;
 import core.sys.posix.fcntl;
 import core.sys.posix.unistd;
-version (Windows)
+version (Windows) // IN_LLVM: ltsmaster...
 {
     import core.sys.windows.winbase;
     import core.sys.windows.winnt;
@@ -24,6 +25,9 @@ version (Windows)
 import dmd.root.filename;
 import dmd.root.rmem;
 import dmd.root.string;
+
+import dmd.common.file;
+import dmd.common.string;
 
 /// Owns a (rmem-managed) file buffer.
 struct FileBuffer
@@ -45,7 +49,7 @@ struct FileBuffer
         return result;
     }
 
-    extern (C++) static FileBuffer* create()
+    extern (C++) static FileBuffer* create() pure nothrow @safe
     {
         return new FileBuffer();
     }
@@ -102,7 +106,7 @@ nothrow:
             //printf("\tfile opened\n");
             if (fstat(fd, &buf))
             {
-                printf("\tfstat error, errno = %d\n", errno);
+                perror("\tfstat error");
                 close(fd);
                 return result;
             }
@@ -111,19 +115,18 @@ nothrow:
             numread = .read(fd, buffer, size);
             if (numread != size)
             {
-                printf("\tread error, errno = %d\n", errno);
+                perror("\tread error");
                 goto err2;
             }
             if (close(fd) == -1)
             {
-                printf("\tclose error, errno = %d\n", errno);
+                perror("\tclose error");
                 goto err;
             }
-            // Always store a wchar ^Z past end of buffer so scanner has a sentinel
-            buffer[size] = 0; // ^Z is obsolete, use 0
-            buffer[size + 1] = 0;
-            buffer[size + 2] = 0; //add two more so lexer doesnt read pass the buffer
-            buffer[size + 3] = 0;
+            // Always store a wchar ^Z past end of buffer so scanner has a
+            // sentinel, although ^Z got obselete, so fill with two 0s and add
+            // two more so lexer doesn't read pass the buffer.
+            buffer[size .. size + 4] = 0;
 
             result.success = true;
             result.buffer.data = buffer[0 .. size];
@@ -159,11 +162,10 @@ nothrow:
                 goto err2;
             if (!CloseHandle(h))
                 goto err;
-            // Always store a wchar ^Z past end of buffer so scanner has a sentinel
-            buffer[size] = 0; // ^Z is obsolete, use 0
-            buffer[size + 1] = 0;
-            buffer[size + 2] = 0; //add two more so lexer doesnt read pass the buffer
-            buffer[size + 3] = 0;
+            // Always store a wchar ^Z past end of buffer so scanner has a
+            // sentinel, although ^Z got obselete, so fill with two 0s and add
+            // two more so lexer doesn't read pass the buffer.
+            buffer[size .. size + 4] = 0;
             result.success = true;
             result.buffer.data = buffer[0 .. size];
             return result;
@@ -182,58 +184,8 @@ nothrow:
     /// Write a file, returning `true` on success.
     extern (D) static bool write(const(char)* name, const void[] data)
     {
-        version (Posix)
-        {
-            ssize_t numwritten;
-            int fd = open(name, O_CREAT | O_WRONLY | O_TRUNC, (6 << 6) | (4 << 3) | 4);
-            if (fd == -1)
-                goto err;
-            numwritten = .write(fd, data.ptr, data.length);
-            if (numwritten != data.length)
-                goto err2;
-            if (close(fd) == -1)
-                goto err;
-            return true;
-        err2:
-            close(fd);
-            .remove(name);
-        err:
-            return false;
-        }
-        else version (Windows)
-        {
-            DWORD numwritten; // here because of the gotos
-            const nameStr = name.toDString;
-            // work around Windows file path length limitation
-            // (see documentation for extendedPathThen).
-            HANDLE h = nameStr.extendedPathThen!
-                (p => CreateFileW(p.ptr,
-                                  GENERIC_WRITE,
-                                  0,
-                                  null,
-                                  CREATE_ALWAYS,
-                                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
-                                  null));
-            if (h == INVALID_HANDLE_VALUE)
-                goto err;
-
-            if (WriteFile(h, data.ptr, cast(DWORD)data.length, &numwritten, null) != TRUE)
-                goto err2;
-            if (numwritten != data.length)
-                goto err2;
-            if (!CloseHandle(h))
-                goto err;
-            return true;
-        err2:
-            CloseHandle(h);
-            nameStr.extendedPathThen!(p => DeleteFileW(p.ptr));
-        err:
-            return false;
-        }
-        else
-        {
-            assert(0);
-        }
+        import dmd.common.file : writeFile;
+        return writeFile(name, data);
     }
 
     ///ditto
@@ -261,7 +213,7 @@ nothrow:
         }
         else
         {
-            assert(0);
+            static assert(0);
         }
     }
 
@@ -284,90 +236,28 @@ nothrow:
     {
         enum log = false;
         if (log) printf("update %s\n", namez);
-        version (Windows)
-        {
-            const nameStr = namez.toDString();
 
-            import core.sys.windows.windows;
+        if (data.length != File.size(namez))
+            return write(namez, data);               // write new file
 
-            WIN32_FILE_ATTRIBUTE_DATA fad = void;
-            // Doesn't exist, not a regular file, different size
-            if (nameStr.extendedPathThen!(p => GetFileAttributesExW(p.ptr, GET_FILEEX_INFO_LEVELS.GetFileExInfoStandard, &fad)) == 0 ||
-                fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ||
-                ((cast(ulong) fad.nFileSizeHigh << 32) | fad.nFileSizeLow) != data.length)
-            {
-                return write(namez, data);               // write new file
-            }
-        }
-        else version (Posix)
-        {
-            import core.sys.posix.sys.stat;
-
-            stat_t statbuf = void;
-            if (stat(namez, &statbuf) != 0 ||            // doesn't exist
-                (statbuf.st_mode & S_IFMT) != S_IFREG || // not a regular file
-                statbuf.st_size != data.length)          // different size
-            {
-                if (log) printf("not exist or diff size %d %d %d\n",
-                    stat(namez, &statbuf) != 0,
-                    (statbuf.st_mode & S_IFMT) != S_IFREG,
-                     statbuf.st_size != data.length);
-                return write(namez, data);               // write new file
-            }
-        }
-        else
-            static assert(0);
         if (log) printf("same size\n");
 
         /* The file already exists, and is the same size.
          * Read it in, and compare for equality.
-         * For larger files, this could be faster by comparing the file
-         * block by block and quitting on first difference.
          */
-        ReadResult r = read(namez);
-        if (!r.success ||
-            r.buffer.data[] != data[])
+        //if (FileMapping!(const ubyte)(namez)[] != data[])
             return write(namez, data); // contents not same, so write new file
-        if (log) printf("same contents\n");
+        //if (log) printf("same contents\n");
 
         /* Contents are identical, so set timestamp of existing file to current time
          */
-        version (Windows)
-        {
-            FILETIME ft = void;
-            SYSTEMTIME st = void;
-            GetSystemTime(&st);
-            SystemTimeToFileTime(&st, &ft);
-
-            // get handle to file
-            HANDLE h = nameStr.extendedPathThen!(p => CreateFile(p.ptr,
-                FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                null, OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL, null));
-            if (h == INVALID_HANDLE_VALUE)
-                return false;
-
-            const f = SetFileTime(h, null, null, &ft); // set last write time
-
-            if (!CloseHandle(h))
-                return false;
-
-            return f != 0;
-        }
-        else version (Posix)
-        {
-            import core.sys.posix.utime;
-
-            return utime(namez, null) == 0;
-        }
-        else
-            static assert(0);
+        //return touch(namez);
     }
 
     ///ditto
     extern(D) static bool update(const(char)[] name, const void[] data)
     {
-        return name.toCStringThen!((fname) => update(fname.ptr, data));
+        return name.toCStringThen!(fname => update(fname.ptr, data));
     }
 
     /// ditto
@@ -376,4 +266,29 @@ nothrow:
         return update(name, data[0 .. size]);
     }
 
+    /// Size of a file in bytes.
+    /// Params: namez = null-terminated filename
+    /// Returns: `ulong.max` on any error, the length otherwise.
+    static ulong size(const char* namez)
+    {
+        version (Posix)
+        {
+            stat_t buf;
+            if (stat(namez, &buf) == 0)
+                return buf.st_size;
+        }
+        else version (Windows)
+        {
+            const nameStr = namez.toDString();
+            import core.sys.windows.windows;
+            WIN32_FILE_ATTRIBUTE_DATA fad = void;
+            // Doesn't exist, not a regular file, different size
+            if (nameStr.extendedPathThen!(p => GetFileAttributesExW(p.ptr, GET_FILEEX_INFO_LEVELS.GetFileExInfoStandard, &fad)) != 0)
+                return (ulong(fad.nFileSizeHigh) << 32UL) | fad.nFileSizeLow;
+        }
+        else static assert(0);
+        // Error cases go here.
+        return ulong.max;
+    }
 }
+

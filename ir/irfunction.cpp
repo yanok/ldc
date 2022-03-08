@@ -22,22 +22,20 @@ IrFunction::IrFunction(FuncDeclaration *fd)
   decl = fd;
 
   Type *t = fd->type->toBasetype();
-  assert(t->ty == Tfunction);
+  assert(t->ty == TY::Tfunction);
   type = static_cast<TypeFunction *>(t);
 
   irFty.type = type;
 }
 
 void IrFunction::setNeverInline() {
-  assert(!func->getAttributes().hasAttribute(LLAttributeList::FunctionIndex,
-                                             llvm::Attribute::AlwaysInline) &&
+  assert(!func->hasFnAttribute(llvm::Attribute::AlwaysInline) &&
          "function can't be never- and always-inline at the same time");
   func->addFnAttr(llvm::Attribute::NoInline);
 }
 
 void IrFunction::setAlwaysInline() {
-  assert(!func->getAttributes().hasAttribute(LLAttributeList::FunctionIndex,
-                                             llvm::Attribute::NoInline) &&
+  assert(!func->hasFnAttribute(llvm::Attribute::NoInline) &&
          "function can't be never- and always-inline at the same time");
   func->addFnAttr(llvm::Attribute::AlwaysInline);
 }

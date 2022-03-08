@@ -1,9 +1,9 @@
 /**
  * Contains the `Id` struct with a list of predefined symbols the compiler knows about.
  *
- * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
- * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright:   Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
+ * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/id.d, _id.d)
  * Documentation:  https://dlang.org/phobos/dmd_id.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/id.d
@@ -115,7 +115,6 @@ immutable Msgtable[] msgtable =
     { "line" },
     { "empty", "" },
     { "p" },
-    { "q" },
     { "__vptr" },
     { "__monitor" },
     { "gate", "__gate" },
@@ -311,10 +310,15 @@ immutable Msgtable[] msgtable =
     { "__ArrayPostblit" },
     { "__ArrayDtor" },
     { "_d_delThrowable" },
+    { "_d_delstructImpl" },
+    { "_d_delstruct" },
+    { "_d_delstructTrace" },
     { "_d_assert_fail" },
     { "dup" },
     { "_aaApply" },
     { "_aaApply2" },
+    { "_d_arrayctor" },
+    { "_d_arraysetctor" },
 
     // For pragma's
     { "Pinline", "inline" },
@@ -463,6 +467,7 @@ immutable Msgtable[] msgtable =
     { "getUnitTests" },
     { "getVirtualIndex" },
     { "getPointerBitmap" },
+    { "initSymbol" },
     { "getCppNamespaces" },
     { "isReturnOnStack" },
     { "isZeroInit" },
@@ -472,6 +477,7 @@ immutable Msgtable[] msgtable =
     { "hasCopyConstructor" },
     { "isCopyable" },
     { "toType" },
+    { "parameters" },
 
     // For C++ mangling
     { "allocator" },
@@ -493,7 +499,25 @@ immutable Msgtable[] msgtable =
     { "unsigned" },
     { "wchar_t" },
 
-    // IN_LLVM: LDC-specific pragmas.
+    // for C compiler
+    { "__tag" },
+    { "dllimport" },
+    { "dllexport" },
+    { "vector_size" },
+    { "__func__" },
+    { "noreturn" },
+    { "__pragma", "pragma" },
+    { "builtins", "__builtins" },
+    { "builtin_va_list", "__builtin_va_list" },
+    { "builtin_va_arg", "__builtin_va_arg" },
+    { "va_list_tag", "__va_list_tag" },
+    { "va_arg" },
+    { "pack" },
+    { "show" },
+    { "push" },
+    { "pop" },
+
+    // IN_LLVM: LDC-specific pragmas
     { "LDC_intrinsic" },
     { "LDC_no_typeinfo" },
     { "LDC_no_moduleinfo" },
@@ -517,10 +541,9 @@ immutable Msgtable[] msgtable =
     { "LDC_extern_weak" },
     { "LDC_profile_instr" },
 
-    // IN_LLVM: LDC-specific traits.
+    // IN_LLVM: LDC-specific traits
     { "targetCPU" },
     { "targetHasFeature" },
-    { "initSymbol" },
 
     // IN_LLVM: LDC-specific attributes
     { "ldc" },
@@ -539,12 +562,15 @@ immutable Msgtable[] msgtable =
     { "udaDynamicCompile", "_dynamicCompile" },
     { "udaDynamicCompileConst", "_dynamicCompileConst" },
     { "udaDynamicCompileEmit", "_dynamicCompileEmit" },
-    
+    { "udaHidden", "_hidden" },
+    { "udaNoSanitize", "noSanitize" },
+
     // IN_LLVM: DCompute specific types and functionss
     { "dcompute" },
     { "dcPointer", "Pointer" },
     { "dcReflect", "__dcompute_reflect" },
     { "RTInfoImpl" },
+    { "opencl" },
 
     // IN_LLVM
     { "io" },

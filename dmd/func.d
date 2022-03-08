@@ -8,9 +8,9 @@
  * - `invariant`
  * - `unittest`
  *
- * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
- * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright:   Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
+ * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/func.d, _func.d)
  * Documentation:  https://dlang.org/phobos/dmd_func.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/func.d
@@ -22,6 +22,7 @@ import core.stdc.stdio;
 import core.stdc.string;
 import dmd.aggregate;
 import dmd.arraytypes;
+import dmd.astenums;
 import dmd.blockexit;
 import dmd.gluelayer;
 import dmd.dclass;
@@ -44,7 +45,8 @@ import dmd.identifier;
 import dmd.init;
 import dmd.mtype;
 import dmd.objc;
-import dmd.root.outbuffer;
+import dmd.root.aav;
+import dmd.common.outbuffer;
 import dmd.root.rootobject;
 import dmd.root.string;
 import dmd.root.stringtable;
@@ -228,6 +230,7 @@ enum FUNCFLAG : uint
     compileTimeOnly  = 0x100,  /// is a compile time only function; no code will be generated for it
     printf           = 0x200,  /// is a printf-like function
     scanf            = 0x400,  /// is a scanf-like function
+    noreturn         = 0x800,  /// the function does not return
 }
 
 /***********************************************************
@@ -301,7 +304,7 @@ version (IN_LLVM)
     VarDeclaration vresult;             /// result variable for out contracts
     LabelDsymbol returnLabel;           /// where the return goes
 
-    bool[Type.UniqueId] isTypeIsolatedCache; /// cache of this potentially very expensive check
+    bool[size_t] isTypeIsolatedCache;   /// cache for the potentially very expensive isTypeIsolated check
 
     // used to prevent symbols in different
     // scopes from having the same name
@@ -396,7 +399,7 @@ version (IN_LLVM) {} else
      */
     ObjcFuncDeclaration objc;
 
-    extern (D) this(const ref Loc loc, const ref Loc endloc, Identifier ident, StorageClass storage_class, Type type)
+    extern (D) this(const ref Loc loc, const ref Loc endloc, Identifier ident, StorageClass storage_class, Type type, bool noreturn = false)
     {
         super(loc, ident);
         //printf("FuncDeclaration(id = '%s', type = %p)\n", id.toChars(), type);
@@ -410,21 +413,25 @@ version (IN_LLVM) {} else
             this.storage_class &= ~(STC.TYPECTOR | STC.FUNCATTR);
         }
         this.endloc = endloc;
+        if (noreturn)
+            this.flags |= FUNCFLAG.noreturn;
+
         /* The type given for "infer the return type" is a TypeFunction with
          * NULL for the return type.
          */
         inferRetType = (type && type.nextOf() is null);
     }
 
-    static FuncDeclaration create(const ref Loc loc, const ref Loc endloc, Identifier id, StorageClass storage_class, Type type)
+    static FuncDeclaration create(const ref Loc loc, const ref Loc endloc, Identifier id, StorageClass storage_class, Type type, bool noreturn = false)
     {
-        return new FuncDeclaration(loc, endloc, id, storage_class, type);
+        return new FuncDeclaration(loc, endloc, id, storage_class, type, noreturn);
     }
 
     override FuncDeclaration syntaxCopy(Dsymbol s)
     {
         //printf("FuncDeclaration::syntaxCopy('%s')\n", toChars());
-        FuncDeclaration f = s ? cast(FuncDeclaration)s : new FuncDeclaration(loc, endloc, ident, storage_class, type.syntaxCopy());
+        FuncDeclaration f = s ? cast(FuncDeclaration)s
+                              : new FuncDeclaration(loc, endloc, ident, storage_class, type.syntaxCopy(), (flags & FUNCFLAG.noreturn) != 0);
         f.frequires = frequires ? Statement.arraySyntaxCopy(frequires) : null;
         f.fensures = fensures ? Ensure.arraySyntaxCopy(fensures) : null;
         f.fbody = fbody ? fbody.syntaxCopy() : null;
@@ -597,13 +604,24 @@ version (IN_LLVM)
             }
         }
 
-        if (type.ty == Tfunction)
+        if (auto tf = type.isTypeFunction())
         {
-            TypeFunction tf = cast(TypeFunction)type;
             if (tf.isreturn)
                 vthis.storage_class |= STC.return_;
             if (tf.isScopeQual)
                 vthis.storage_class |= STC.scope_;
+
+            /* Add STC.returnScope like typesem.d does for TypeFunction parameters,
+             * at least it should be the same. At the moment, we'll just
+             * do existing practice. But we should examine how TypeFunction does
+             * it, for consistency.
+             */
+            if (!tf.isref && isRefReturnScope(vthis.storage_class))
+            {
+                /* if `ref return scope`, evaluate to `ref` `return scope`
+                 */
+                vthis.storage_class |= STC.returnScope;
+            }
         }
         if (flags & FUNCFLAG.inferScope && !(vthis.storage_class & STC.scope_))
             vthis.storage_class |= STC.maybescope;
@@ -666,8 +684,8 @@ version (IN_LLVM)
         int result = 0;
         if (fd.ident == ident)
         {
-            int cov = type.covariant(fd.type);
-            if (cov)
+            const cov = type.covariant(fd.type);
+            if (cov != Covariant.distinct)
             {
                 ClassDeclaration cd1 = toParent().isClassDeclaration();
                 ClassDeclaration cd2 = fd.toParent().isClassDeclaration();
@@ -725,31 +743,28 @@ version (IN_LLVM)
                 }
 
                 StorageClass stc = 0;
-                int cov = type.covariant(fdv.type, &stc);
+                const cov = type.covariant(fdv.type, &stc);
                 //printf("\tbaseclass cov = %d\n", cov);
-                switch (cov)
+                final switch (cov)
                 {
-                case 0:
+                case Covariant.distinct:
                     // types are distinct
                     break;
 
-                case 1:
+                case Covariant.yes:
                     bestvi = vi; // covariant, but not identical
                     break;
                     // keep looking for an exact match
 
-                case 2:
+                case Covariant.no:
                     mismatchvi = vi;
                     mismatchstc = stc;
                     mismatch = fdv; // overrides, but is not covariant
                     break;
                     // keep looking for an exact match
 
-                case 3:
+                case Covariant.fwdref:
                     return -2; // forward references
-
-                default:
-                    assert(0);
                 }
             }
         }
@@ -777,7 +792,7 @@ version (IN_LLVM)
      */
     final BaseClass* overrideInterface()
     {
-        if (ClassDeclaration cd = toParent2().isClassDeclaration())
+        for (ClassDeclaration cd = toParent2().isClassDeclaration(); cd; cd = cd.baseClass)
         {
             foreach (b; cd.interfaces)
             {
@@ -882,7 +897,7 @@ version (IN_LLVM)
             if (t.ty == Tfunction)
             {
                 auto tf = cast(TypeFunction)f.type;
-                if (tf.covariant(t) == 1 &&
+                if (tf.covariant(t) == Covariant.yes &&
                     tf.nextOf().implicitConvTo(t.nextOf()) >= MATCH.constant)
                 {
                     fd = f;
@@ -1114,9 +1129,16 @@ version (IN_LLVM)
     }
 
     /********************************
-     * Labels are in a separate scope, one per function.
+     * Searches for a label with the given identifier. This function will insert a new
+     * `LabelDsymbol` into `labtab` if it does not contain a mapping for `ident`.
+     *
+     * Params:
+     *   ident = identifier of the requested label
+     *   loc   = location used when creating a new `LabelDsymbol`
+     *
+     * Returns: the `LabelDsymbol` for `ident`
      */
-    final LabelDsymbol searchLabel(Identifier ident)
+    final LabelDsymbol searchLabel(Identifier ident, const ref Loc loc = Loc.initial)
     {
         Dsymbol s;
         if (!labtab)
@@ -1125,7 +1147,7 @@ version (IN_LLVM)
         s = labtab.lookup(ident);
         if (!s)
         {
-            s = new LabelDsymbol(ident);
+            s = new LabelDsymbol(ident, loc);
             labtab.insert(s);
         }
         return cast(LabelDsymbol)s;
@@ -1333,7 +1355,14 @@ version (IN_LLVM)
         if (!fbody)
             return false;
 
-        if (isVirtualMethod())
+        if (isVirtualMethod() &&
+            /*
+             * https://issues.dlang.org/show_bug.cgi?id=21719
+             *
+             * If we have an auto virtual function we can infer
+             * the attributes.
+             */
+            !(inferRetType && !isCtorDeclaration()))
             return false;               // since they may be overridden
 
         if (sc.func &&
@@ -1379,7 +1408,7 @@ version (IN_LLVM)
             flags |= FUNCFLAG.returnInprocess;
 
         // Initialize for inferring STC.scope_
-        if (global.params.vsafe)
+        if (global.params.useDIP1000 == FeatureState.enabled)
             flags |= FUNCFLAG.inferScope;
     }
 
@@ -1559,15 +1588,20 @@ version (IN_LLVM)
     extern (D) final bool isTypeIsolated(Type t)
     {
         StringTable!Type parentTypes;
-        if(t.uniqueId) {
-            auto isIsolatedP = t.uniqueId in isTypeIsolatedCache;
-            if(isIsolatedP !is null) return *isIsolatedP;
+        const uniqueTypeID = t.getUniqueID();
+        if (uniqueTypeID)
+        {
+            const cacheResultPtr = uniqueTypeID in isTypeIsolatedCache;
+            if (cacheResultPtr !is null)
+                return *cacheResultPtr;
 
             parentTypes._init();
-            bool isIsolated = isTypeIsolated(t, parentTypes);
-            isTypeIsolatedCache[t.uniqueId] = isIsolated;
+            const isIsolated = isTypeIsolated(t, parentTypes);
+            isTypeIsolatedCache[uniqueTypeID] = isIsolated;
             return isIsolated;
-        } else {
+        }
+        else
+        {
             parentTypes._init();
             return isTypeIsolated(t, parentTypes);
         }
@@ -2633,9 +2667,10 @@ version (IN_LLVM)
         }
 
         if (!tf.nextOf())
-            error("must return `int` or `void`");
-        else if (tf.nextOf().ty != Tint32 && tf.nextOf().ty != Tvoid)
-            error("must return `int` or `void`, not `%s`", tf.nextOf().toChars());
+            // auto main(), check after semantic
+            assert(this.inferRetType);
+        else if (tf.nextOf().ty != Tint32 && tf.nextOf().ty != Tvoid && tf.nextOf().ty != Tnoreturn)
+            error("must return `int`, `void` or `noreturn`, not `%s`", tf.nextOf().toChars());
         else if (tf.parameterList.varargs || nparams >= 2 || argerr)
             error("parameters must be `main()` or `main(string[] args)`");
     }
@@ -2668,6 +2703,9 @@ version (IN_LLVM)
                     // Variables in the data segment (e.g. globals, TLS or not),
                     // parameters and closure variables cannot be NRVOed.
                     if (v.isDataseg() || v.isParameter() || v.toParent2() != this)
+                        return false;
+                    // The variable type needs to be equivalent to the return type.
+                    if (!v.type.equivalent(tf.next))
                         return false;
                     //printf("Setting nrvo to %s\n", v.toChars());
                     nrvo_var = v;
@@ -3009,7 +3047,7 @@ FuncDeclaration resolveFuncCall(const ref Loc loc, Scope* sc, Dsymbol s,
     /* Failed to find a best match.
      * Do nothing or print error.
      */
-    if (m.last <= MATCH.nomatch)
+    if (m.last == MATCH.nomatch)
     {
         // error was caused on matched function, not on the matching itself,
         // so return the function to produce a better diagnostic
@@ -3063,7 +3101,7 @@ FuncDeclaration resolveFuncCall(const ref Loc loc, Scope* sc, Dsymbol s,
         // all of overloads are templates
         if (td)
         {
-            .error(loc, "%s `%s.%s` cannot deduce function from argument types `!(%s)%s`, candidates are:",
+            .error(loc, "none of the overloads of %s `%s.%s` are callable using argument types `!(%s)%s`",
                    td.kind(), td.parent.toPrettyChars(), td.ident.toChars(),
                    tiargsBuf.peekChars(), fargsBuf.peekChars());
 
@@ -3091,7 +3129,11 @@ FuncDeclaration resolveFuncCall(const ref Loc loc, Scope* sc, Dsymbol s,
         return null;
 
     bool hasOverloads = fd.overnext !is null;
-    auto tf = fd.type.toTypeFunction();
+    auto tf = fd.type.isTypeFunction();
+    // if type is an error, the original type should be there for better diagnostics
+    if (!tf)
+        tf = fd.originalType.toTypeFunction();
+
     if (tthis && !MODimplicitConv(tthis.mod, tf.mod)) // modifier mismatch
     {
         OutBuffer thisBuf, funcBuf;
@@ -3099,7 +3141,7 @@ FuncDeclaration resolveFuncCall(const ref Loc loc, Scope* sc, Dsymbol s,
         auto mismatches = MODMatchToBuffer(&funcBuf, tf.mod, tthis.mod);
         if (hasOverloads)
         {
-            .error(loc, "none of the overloads of `%s` are callable using a %sobject, candidates are:",
+            .error(loc, "none of the overloads of `%s` are callable using a %sobject",
                    fd.ident.toChars(), thisBuf.peekChars());
             printCandidates(loc, fd, sc.isDeprecated());
             return null;
@@ -3129,7 +3171,7 @@ FuncDeclaration resolveFuncCall(const ref Loc loc, Scope* sc, Dsymbol s,
     //printf("tf = %s, args = %s\n", tf.deco, (*fargs)[0].type.deco);
     if (hasOverloads)
     {
-        .error(loc, "none of the overloads of `%s` are callable using argument types `%s`, candidates are:",
+        .error(loc, "none of the overloads of `%s` are callable using argument types `%s`",
                fd.toChars(), fargsBuf.peekChars());
         printCandidates(loc, fd, sc.isDeprecated());
         return null;
@@ -3161,6 +3203,9 @@ if (is(Decl == TemplateDeclaration) || is(Decl == FuncDeclaration))
     int displayed;
     const(char)* constraintsTip;
 
+    // determine if the first candidate was printed
+    bool printed = false;
+
     overloadApply(declaration, (Dsymbol s)
     {
         Dsymbol nextOverload;
@@ -3176,9 +3221,14 @@ if (is(Decl == TemplateDeclaration) || is(Decl == FuncDeclaration))
             if (fd.storage_class & STC.disable || (fd.isDeprecated() && !showDeprecated))
                 return 0;
 
+            const single_candidate = fd.overnext is null;
             auto tf = cast(TypeFunction) fd.type;
-            .errorSupplemental(fd.loc, "`%s%s`", fd.toPrettyChars(),
+            .errorSupplemental(fd.loc,
+                    printed ? "                `%s%s`" :
+                    single_candidate ? "Candidate is: `%s%s`" : "Candidates are: `%s%s`",
+                    fd.toPrettyChars(),
                 parametersTypeToChars(tf.parameterList));
+            printed = true;
             nextOverload = fd.overnext;
         }
         else if (auto td = s.isTemplateDeclaration())
@@ -3187,10 +3237,28 @@ if (is(Decl == TemplateDeclaration) || is(Decl == FuncDeclaration))
 
             const tmsg = td.toCharsNoConstraints();
             const cmsg = td.getConstraintEvalError(constraintsTip);
+
+            const single_candidate = td.overnext is null;
+
+            // add blank space if there are multiple candidates
+            // the length of the blank space is `strlen("Candidates are: ")`
+
             if (cmsg)
-                .errorSupplemental(td.loc, "`%s`\n%s", tmsg, cmsg);
+            {
+                .errorSupplemental(td.loc,
+                        printed ? "                `%s`\n%s" :
+                        single_candidate ? "Candidate is: `%s`\n%s" : "Candidates are: `%s`\n%s",
+                        tmsg, cmsg);
+                printed = true;
+            }
             else
-                .errorSupplemental(td.loc, "`%s`", tmsg);
+            {
+                .errorSupplemental(td.loc,
+                        printed ? "                `%s`" :
+                        single_candidate ? "Candidate is: `%s`" : "Candidates are: `%s`",
+                        tmsg);
+                printed = true;
+            }
             nextOverload = td.overnext;
         }
 
@@ -3264,17 +3332,7 @@ private bool traverseIndirections(Type ta, Type tb)
 {
     //printf("traverseIndirections(%s, %s)\n", ta.toChars(), tb.toChars());
 
-    /* Threaded list of aggregate types already examined,
-     * used to break cycles.
-     * Cycles in type graphs can only occur with aggregates.
-     */
-    static struct Ctxt
-    {
-        Ctxt* prev;
-        Type type;      // an aggregate type
-    }
-
-    static bool traverse(Type ta, Type tb, Ctxt* ctxt, bool reversePass)
+    static bool traverse(Type ta, Type tb, ref /* ltsmaster: scope */ AssocArray!(const(char)*, bool) table, bool reversePass)
     {
         //printf("traverse(%s, %s)\n", ta.toChars(), tb.toChars());
         ta = ta.baseElemOf();
@@ -3304,28 +3362,27 @@ private bool traverseIndirections(Type ta, Type tb)
 
         if (tb.ty == Tclass || tb.ty == Tstruct)
         {
-            for (Ctxt* c = ctxt; c; c = c.prev)
-                if (tb == c.type)
-                    return true;
-            Ctxt c;
-            c.prev = ctxt;
-            c.type = tb;
-
             /* Traverse the type of each field of the aggregate
              */
+            bool* found = table.getLvalue(tb.deco);
+            if (*found == true)
+                return true; // We have already seen this symbol, break the cycle
+            else
+                *found = true;
+
             AggregateDeclaration sym = tb.toDsymbol(null).isAggregateDeclaration();
             foreach (v; sym.fields)
             {
                 Type tprmi = v.type.addMod(tb.mod);
                 //printf("\ttb = %s, tprmi = %s\n", tb.toChars(), tprmi.toChars());
-                if (!traverse(ta, tprmi, &c, reversePass))
+                if (!traverse(ta, tprmi, table, reversePass))
                     return false;
             }
         }
         else if (tb.ty == Tarray || tb.ty == Taarray || tb.ty == Tpointer)
         {
             Type tind = tb.nextOf();
-            if (!traverse(ta, tind, ctxt, reversePass))
+            if (!traverse(ta, tind, table, reversePass))
                 return false;
         }
         else if (tb.hasPointers())
@@ -3336,7 +3393,10 @@ private bool traverseIndirections(Type ta, Type tb)
 
         // Still no match, so try breaking up ta if we have not done so yet.
         if (!reversePass)
-            return traverse(tb, ta, ctxt, true);
+        {
+            scope newTable = AssocArray!(const(char)*, bool)();
+            return traverse(tb, ta, newTable, true);
+        }
 
         return true;
     }
@@ -3344,7 +3404,8 @@ private bool traverseIndirections(Type ta, Type tb)
     // To handle arbitrary levels of indirections in both parameters, we
     // recursively descend into aggregate members/levels of indirection in both
     // `ta` and `tb` while avoiding cycles. Start with the original types.
-    const result = traverse(ta, tb, null, false);
+    scope table = AssocArray!(const(char)*, bool)();
+    const result = traverse(ta, tb, table, false);
     //printf("  returns %d\n", result);
     return result;
 }
@@ -3813,32 +3874,32 @@ extern (C++) class StaticCtorDeclaration : FuncDeclaration
         return scd;
     }
 
-    override final inout(AggregateDeclaration) isThis() inout
+    override final inout(AggregateDeclaration) isThis() inout @nogc nothrow pure @safe
     {
         return null;
     }
 
-    override final bool isVirtual() const
+    override final bool isVirtual() const @nogc nothrow pure @safe
     {
         return false;
     }
 
-    override final bool addPreInvariant()
+    override final bool addPreInvariant() @nogc nothrow pure @safe
     {
         return false;
     }
 
-    override final bool addPostInvariant()
+    override final bool addPostInvariant() @nogc nothrow pure @safe
     {
         return false;
     }
 
-    override final bool hasStaticCtorOrDtor()
+    override final bool hasStaticCtorOrDtor() @nogc nothrow pure @safe
     {
         return true;
     }
 
-    override final inout(StaticCtorDeclaration) isStaticCtorDeclaration() inout
+    override final inout(StaticCtorDeclaration) isStaticCtorDeclaration() inout @nogc nothrow pure @safe
     {
         return this;
     }
@@ -4068,19 +4129,15 @@ extern (C++) final class UnitTestDeclaration : FuncDeclaration
  */
 extern (C++) final class NewDeclaration : FuncDeclaration
 {
-    ParameterList parameterList;
-
-    extern (D) this(const ref Loc loc, const ref Loc endloc, StorageClass stc, ref ParameterList parameterList)
+    extern (D) this(const ref Loc loc, StorageClass stc)
     {
-        super(loc, endloc, Id.classNew, STC.static_ | stc, null);
-        this.parameterList = parameterList;
+        super(loc, Loc.initial, Id.classNew, STC.static_ | stc, null);
     }
 
     override NewDeclaration syntaxCopy(Dsymbol s)
     {
         assert(!s);
-        auto parameterList = parameterList.syntaxCopy();
-        auto f = new NewDeclaration(loc, endloc, storage_class, parameterList);
+        auto f = new NewDeclaration(loc, storage_class);
         FuncDeclaration.syntaxCopy(f);
         return f;
     }

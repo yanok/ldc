@@ -10,6 +10,7 @@
 #include "dmd/declaration.h"
 #include "dmd/dsymbol.h"
 #include "dmd/errors.h"
+#include "dmd/ldcbindings.h"
 #include "dmd/scope.h"
 #include "dmd/statement.h"
 #include "gen/dvalue.h"
@@ -104,7 +105,8 @@ Statement *asmSemantic(AsmStatement *s, Scope *sc) {
   sc->func->hasReturnExp |= 8;
 
   // GCC-style asm starts with a string literal or a `(`
-  if (s->tokens->value == TOKstring || s->tokens->value == TOKlparen) {
+  if (s->tokens->value == TOK::string_ ||
+      s->tokens->value == TOK::leftParenthesis) {
     auto gas = createGccAsmStatement(s->loc, s->tokens);
     return gccAsmSemantic(gas, sc);
   }
@@ -209,7 +211,7 @@ void AsmStatement_toIR(InlineAsmStatement *stmt, IRState *irs) {
       cns = i_cns;
       break;
     case Arg_Pointer:
-      assert(arg->expr->op == TOKvar);
+      assert(arg->expr->isVarExp());
       arg_val = DtoRVal(arg->expr);
       cns = p_cns;
 
@@ -606,7 +608,7 @@ void CompoundAsmStatement_toIR(CompoundAsmStatement *stmt, IRState *p) {
   bool useabiret = false;
   p->asmBlock->asmBlock->abiret = nullptr;
   if (thisfunc->fbody->endsWithAsm() == stmt &&
-      thisfunc->type->nextOf()->ty != Tvoid) {
+      thisfunc->type->nextOf()->ty != TY::Tvoid) {
     // there can't be goto forwarders in this case
     assert(gotoToVal.empty());
     emitABIReturnAsmStmt(asmblock, stmt->loc, thisfunc);
@@ -744,8 +746,7 @@ void CompoundAsmStatement_toIR(CompoundAsmStatement *stmt, IRState *p) {
     // make new blocks
     llvm::BasicBlock *bb = p->insertBB("afterasmgotoforwarder");
 
-    llvm::LoadInst *val =
-        p->ir->CreateLoad(jump_target, "__llvm_jump_target_value");
+    auto val = DtoLoad(jump_target, "__llvm_jump_target_value");
     llvm::SwitchInst *sw = p->ir->CreateSwitch(val, bb, gotoToVal.size());
 
     // add all cases

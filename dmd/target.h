@@ -1,10 +1,10 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 2013-2021 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 2013-2022 by The D Language Foundation, All Rights Reserved
  * written by Iain Buclaw
- * http://www.digitalmars.com
+ * https://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
- * http://www.boost.org/LICENSE_1_0.txt
+ * https://www.boost.org/LICENSE_1_0.txt
  * https://github.com/dlang/dmd/blob/master/src/dmd/target.h
  */
 
@@ -20,7 +20,6 @@ class ClassDeclaration;
 class Dsymbol;
 class Expression;
 class FuncDeclaration;
-class Parameter;
 class Statement;
 class Type;
 class TypeTuple;
@@ -30,7 +29,7 @@ class TypeFunction;
 namespace llvm { class Type; }
 #endif
 
-enum class CPU
+enum class CPU : unsigned char
 {
     x87,
     mmx,
@@ -63,12 +62,25 @@ struct TargetC
         UClibc,
         WASI,
     };
-    unsigned longsize;            // size of a C 'long' or 'unsigned long' type
-    unsigned long_doublesize;     // size of a C 'long double'
-    unsigned wchar_tsize;         // size of a C 'wchar_t' type
+
+    enum class BitFieldStyle : unsigned char
+    {
+        Unspecified,
+        DM,                   // Digital Mars 32 bit C compiler
+        MS,                   // Microsoft 32 and 64 bit C compilers
+                              // https://docs.microsoft.com/en-us/cpp/c-language/c-bit-fields?view=msvc-160
+                              // https://docs.microsoft.com/en-us/cpp/cpp/cpp-bit-fields?view=msvc-160
+        Gcc_Clang,            // gcc and clang
+    };
+
+    uint8_t crtDestructorsSupported; // Not all platforms support crt_destructor
+    uint8_t longsize;            // size of a C 'long' or 'unsigned long' type
+    uint8_t long_doublesize;     // size of a C 'long double'
+    uint8_t wchar_tsize;         // size of a C 'wchar_t' type
 #if !IN_LLVM
     Runtime runtime;
 #endif
+    BitFieldStyle bitFieldStyle; // different C compilers do it differently
 };
 
 struct TargetCPP
@@ -85,6 +97,7 @@ struct TargetCPP
     bool reverseOverloads;    // with dmc and cl, overloaded functions are grouped and in reverse order
     bool exceptions;          // set if catching C++ exceptions is supported
     bool twoDtorInVtable;     // target C++ ABI puts deleting and non-deleting destructor into vtable
+    bool splitVBasetable;     // set if C++ ABI uses separate tables for virtual functions and virtual bases
     bool wrapDtorInExternD;   // set if C++ dtors require a D wrapper to be callable from runtime
 #if !IN_LLVM
     Runtime runtime;
@@ -94,7 +107,7 @@ struct TargetCPP
     const char *typeInfoMangle(ClassDeclaration *cd);
     const char *thunkMangle(FuncDeclaration *fd, int offset);
     const char *typeMangle(Type *t);
-    Type *parameterType(Parameter *p);
+    Type *parameterType(Type *p);
     bool fundamentalType(const Type *t, bool& isFundamental);
     unsigned derivedClassOffset(ClassDeclaration *baseClass);
 };
@@ -127,16 +140,17 @@ struct Target
     };
 
     OS os;
+    uint8_t osMajor;
     // D ABI
-    unsigned ptrsize;
+    uint8_t ptrsize;
 #if IN_LLVM
     llvm::Type *realType;
 #endif
-    unsigned realsize;           // size a real consumes in memory
-    unsigned realpad;            // 'padding' added to the CPU real size to bring it up to realsize
-    unsigned realalignsize;      // alignment for reals
-    unsigned classinfosize;      // size of 'ClassInfo'
-    unsigned long long maxStaticDataSize;  // maximum size of static data
+    uint8_t realsize;           // size a real consumes in memory
+    uint8_t realpad;            // 'padding' added to the CPU real size to bring it up to realsize
+    uint8_t realalignsize;      // alignment for reals
+    uint8_t classinfosize;      // size of 'ClassInfo'
+    uint64_t maxStaticDataSize; // maximum size of static data
 
     // C ABI
     TargetC c;
@@ -157,7 +171,7 @@ struct Target
     DString lib_ext;    /// extension for static library files
     DString dll_ext;    /// extension for dynamic library files
     bool run_noext;     /// allow -run sources without extensions
-    bool mscoff;        /// for Win32: write COFF object files instead of OMF
+    bool omfobj;        /// for Win32: write OMF object files instead of COFF
 
     template <typename T>
     struct FPTypeProperties
@@ -191,11 +205,12 @@ private:
 public:
     void _init(const Param& params);
     // Type sizes and support.
+    void setTriple(const char* _triple);
     unsigned alignsize(Type *type);
     unsigned fieldalign(Type *type);
     Type *va_listType(const Loc &loc, Scope *sc);  // get type of va_list
     int isVectorTypeSupported(int sz, Type *type);
-    bool isVectorOpSupported(Type *type, TOK op, Type *t2 = NULL);
+    bool isVectorOpSupported(Type *type, EXP op, Type *t2 = NULL);
     // ABI and backend.
     LINK systemLinkage();
     TypeTuple *toArgTypes(Type *t);
@@ -205,6 +220,7 @@ public:
     Expression *getTargetInfo(const char* name, const Loc& loc);
     bool isCalleeDestroyingArgs(TypeFunction* tf);
     bool libraryObjectMonitors(FuncDeclaration *fd, Statement *fbody);
+    bool supportsLinkerDirective() const;
     void addPredefinedGlobalIdentifiers() const;
 };
 

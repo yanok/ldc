@@ -80,14 +80,18 @@ llvm::Function *buildForwarderFunction(
   for (auto func : funcs) {
     const auto f = DtoCallee(func);
     const auto call = builder.CreateCall(f, {});
-    call->setCallingConv(gABI->callingConv(func->linkage));
+    call->setCallingConv(gABI->callingConv(func));
   }
 
   // ... incrementing the gate variables.
   for (auto gate : gates) {
     assert(getIrGlobal(gate));
     const auto val = getIrGlobal(gate)->value;
-    const auto rval = builder.CreateLoad(val, "vgate");
+    const auto rval = builder.CreateLoad(
+#if LDC_LLVM_VER >= 800
+        getPointeeType(val),
+#endif
+        val, "vgate");
     const auto res = builder.CreateAdd(rval, DtoConstUint(1), "vgate");
     builder.CreateStore(res, val);
   }

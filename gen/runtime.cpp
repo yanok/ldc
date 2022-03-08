@@ -15,7 +15,6 @@
 #include "dmd/ldcbindings.h"
 #include "dmd/module.h"
 #include "dmd/mtype.h"
-#include "dmd/root/root.h"
 #include "dmd/target.h"
 #include "dmd/tokens.h"
 #include "driver/cl_options_instrumentation.h"
@@ -245,7 +244,7 @@ struct LazyFunctionDeclarer {
   void declare(const Loc &loc) {
     Parameters *params = nullptr;
     if (!paramTypes.empty()) {
-      params = new Parameters();
+      params = createParameters();
       for (size_t i = 0, e = paramTypes.size(); i < e; ++i) {
         StorageClass stc = paramsSTC.empty() ? 0 : paramsSTC[i];
         Type *paramTy = paramTypes[i].get(loc);
@@ -276,7 +275,7 @@ struct LazyFunctionDeclarer {
         fn->addFnAttr(LLAttribute::UWTable);
       }
 
-      fn->setCallingConv(gABI->callingConv(linkage, dty));
+      fn->setCallingConv(gABI->callingConv(dty, false));
     }
   }
 };
@@ -447,10 +446,10 @@ static Type *rt_dg1() {
   if (dg_t)
     return dg_t;
 
-  auto params = new Parameters();
+  auto params = createParameters();
   params->push(Parameter::create(0, Type::tvoidptr, nullptr, nullptr, nullptr));
   auto fty = TypeFunction::create(params, Type::tint32, VARARGnone, LINK::d);
-  dg_t = createTypeDelegate(fty);
+  dg_t = TypeDelegate::create(fty);
   return dg_t;
 }
 
@@ -460,11 +459,11 @@ static Type *rt_dg2() {
   if (dg2_t)
     return dg2_t;
 
-  auto params = new Parameters();
+  auto params = createParameters();
   params->push(Parameter::create(0, Type::tvoidptr, nullptr, nullptr, nullptr));
   params->push(Parameter::create(0, Type::tvoidptr, nullptr, nullptr, nullptr));
   auto fty = TypeFunction::create(params, Type::tint32, VARARGnone, LINK::d);
-  dg2_t = createTypeDelegate(fty);
+  dg2_t = TypeDelegate::create(fty);
   return dg2_t;
 }
 
@@ -558,6 +557,17 @@ static void buildRuntimeModule() {
   // void _d_assert_msg(string msg, string file, uint line)
   createFwdDecl(LINK::c, voidTy, {"_d_assert_msg"}, {stringTy, stringTy, uintTy},
                 {}, Attr_Cold_NoReturn);
+
+  // void _d_arraybounds_slice(string file, uint line, size_t lower,
+  //                           size_t upper, size_t length)
+  createFwdDecl(LINK::c, voidTy, {"_d_arraybounds_slice"},
+                {stringTy, uintTy, sizeTy, sizeTy, sizeTy}, {},
+                Attr_Cold_NoReturn);
+
+  // void _d_arraybounds_index(string file, uint line, size_t index,
+  //                           size_t length)
+  createFwdDecl(LINK::c, voidTy, {"_d_arraybounds_index"},
+                {stringTy, uintTy, sizeTy, sizeTy}, {}, Attr_Cold_NoReturn);
 
   //////////////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////////////

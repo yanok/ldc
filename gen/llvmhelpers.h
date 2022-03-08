@@ -63,6 +63,8 @@ LLValue *DtoAllocaDump(LLValue *val, LLType *asType, int alignment = 0,
 void DtoAssert(Module *M, const Loc &loc, DValue *msg);
 void DtoCAssert(Module *M, const Loc &loc, LLValue *msg);
 
+void DtoThrow(const Loc &loc, DValue *e);
+
 // returns module file name
 LLConstant *DtoModuleFileName(Module *M, const Loc &loc);
 
@@ -80,7 +82,7 @@ void DtoEnterMonitor(const Loc &loc, LLValue *v);
 void DtoLeaveMonitor(const Loc &loc, LLValue *v);
 
 // basic operations
-void DtoAssign(const Loc &loc, DValue *lhs, DValue *rhs, int op,
+void DtoAssign(const Loc &loc, DValue *lhs, DValue *rhs, EXP op,
                bool canSkipPostblit = false);
 
 DValue *DtoSymbolAddress(const Loc &loc, Type *type, Declaration *decl);
@@ -100,10 +102,6 @@ DValue *DtoCast(const Loc &loc, DValue *val, Type *to);
 // return the same val as passed in, modified to the target type, if possible,
 // otherwise returns a new DValue
 DValue *DtoPaintType(const Loc &loc, DValue *val, Type *to);
-
-/// Returns true if the specified symbol is to be defined on declaration, for
-/// -linkonce-templates.
-bool defineOnDeclare(Dsymbol *s);
 
 /// Makes sure the declarations corresponding to the given D symbol have been
 /// emitted to the currently processed LLVM module.
@@ -182,16 +180,16 @@ bool isLLVMUnsigned(Type *t);
 ///
 /// For some operations, the result can be a constant. In this case outConst is
 /// set to it, otherwise outPred is set to the predicate to use.
-void tokToICmpPred(TOK op, bool isUnsigned, llvm::ICmpInst::Predicate *outPred,
+void tokToICmpPred(EXP op, bool isUnsigned, llvm::ICmpInst::Predicate *outPred,
                    llvm::Value **outConst);
 
 /// Converts a DMD equality/identity operation token into the corresponding LLVM
 /// icmp predicate.
-llvm::ICmpInst::Predicate eqTokToICmpPred(TOK op, bool invert = false);
+llvm::ICmpInst::Predicate eqTokToICmpPred(EXP op, bool invert = false);
 
 /// For equality/identity operations, returns `(lhs1 == rhs1) & (lhs2 == rhs2)`.
 /// `(lhs1 != rhs1) | (lhs2 != rhs2)` for inequality/not-identity.
-LLValue *createIPairCmp(TOK op, LLValue *lhs1, LLValue *lhs2, LLValue *rhs1,
+LLValue *createIPairCmp(EXP op, LLValue *lhs1, LLValue *lhs2, LLValue *rhs1,
                         LLValue *rhs2);
 
 ////////////////////////////////////////////
@@ -245,8 +243,12 @@ LLConstant *toConstantArray(LLType *ct, LLArrayType *at, T *str, size_t len,
 
 llvm::Constant *buildStringLiteralConstant(StringExp *se, bool zeroTerm);
 
-/// Indicates whether the specified symbol is a general dllimport candidate.
-bool dllimportSymbol(Dsymbol *sym);
+/// Returns true if the specified symbol is to be defined on declaration,
+/// primarily for -linkonce-templates.
+bool defineOnDeclare(Dsymbol *sym, bool isFunction);
+
+/// Indicates whether the specified data symbol is to be declared as dllimport.
+bool dllimportDataSymbol(Dsymbol *sym);
 
 /// Tries to declare an LLVM global. If a variable with the same mangled name
 /// already exists, checks if the types match and returns it instead.
@@ -283,6 +285,7 @@ DValue *toElem(Expression *e);
 DValue *toElem(Expression *e, bool skipOverCasts);
 DValue *toElemDtor(Expression *e);
 LLConstant *toConstElem(Expression *e, IRState *p);
+LLConstant *tryToConstElem(Expression *e, IRState *p);
 
 inline llvm::Value *DtoRVal(Expression *e) { return DtoRVal(toElem(e)); }
 inline llvm::Value *DtoLVal(Expression *e) { return DtoLVal(toElem(e)); }

@@ -83,9 +83,7 @@ if(NOT LLVM_SPIRV_FOUND)
         pkg_check_modules(LLVM_SPIRV LLVMSPIRVLib)
         if(LLVM_SPIRV_FOUND)
             set(LLVM_SPIRV_FOUND ON) # translate 1 to ON
-            foreach(flag ${LLVM_SPIRV_LDFLAGS})
-                append("${flag}" LLVM_LDFLAGS)
-            endforeach(flag)
+            include_directories(${LLVM_SPIRV_INCLUDE_DIRS})
         else()
             set(LLVM_SPIRV_FOUND OFF)
         endif()
@@ -109,11 +107,11 @@ include(GetLinuxDistribution)
 #
 
 # Version information
-set(LDC_VERSION "1.27.1") # May be overridden by git hash tag
+set(LDC_VERSION "1.29.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
 set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   97)
-set(DMDFE_FIX_LEVEL       2)
+set(DMDFE_PATCH_VERSION   99)
+set(DMDFE_FIX_LEVEL       0)
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
 if(DEFINED DMDFE_FIX_LEVEL)
@@ -229,7 +227,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
         append("-Wall -Wextra" LDC_CXXFLAGS)
     endif()
     # Disable some noisy warnings:
-    #  * -Wunused-parameter triggers for LLVM headers
+    #  * -Wunused-parameter and -Wcomment trigger for LLVM headers
     #  * -Wmissing-field-initializer leads to reams of warnings in gen/asm-*.h
     #  * -Wnon-virtual-dtor is something Walter has declined to let us fix upstream
     #    and it triggers for the visitors we need in our glue code
@@ -238,7 +236,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
     #  * -Wgnu-anonymous-struct and -Wnested-anon-types trigger for tokens.h.
     #  * -Wgnu-redeclared-enum triggers for various frontend headers.
     #  * -Wunused-private-field triggers for expression.h.
-    append("-Wno-unused-parameter -Wno-missing-field-initializers -Wno-non-virtual-dtor" LDC_CXXFLAGS)
+    append("-Wno-unused-parameter -Wno-comment -Wno-missing-field-initializers -Wno-non-virtual-dtor" LDC_CXXFLAGS)
     if ((${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
         append("-Wno-gnu-anonymous-struct -Wno-nested-anon-types -Wno-gnu-redeclared-enum -Wno-unused-private-field" LDC_CXXFLAGS)
         # clang trying to eagerly anticipate linker errors wrt. static class template
@@ -585,6 +583,9 @@ if(WIN32)
 elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
     target_link_libraries(${LDC_LIB} dl)
 endif()
+if(LLVM_SPIRV_FOUND)
+    target_link_libraries(${LDC_LIB} ${LLVM_SPIRV_LIBRARIES} ${LLVM_SPIRV_LDFLAGS})
+endif()
 
 set(LDC_EXE_FULL ${PROJECT_BINARY_DIR}/bin/${LDC_EXE_NAME}${CMAKE_EXECUTABLE_SUFFIX})
 set(LDMD_EXE_FULL ${PROJECT_BINARY_DIR}/bin/${LDMD_EXE_NAME}${CMAKE_EXECUTABLE_SUFFIX})
@@ -593,8 +594,8 @@ set(LDMD_EXE_FULL ${PROJECT_BINARY_DIR}/bin/${LDMD_EXE_NAME}${CMAKE_EXECUTABLE_S
 # LLVM flags into account.
 set(LDC_LINKERFLAG_LIST ${SANITIZE_LDFLAGS} ${LLVM_LIBRARIES} ${LLVM_LDFLAGS})
 if(MSVC)
-    # Issue 1297 – set LDC's stack to 8 MiB like on Linux and Mac (default: 1 MiB).
-    list(APPEND LDC_LINKERFLAG_LIST "/STACK:8388608")
+    # Issue 1297 – set LDC's stack to 16 MiB for Windows builds (default: 1 MiB).
+    list(APPEND LDC_LINKERFLAG_LIST "/STACK:16777216")
     # VS 2017+: Use undocumented /NOOPTTLS MS linker switch to keep on emitting
     # a .tls section. Required for older host druntime versions, otherwise the
     # GC TLS ranges are garbage starting with VS 2017 Update 15.3.
@@ -620,8 +621,13 @@ if(LDC_WITH_LLD)
     else()
         set(LDC_LINKERFLAG_LIST -llldDriver -llldMinGW -llldCOFF -llldELF -l${LLD_MACHO} -llldWasm -llldYAML -llldReaderWriter -llldCommon -llldCore ${LDC_LINKERFLAG_LIST})
     endif()
-    if(APPLE AND LDC_LLVM_VER LESS 700) # LLVM 6.0.0 bug, should be fixed in 6.0.1
-        list(APPEND LDC_LINKERFLAG_LIST -lxml2)
+    if(APPLE)
+        if(LDC_LLVM_VER LESS 700) # LLVM 6.0.0 bug, should be fixed in 6.0.1
+            list(APPEND LDC_LINKERFLAG_LIST -lxml2)
+        endif()
+        if(NOT (LDC_LLVM_VER LESS 1300)) # LLD 13.0.0 on Mac needs libxar
+            list(APPEND LDC_LINKERFLAG_LIST -lxar)
+        endif()
     endif()
 endif()
 

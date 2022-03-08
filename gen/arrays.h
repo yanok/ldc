@@ -54,7 +54,7 @@ llvm::Constant *arrayLiteralToConst(IRState *p, ArrayLiteralExp *ale);
 /// dstMem is expected to be a pointer to the array allocation.
 void initializeArrayLiteral(IRState *p, ArrayLiteralExp *ale, LLValue *dstMem);
 
-void DtoArrayAssign(const Loc &loc, DValue *lhs, DValue *rhs, int op,
+void DtoArrayAssign(const Loc &loc, DValue *lhs, DValue *rhs, EXP op,
                     bool canSkipPostblit);
 void DtoSetArrayToNull(LLValue *v);
 
@@ -74,9 +74,9 @@ DSliceValue *DtoAppendDCharToString(const Loc &loc, DValue *arr,
 DSliceValue *DtoAppendDCharToUnicodeString(const Loc &loc, DValue *arr,
                                            Expression *exp);
 
-LLValue *DtoArrayEquals(const Loc &loc, TOK op, DValue *l, DValue *r);
+LLValue *DtoArrayEquals(const Loc &loc, EXP op, DValue *l, DValue *r);
 
-LLValue *DtoDynArrayIs(TOK op, DValue *l, DValue *r);
+LLValue *DtoDynArrayIs(EXP op, DValue *l, DValue *r);
 
 LLValue *DtoArrayLen(DValue *v);
 LLValue *DtoArrayPtr(DValue *v);
@@ -88,4 +88,8 @@ void DtoIndexBoundsCheck(const Loc &loc, DValue *arr, DValue *index);
 
 /// Inserts a call to the druntime function that throws the range error, with
 /// the given location.
-void DtoBoundsCheckFailCall(IRState *p, const Loc &loc);
+void emitRangeError(IRState *irs, const Loc &loc);
+void emitArraySliceError(IRState *irs, const Loc &loc, LLValue *lower,
+                         LLValue *upper, LLValue *length);
+void emitArrayIndexError(IRState *irs, const Loc &loc, LLValue *index,
+                         LLValue *length);

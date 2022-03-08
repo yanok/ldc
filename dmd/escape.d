@@ -1,9 +1,9 @@
 /**
  * Most of the logic to implement scoped pointers and scoped references is here.
  *
- * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
- * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright:   Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
+ * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/escape.d, _escape.d)
  * Documentation:  https://dlang.org/phobos/dmd_escape.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/escape.d
@@ -18,6 +18,7 @@ import core.stdc.string;
 import dmd.root.rmem;
 
 import dmd.aggregate;
+import dmd.astenums;
 import dmd.declaration;
 import dmd.dscope;
 import dmd.dsymbol;
@@ -164,7 +165,7 @@ bool checkMutableArguments(Scope* sc, FuncDeclaration fd, TypeFunction tf,
         if (!(eb.isMutable || eb2.isMutable))
             return;
 
-        if (!(global.params.vsafe && sc.func.setUnsafe()))
+        if (!(global.params.useDIP1000 == FeatureState.enabled && sc.func.setUnsafe()))
             return;
 
         if (!gag)
@@ -305,11 +306,17 @@ bool checkParamArgumentEscape(Scope* sc, FuncDeclaration fdc, Parameter par, Exp
 
     bool result = false;
 
+    ScopeRef psr;
+    if (par && fdc && fdc.type.isTypeFunction())
+        psr = buildScopeRef(par.storageClass);
+    else
+        psr = ScopeRef.None;
+
     /* 'v' is assigned unsafely to 'par'
      */
     void unsafeAssign(VarDeclaration v, const char* desc)
     {
-        if (global.params.vsafe && sc.func.setUnsafe())
+        if (global.params.useDIP1000 == FeatureState.enabled && sc.func.setUnsafe())
         {
             if (!gag)
             {
@@ -373,10 +380,14 @@ bool checkParamArgumentEscape(Scope* sc, FuncDeclaration fdc, Parameter par, Exp
 
         notMaybeScope(v);
 
-        if ((v.storage_class & (STC.ref_ | STC.out_)) == 0 && p == sc.func)
+        if (!v.isReference() && p == sc.func)
         {
-            if (par && (par.storageClass & (STC.scope_ | STC.return_)) == STC.scope_)
+            if (psr == ScopeRef.Scope ||
+                psr == ScopeRef.RefScope ||
+                psr == ScopeRef.ReturnRef_Scope)
+            {
                 continue;
+            }
 
             unsafeAssign(v, "reference to local variable");
             continue;
@@ -398,7 +409,7 @@ bool checkParamArgumentEscape(Scope* sc, FuncDeclaration fdc, Parameter par, Exp
 
             notMaybeScope(v);
 
-            if ((v.storage_class & (STC.ref_ | STC.out_ | STC.scope_)) && p == sc.func)
+            if ((v.isReference() || v.isScope()) && p == sc.func)
             {
                 unsafeAssign(v, "reference to local");
                 continue;
@@ -470,12 +481,9 @@ bool checkConstructorEscape(Scope* sc, CallExp ce, bool gag)
     if (!ce.arguments && ce.arguments.dim)
         return false;
 
-    assert(ce.e1.op == TOK.dotVariable);
-    DotVarExp dve = cast(DotVarExp)ce.e1;
+    DotVarExp dve = ce.e1.isDotVarExp();
     CtorDeclaration ctor = dve.var.isCtorDeclaration();
-    assert(ctor);
-    assert(ctor.type.ty == Tfunction);
-    TypeFunction tf = cast(TypeFunction)ctor.type;
+    TypeFunction tf = ctor.type.isTypeFunction();
 
     const nparams = tf.parameterList.length;
     const n = ce.arguments.dim;
@@ -528,8 +536,8 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
 {
     enum log = false;
     if (log) printf("checkAssignEscape(e: %s)\n", e.toChars());
-    if (e.op != TOK.assign && e.op != TOK.blit && e.op != TOK.construct &&
-        e.op != TOK.concatenateAssign && e.op != TOK.concatenateElemAssign && e.op != TOK.concatenateDcharAssign)
+    if (e.op != EXP.assign && e.op != EXP.blit && e.op != EXP.construct &&
+        e.op != EXP.concatenateAssign && e.op != EXP.concatenateElemAssign && e.op != EXP.concatenateDcharAssign)
         return false;
     auto ae = cast(BinExp)e;
     Expression e1 = ae.e1;
@@ -539,7 +547,7 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
     if (!e1.type.hasPointers())
         return false;
 
-    if (e1.op == TOK.slice)
+    if (e1.isSliceExp())
         return false;
 
     /* The struct literal case can arise from the S(e2) constructor call:
@@ -548,7 +556,7 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
      *    structLiteral = e2;
      * Such an assignment does not necessarily remove scope-ness.
      */
-    if (e1.op == TOK.structLiteral)
+    if (e1.isStructLiteralExp())
         return false;
 
     EscapeByResults er;
@@ -560,7 +568,7 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
 
     VarDeclaration va = expToVariable(e1);
 
-    if (va && e.op == TOK.concatenateElemAssign)
+    if (va && e.op == EXP.concatenateElemAssign)
     {
         /* https://issues.dlang.org/show_bug.cgi?id=17842
          * Draw an equivalence between:
@@ -572,7 +580,7 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
         va = null;
     }
 
-    if (va && e1.op == TOK.dotVariable && va.type.toBasetype().ty == Tclass)
+    if (va && e1.isDotVarExp() && va.type.toBasetype().isTypeClass())
     {
         /* https://issues.dlang.org/show_bug.cgi?id=17949
          * Draw an equivalence between:
@@ -586,34 +594,33 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
 
     if (log && va) printf("va: %s\n", va.toChars());
 
-    // Try to infer 'scope' for va if in a function not marked @system
-    bool inferScope = false;
-    if (va && sc.func && sc.func.type && sc.func.type.ty == Tfunction)
-        inferScope = (cast(TypeFunction)sc.func.type).trust != TRUST.system;
-    //printf("inferScope = %d, %d\n", inferScope, (va.storage_class & STCmaybescope) != 0);
+    FuncDeclaration fd = sc.func;
+
 
     // Determine if va is a parameter that is an indirect reference
     const bool vaIsRef = va && va.storage_class & STC.parameter &&
-        (va.storage_class & (STC.ref_ | STC.out_) || va.type.toBasetype().ty == Tclass);
+        (va.isReference() || va.type.toBasetype().isTypeClass()); // ref, out, or class
     if (log && vaIsRef) printf("va is ref `%s`\n", va.toChars());
 
     /* Determine if va is the first parameter, through which other 'return' parameters
      * can be assigned.
+     * This works the same as returning the value via a return statement.
+     * Although va is marked as `ref`, it is not regarded as returning by `ref`.
+     * https://dlang.org.spec/function.html#return-ref-parameters
      */
     bool isFirstRef()
     {
         if (!vaIsRef)
             return false;
         Dsymbol p = va.toParent2();
-        FuncDeclaration fd = sc.func;
-        if (p == fd && fd.type && fd.type.ty == Tfunction)
+        if (p == fd && fd.type && fd.type.isTypeFunction())
         {
-            TypeFunction tf = cast(TypeFunction)fd.type;
+            TypeFunction tf = fd.type.isTypeFunction();
             if (!tf.nextOf() || (tf.nextOf().ty != Tvoid && !fd.isCtorDeclaration()))
                 return false;
-            if (va == fd.vthis)
+            if (va == fd.vthis) // `this` of a non-static member function is considered to be the first parameter
                 return true;
-            if (fd.parameters && fd.parameters.dim && (*fd.parameters)[0] == va)
+            if (fd.parameters && fd.parameters.length && (*fd.parameters)[0] == va) // va is first parameter
                 return true;
         }
         return false;
@@ -635,7 +642,7 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
 
         if (va && !vaIsRef && !va.isScope() && !v.isScope() &&
             (va.storage_class & v.storage_class & (STC.maybescope | STC.variadic)) == STC.maybescope &&
-            p == sc.func)
+            p == fd)
         {
             /* Add v to va's list of dependencies
              */
@@ -647,11 +654,11 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
             (v.isScope() || (v.storage_class & STC.maybescope)) &&
             !(v.storage_class & STC.return_) &&
             v.isParameter() &&
-            sc.func.flags & FUNCFLAG.returnInprocess &&
-            p == sc.func)
+            fd.flags & FUNCFLAG.returnInprocess &&
+            p == fd)
         {
-            if (log) printf("inferring 'return' for parameter %s in function %s\n", v.toChars(), sc.func.toChars());
-            inferReturn(sc.func, v);        // infer addition of 'return'
+            if (log) printf("inferring 'return' for parameter %s in function %s\n", v.toChars(), fd.toChars());
+            inferReturn(fd, v);        // infer addition of 'return' to make `return scope`
         }
 
         if (!(va && va.isScope()) || vaIsRef)
@@ -661,10 +668,11 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
         {
             if (vaIsFirstRef && v.isParameter() && v.storage_class & STC.return_)
             {
+                // va=v, where v is `return scope`
                 if (va.isScope())
                     continue;
 
-                if (inferScope && !va.doNotInferScope)
+                if (!va.doNotInferScope)
                 {
                     if (log) printf("inferring scope for lvalue %s\n", va.toChars());
                     va.storage_class |= STC.scope_ | STC.scopeinferred;
@@ -673,8 +681,9 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
             }
 
             if (va && va.isScope() && va.storage_class & STC.return_ && !(v.storage_class & STC.return_) &&
-                sc.func.setUnsafe())
+                fd.setUnsafe())
             {
+                // va may return its value, but v does not allow that, so this is an error
                 if (!gag)
                     error(ae.loc, "scope variable `%s` assigned to return scope `%s`", v.toChars(), va.toChars());
                 result = true;
@@ -682,13 +691,11 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
             }
 
             // If va's lifetime encloses v's, then error
-            if (va &&
-                (va.enclosesLifetimeOf(v) && !(v.storage_class & (STC.parameter | STC.temp)) ||
-                 // va is class reference
-                 ae.e1.op == TOK.dotVariable && va.type.toBasetype().ty == Tclass && (va.enclosesLifetimeOf(v) || !va.isScope()) ||
+            if (va && !va.isDataseg() &&
+                (va.enclosesLifetimeOf(v) && !(v.storage_class & STC.temp) ||
                  vaIsRef ||
-                 va.storage_class & (STC.ref_ | STC.out_) && !(v.storage_class & (STC.parameter | STC.temp))) &&
-                sc.func.setUnsafe())
+                 va.isReference() && !(v.storage_class & (STC.parameter | STC.temp))) &&
+                fd.setUnsafe())
             {
                 if (!gag)
                     error(ae.loc, "scope variable `%s` assigned to `%s` with longer lifetime", v.toChars(), va.toChars());
@@ -698,38 +705,49 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
 
             if (va && !va.isDataseg() && !va.doNotInferScope)
             {
-                if (!va.isScope() && inferScope)
-                {   //printf("inferring scope for %s\n", va.toChars());
+                if (!va.isScope())
+                {   /* v is scope, and va is not scope, so va needs to
+                     * infer scope
+                     */
+                    if (log) printf("inferring scope for %s\n", va.toChars());
                     va.storage_class |= STC.scope_ | STC.scopeinferred;
+                    /* v returns, and va does not return, so va needs
+                     * to infer return
+                     */
                     if (v.storage_class & STC.return_ &&
                         !(va.storage_class & STC.return_))
                     {
+                        if (log) printf("infer return for %s\n", va.toChars());
                         va.storage_class |= STC.return_ | STC.returninferred;
+
+                        // Added "return scope" so don't confuse it with "return ref"
+                        if (isRefReturnScope(va.storage_class))
+                            va.storage_class |= STC.returnScope;
                     }
                 }
                 continue;
             }
-            if (sc.func.setUnsafe())
+            if (fd.setUnsafe())
             {
                 if (!gag)
                     error(ae.loc, "scope variable `%s` assigned to non-scope `%s`", v.toChars(), e1.toChars());
                 result = true;
             }
         }
-        else if (v.storage_class & STC.variadic && p == sc.func)
+        else if (v.storage_class & STC.variadic && p == fd)
         {
             Type tb = v.type.toBasetype();
             if (tb.ty == Tarray || tb.ty == Tsarray)
             {
                 if (va && !va.isDataseg() && !va.doNotInferScope)
                 {
-                    if (!va.isScope() && inferScope)
+                    if (!va.isScope())
                     {   //printf("inferring scope for %s\n", va.toChars());
                         va.storage_class |= STC.scope_ | STC.scopeinferred;
                     }
                     continue;
                 }
-                if (sc.func.setUnsafe())
+                if (fd.setUnsafe())
                 {
                     if (!gag)
                         error(ae.loc, "variadic variable `%s` assigned to non-scope `%s`", v.toChars(), e1.toChars());
@@ -742,27 +760,26 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
             /* v is not 'scope', and we didn't check the scope of where we assigned it to.
              * It may escape via that assignment, therefore, v can never be 'scope'.
              */
-            //printf("no infer for %s in %s, %d\n", v.toChars(), sc.func.ident.toChars(), __LINE__);
+            //printf("no infer for %s in %s, %d\n", v.toChars(), fd.ident.toChars(), __LINE__);
             v.doNotInferScope = true;
         }
     }
 
-ByRef:
     foreach (VarDeclaration v; er.byref)
     {
         if (log) printf("byref: %s\n", v.toChars());
         if (v.isDataseg())
             continue;
 
-        if (global.params.vsafe)
+        if (global.params.useDIP1000 == FeatureState.enabled)
         {
-            if (va && va.isScope() && (v.storage_class & (STC.ref_ | STC.out_)) == 0)
+            if (va && va.isScope() && !v.isReference())
             {
                 if (!(va.storage_class & STC.return_))
                 {
                     va.doNotInferReturn = true;
                 }
-                else if (sc.func.setUnsafe())
+                else if (fd.setUnsafe())
                 {
                     if (!gag)
                         error(ae.loc, "address of local variable `%s` assigned to return scope `%s`", v.toChars(), va.toChars());
@@ -776,9 +793,8 @@ ByRef:
 
         // If va's lifetime encloses v's, then error
         if (va &&
-            (va.enclosesLifetimeOf(v) && !(v.isParameter() && v.isRef()) ||
-             va.isDataseg()) &&
-            sc.func.setUnsafe())
+            (va.enclosesLifetimeOf(v) || (va.isRef() && !(va.storage_class & STC.temp)) || va.isDataseg()) &&
+            fd.setUnsafe())
         {
             if (!gag)
                 error(ae.loc, "address of variable `%s` assigned to `%s` with longer lifetime", v.toChars(), va.toChars());
@@ -786,43 +802,25 @@ ByRef:
             continue;
         }
 
-        if (va && v.storage_class & (STC.ref_ | STC.out_))
-        {
-            Dsymbol pva = va.toParent2();
-            for (Dsymbol pv = p; pv; )
-            {
-                pv = pv.toParent2();
-                if (pva == pv)  // if v is nested inside pva
-                {
-                    if (sc.func.setUnsafe())
-                    {
-                        if (!gag)
-                            error(ae.loc, "reference `%s` assigned to `%s` with longer lifetime", v.toChars(), va.toChars());
-                        result = true;
-                        continue ByRef;
-                    }
-                    break;
-                }
-            }
-        }
-
         if (!(va && va.isScope()))
             notMaybeScope(v);
 
-        if ((v.storage_class & (STC.ref_ | STC.out_)) || p != sc.func)
+        if ((global.params.useDIP1000 != FeatureState.enabled && v.isReference()) || p != sc.func)
             continue;
 
         if (va && !va.isDataseg() && !va.doNotInferScope)
         {
-            if (!va.isScope() && inferScope)
+            if (!va.isScope())
             {   //printf("inferring scope for %s\n", va.toChars());
                 va.storage_class |= STC.scope_ | STC.scopeinferred;
             }
+            if (v.storage_class & STC.return_ && !(va.storage_class & STC.return_))
+                va.storage_class |= STC.return_ | STC.returninferred;
             continue;
         }
-        if (e1.op == TOK.structLiteral)
+        if (e1.op == EXP.structLiteral)
             continue;
-        if (sc.func.setUnsafe())
+        if (fd.setUnsafe())
         {
             if (!gag)
                 error(ae.loc, "reference to local variable `%s` assigned to non-scope `%s`", v.toChars(), e1.toChars());
@@ -830,19 +828,19 @@ ByRef:
         }
     }
 
-    foreach (FuncDeclaration fd; er.byfunc)
+    foreach (FuncDeclaration func; er.byfunc)
     {
-        if (log) printf("byfunc: %s, %d\n", fd.toChars(), fd.tookAddressOf);
+        if (log) printf("byfunc: %s, %d\n", func.toChars(), func.tookAddressOf);
         VarDeclarations vars;
-        findAllOuterAccessedVariables(fd, &vars);
+        findAllOuterAccessedVariables(func, &vars);
 
         /* https://issues.dlang.org/show_bug.cgi?id=16037
          * If assigning the address of a delegate to a scope variable,
          * then uncount that address of. This is so it won't cause a
          * closure to be allocated.
          */
-        if (va && va.isScope() && !(va.storage_class & STC.return_) && fd.tookAddressOf)
-            --fd.tookAddressOf;
+        if (va && va.isScope() && !(va.storage_class & STC.return_) && func.tookAddressOf)
+            --func.tookAddressOf;
 
         foreach (v; vars)
         {
@@ -854,19 +852,19 @@ ByRef:
             if (!(va && va.isScope()))
                 notMaybeScope(v);
 
-            if (!(v.storage_class & (STC.ref_ | STC.out_ | STC.scope_)) || p != sc.func)
+            if (!(v.isReference() || v.isScope()) || p != fd)
                 continue;
 
             if (va && !va.isDataseg() && !va.doNotInferScope)
             {
                 /* Don't infer STC.scope_ for va, because then a closure
-                 * won't be generated for sc.func.
+                 * won't be generated for fd.
                  */
-                //if (!va.isScope() && inferScope)
+                //if (!va.isScope())
                     //va.storage_class |= STC.scope_ | STC.scopeinferred;
                 continue;
             }
-            if (sc.func.setUnsafe())
+            if (fd.setUnsafe())
             {
                 if (!gag)
                     error(ae.loc, "reference to local `%s` assigned to non-scope `%s` in @safe code", v.toChars(), e1.toChars());
@@ -881,7 +879,7 @@ ByRef:
 
         /* Do not allow slicing of a static array returned by a function
          */
-        if (ee.op == TOK.call && ee.type.toBasetype().ty == Tsarray && e1.type.toBasetype().ty == Tarray &&
+        if (ee.op == EXP.call && ee.type.toBasetype().isTypeSArray() && e1.type.toBasetype().isTypeDArray() &&
             !(va && va.storage_class & STC.temp))
         {
             if (!gag)
@@ -891,9 +889,9 @@ ByRef:
             continue;
         }
 
-        if (ee.op == TOK.call && ee.type.toBasetype().ty == Tstruct &&
+        if (ee.op == EXP.call && ee.type.toBasetype().isTypeStruct() &&
             (!va || !(va.storage_class & STC.temp)) &&
-            sc.func.setUnsafe())
+            fd.setUnsafe())
         {
             if (!gag)
                 error(ee.loc, "address of struct temporary returned by `%s` assigned to longer lived variable `%s`",
@@ -902,9 +900,9 @@ ByRef:
             continue;
         }
 
-        if (ee.op == TOK.structLiteral &&
+        if (ee.op == EXP.structLiteral &&
             (!va || !(va.storage_class & STC.temp)) &&
-            sc.func.setUnsafe())
+            fd.setUnsafe())
         {
             if (!gag)
                 error(ee.loc, "address of struct literal `%s` assigned to longer lived variable `%s`",
@@ -915,14 +913,14 @@ ByRef:
 
         if (va && !va.isDataseg() && !va.doNotInferScope)
         {
-            if (!va.isScope() && inferScope)
+            if (!va.isScope())
             {   //printf("inferring scope for %s\n", va.toChars());
                 va.storage_class |= STC.scope_ | STC.scopeinferred;
             }
             continue;
         }
 
-        if (sc.func.setUnsafe())
+        if (fd.setUnsafe())
         {
             if (!gag)
                 error(ee.loc, "reference to stack allocated value returned by `%s` assigned to non-scope `%s`",
@@ -965,17 +963,13 @@ bool checkThrowEscape(Scope* sc, Expression e, bool gag)
         if (v.isScope() && !v.iscatchvar)       // special case: allow catch var to be rethrown
                                                 // despite being `scope`
         {
-            if (sc._module && sc._module.isRoot())
+            if (global.params.useDIP1000 == FeatureState.enabled) // https://issues.dlang.org/show_bug.cgi?id=17029
             {
-                // Only look for errors if in module listed on command line
-                if (global.params.vsafe) // https://issues.dlang.org/show_bug.cgi?id=17029
-                {
-                    if (!gag)
-                        error(e.loc, "scope variable `%s` may not be thrown", v.toChars());
-                    result = true;
-                }
-                continue;
+                if (!gag)
+                    error(e.loc, "scope variable `%s` may not be thrown", v.toChars());
+                result = true;
             }
+            continue;
         }
         else
         {
@@ -1023,7 +1017,7 @@ bool checkNewEscape(Scope* sc, Expression e, bool gag)
 
         if (v.isScope())
         {
-            if (sc._module && sc._module.isRoot() &&
+            if (
                 /* This case comes up when the ReturnStatement of a __foreachbody is
                  * checked for escapes by the caller of __foreachbody. Skip it.
                  *
@@ -1036,7 +1030,7 @@ bool checkNewEscape(Scope* sc, Expression e, bool gag)
                 !(p.parent == sc.func))
             {
                 // Only look for errors if in module listed on command line
-                if (global.params.vsafe         // https://issues.dlang.org/show_bug.cgi?id=17029
+                if (global.params.useDIP1000 == FeatureState.enabled   // https://issues.dlang.org/show_bug.cgi?id=17029
                     && sc.func.setUnsafe())     // https://issues.dlang.org/show_bug.cgi?id=20868
                 {
                     if (!gag)
@@ -1085,7 +1079,7 @@ bool checkNewEscape(Scope* sc, Expression e, bool gag)
 
         Dsymbol p = v.toParent2();
 
-        if ((v.storage_class & (STC.ref_ | STC.out_)) == 0)
+        if (!v.isReference())
         {
             if (p == sc.func)
             {
@@ -1097,10 +1091,7 @@ bool checkNewEscape(Scope* sc, Expression e, bool gag)
         /* Check for returning a ref variable by 'ref', but should be 'return ref'
          * Infer the addition of 'return', or set result to be the offending expression.
          */
-        if (!(v.storage_class & (STC.ref_ | STC.out_)))
-            continue;
-
-        if (!sc._module || !sc._module.isRoot())
+        if (!v.isReference())
             continue;
 
         // https://dlang.org/spec/function.html#return-ref-parameters
@@ -1113,10 +1104,10 @@ bool checkNewEscape(Scope* sc, Expression e, bool gag)
             continue;
         }
         // Don't need to be concerned if v's parent does not return a ref
-        FuncDeclaration fd = p.isFuncDeclaration();
-        if (!fd || !fd.type)
+        FuncDeclaration func = p.isFuncDeclaration();
+        if (!func || !func.type)
             continue;
-        if (auto tf = fd.type.isTypeFunction())
+        if (auto tf = func.type.isTypeFunction())
         {
             if (!tf.isref)
                 continue;
@@ -1236,7 +1227,7 @@ private bool checkReturnEscapeImpl(Scope* sc, Expression e, bool refs, bool gag)
                 continue;
 
             auto pfunc = p.isFuncDeclaration();
-            if (pfunc && sc._module && sc._module.isRoot() &&
+            if (pfunc &&
                 /* This case comes up when the ReturnStatement of a __foreachbody is
                  * checked for escapes by the caller of __foreachbody. Skip it.
                  *
@@ -1256,7 +1247,8 @@ private bool checkReturnEscapeImpl(Scope* sc, Expression e, bool refs, bool gag)
                )
             {
                 // Only look for errors if in module listed on command line
-                if (global.params.vsafe) // https://issues.dlang.org/show_bug.cgi?id=17029
+                // https://issues.dlang.org/show_bug.cgi?id=17029
+                if (global.params.useDIP1000 == FeatureState.enabled && sc.func.setUnsafe())
                 {
                     if (!gag)
                         error(e.loc, "scope variable `%s` may not be returned", v.toChars());
@@ -1284,11 +1276,18 @@ private bool checkReturnEscapeImpl(Scope* sc, Expression e, bool refs, bool gag)
 
     foreach (VarDeclaration v; er.byref)
     {
-        if (log) printf("byref `%s`\n", v.toChars());
+        if (log)
+        {
+            printf("byref `%s`\n", v.toChars());
+            if (v.storage_class & STC.return_) printf(" return");
+            if (v.storage_class & STC.ref_)    printf(" ref");
+            if (v.storage_class & STC.scope_)  printf(" scope");
+            printf("\n");
+        }
 
         // 'featureState' tells us whether to emit an error or a deprecation,
         // depending on the flag passed to the CLI for DIP25
-        void escapingRef(VarDeclaration v, FeatureState featureState = FeatureState.enabled)
+        void escapingRef(VarDeclaration v, ScopeRef vsr, FeatureState featureState = FeatureState.enabled)
         {
             if (!gag)
             {
@@ -1297,7 +1296,11 @@ private bool checkReturnEscapeImpl(Scope* sc, Expression e, bool refs, bool gag)
                     (v.type.hasPointers() || v.storage_class & STC.ref_))
                 {
                     msg = "returning `%s` escapes a reference to parameter `%s`";
-                    supplemental = "perhaps annotate the parameter with `return`";
+                    supplemental = vsr == ScopeRef.Ref_ReturnScope
+                                              ? "perhaps remove `scope` parameter annotation so `return` applies to `ref`"
+                                              : v.ident is Id.This
+                                                    ? "perhaps annotate the function with `return`"
+                                                    : "perhaps annotate the parameter with `return`";
                 }
                 else
                 {
@@ -1316,17 +1319,19 @@ private bool checkReturnEscapeImpl(Scope* sc, Expression e, bool refs, bool gag)
         if (v.isDataseg())
             continue;
 
+        const vsr = buildScopeRef(v.storage_class);
+
         Dsymbol p = v.toParent2();
 
         // https://issues.dlang.org/show_bug.cgi?id=19965
         if (!refs && sc.func.vthis == v)
             notMaybeScope(v);
 
-        if ((v.storage_class & (STC.ref_ | STC.out_)) == 0)
+        if (!v.isReference())
         {
             if (p == sc.func)
             {
-                escapingRef(v);
+                escapingRef(v, vsr, FeatureState.enabled);
                 continue;
             }
             FuncDeclaration fd = p.isFuncDeclaration();
@@ -1339,25 +1344,27 @@ private bool checkReturnEscapeImpl(Scope* sc, Expression e, bool refs, bool gag)
                  *   auto dg = () return { return &x; }
                  * Because dg.ptr points to x, this is returning dt.ptr+offset
                  */
-                if (global.params.vsafe)
+                if (global.params.useDIP1000 == FeatureState.enabled)
                 {
                     sc.func.storage_class |= STC.return_ | STC.returninferred;
                 }
             }
-
         }
 
         /* Check for returning a ref variable by 'ref', but should be 'return ref'
          * Infer the addition of 'return', or set result to be the offending expression.
          */
-        if ( (v.storage_class & (STC.ref_ | STC.out_)) &&
-            !(v.storage_class & (STC.return_ | STC.foreach_)))
+        if ((vsr == ScopeRef.Ref ||
+             vsr == ScopeRef.RefScope ||
+             vsr == ScopeRef.Ref_ReturnScope) &&
+            !(v.storage_class & STC.foreach_))
         {
-            if (sc.func.flags & FUNCFLAG.returnInprocess && p == sc.func)
+            if (sc.func.flags & FUNCFLAG.returnInprocess && p == sc.func &&
+                (vsr == ScopeRef.Ref || vsr == ScopeRef.RefScope))
             {
                 inferReturn(sc.func, v);        // infer addition of 'return'
             }
-            else if (sc._module && sc._module.isRoot())
+            else
             {
                 // https://dlang.org/spec/function.html#return-ref-parameters
                 // Only look for errors if in module listed on command line
@@ -1365,14 +1372,14 @@ private bool checkReturnEscapeImpl(Scope* sc, Expression e, bool refs, bool gag)
                 {
                     //printf("escaping reference to local ref variable %s\n", v.toChars());
                     //printf("storage class = x%llx\n", v.storage_class);
-                    escapingRef(v, global.params.useDIP25);
+                    escapingRef(v, vsr, global.params.useDIP25);
                     continue;
                 }
                 // Don't need to be concerned if v's parent does not return a ref
                 FuncDeclaration fd = p.isFuncDeclaration();
                 if (fd && fd.type && fd.type.ty == Tfunction)
                 {
-                    TypeFunction tf = cast(TypeFunction)fd.type;
+                    TypeFunction tf = fd.type.isTypeFunction();
                     if (tf.isref)
                     {
                         const(char)* msg = "escaping reference to outer local variable `%s`";
@@ -1413,13 +1420,12 @@ private void inferReturn(FuncDeclaration fd, VarDeclaration v)
     //printf("for function '%s' inferring 'return' for variable '%s'\n", fd.toChars(), v.toChars());
     v.storage_class |= STC.return_ | STC.returninferred;
 
-    TypeFunction tf = cast(TypeFunction)fd.type;
     if (v == fd.vthis)
     {
         /* v is the 'this' reference, so mark the function
          */
         fd.storage_class |= STC.return_ | STC.returninferred;
-        if (tf.ty == Tfunction)
+        if (auto tf = fd.type.isTypeFunction())
         {
             //printf("'this' too %p %s\n", tf, sc.func.toChars());
             tf.isreturn = true;
@@ -1429,7 +1435,7 @@ private void inferReturn(FuncDeclaration fd, VarDeclaration v)
     else
     {
         // Perform 'return' inference on parameter
-        if (tf.ty == Tfunction)
+        if (auto tf = fd.type.isTypeFunction())
         {
             foreach (i, p; tf.parameterList)
             {
@@ -1488,7 +1494,7 @@ void escapeByValue(Expression e, EscapeByResults* er, bool live = false)
              * allowed, but CTFE can generate one out of a new expression,
              * but it'll be placed in static data so no need to check it.
              */
-            if (e.e1.op != TOK.structLiteral)
+            if (e.e1.op != EXP.structLiteral)
                 escapeByRef(e.e1, er, live);
         }
 
@@ -1606,9 +1612,9 @@ void escapeByValue(Expression e, EscapeByResults* er, bool live = false)
 
         override void visit(SliceExp e)
         {
-            if (e.e1.op == TOK.variable)
+            if (auto ve = e.e1.isVarExp())
             {
-                VarDeclaration v = (cast(VarExp)e.e1).var.isVarDeclaration();
+                VarDeclaration v = ve.var.isVarDeclaration();
                 Type tb = e.type.toBasetype();
                 if (v)
                 {
@@ -1683,11 +1689,11 @@ void escapeByValue(Expression e, EscapeByResults* er, bool live = false)
             TypeDelegate dg;
             if (t1.ty == Tdelegate)
             {
-                dg = cast(TypeDelegate)t1;
-                tf = cast(TypeFunction)(cast(TypeDelegate)t1).next;
+                dg = t1.isTypeDelegate();
+                tf = dg.next.isTypeFunction();
             }
             else if (t1.ty == Tfunction)
-                tf = cast(TypeFunction)t1;
+                tf = t1.isTypeFunction();
             else
                 return;
 
@@ -1728,12 +1734,12 @@ void escapeByValue(Expression e, EscapeByResults* er, bool live = false)
                 }
             }
             // If 'this' is returned, check it too
-            if (e.e1.op == TOK.dotVariable && t1.ty == Tfunction)
+            if (e.e1.op == EXP.dotVariable && t1.ty == Tfunction)
             {
-                DotVarExp dve = cast(DotVarExp)e.e1;
+                DotVarExp dve = e.e1.isDotVarExp();
                 FuncDeclaration fd = dve.var.isFuncDeclaration();
                 AggregateDeclaration ad;
-                if (global.params.vsafe && tf.isreturn && fd && (ad = fd.isThis()) !is null)
+                if (global.params.useDIP1000 == FeatureState.enabled && tf.isreturn && fd && (ad = fd.isThis()) !is null)
                 {
                     if (ad.isClassDeclaration() || tf.isScopeQual)       // this is 'return scope'
                         dve.e1.accept(this);
@@ -1778,9 +1784,8 @@ void escapeByValue(Expression e, EscapeByResults* er, bool live = false)
 
             /* If it's a nested function that is 'return scope'
              */
-            if (e.e1.op == TOK.variable)
+            if (auto ve = e.e1.isVarExp())
             {
-                VarExp ve = cast(VarExp)e.e1;
                 FuncDeclaration fd = ve.var.isFuncDeclaration();
                 if (fd && fd.isNested())
                 {
@@ -1874,9 +1879,9 @@ void escapeByRef(Expression e, EscapeByResults* er, bool live = false)
         override void visit(IndexExp e)
         {
             Type tb = e.e1.type.toBasetype();
-            if (e.e1.op == TOK.variable)
+            if (auto ve = e.e1.isVarExp())
             {
-                VarDeclaration v = (cast(VarExp)e.e1).var.isVarDeclaration();
+                VarDeclaration v = ve.var.isVarDeclaration();
                 if (tb.ty == Tarray || tb.ty == Tsarray)
                 {
                     if (v && v.storage_class & STC.variadic)
@@ -1948,9 +1953,9 @@ void escapeByRef(Expression e, EscapeByResults* er, bool live = false)
             Type t1 = e.e1.type.toBasetype();
             TypeFunction tf;
             if (t1.ty == Tdelegate)
-                tf = cast(TypeFunction)(cast(TypeDelegate)t1).next;
+                tf = t1.isTypeDelegate().next.isTypeFunction();
             else if (t1.ty == Tfunction)
-                tf = cast(TypeFunction)t1;
+                tf = t1.isTypeFunction();
             else
                 return;
             if (tf.isref)
@@ -1973,9 +1978,8 @@ void escapeByRef(Expression e, EscapeByResults* er, bool live = false)
                                 arg.accept(this);
                             else if ((stc & STC.scope_) && (stc & STC.return_))
                             {
-                                if (arg.op == TOK.delegate_)
+                                if (auto de = arg.isDelegateExp())
                                 {
-                                    DelegateExp de = cast(DelegateExp)arg;
                                     if (de.func.isNested())
                                         er.byexp.push(de);
                                 }
@@ -1986,9 +1990,9 @@ void escapeByRef(Expression e, EscapeByResults* er, bool live = false)
                     }
                 }
                 // If 'this' is returned by ref, check it too
-                if (e.e1.op == TOK.dotVariable && t1.ty == Tfunction)
+                if (e.e1.op == EXP.dotVariable && t1.ty == Tfunction)
                 {
-                    DotVarExp dve = cast(DotVarExp)e.e1;
+                    DotVarExp dve = e.e1.isDotVarExp();
 
                     // https://issues.dlang.org/show_bug.cgi?id=20149#c10
                     if (dve.var.isCtorDeclaration())
@@ -2013,16 +2017,15 @@ void escapeByRef(Expression e, EscapeByResults* er, bool live = false)
                     }
                 }
                 // If it's a delegate, check it too
-                if (e.e1.op == TOK.variable && t1.ty == Tdelegate)
+                if (e.e1.op == EXP.variable && t1.ty == Tdelegate)
                 {
                     escapeByValue(e.e1, er, live);
                 }
 
                 /* If it's a nested function that is 'return ref'
                  */
-                if (e.e1.op == TOK.variable)
+                if (auto ve = e.e1.isVarExp())
                 {
-                    VarExp ve = cast(VarExp)e.e1;
                     FuncDeclaration fd = ve.var.isFuncDeclaration();
                     if (fd && fd.isNested())
                     {
@@ -2160,7 +2163,7 @@ public void eliminateMaybeScopes(VarDeclaration[] array)
                         {
                             // v cannot be scope since it is assigned to a non-scope va
                             notMaybeScope(v);
-                            if (!(v.storage_class & (STC.ref_ | STC.out_)))
+                            if (!v.isReference())
                                 v.storage_class &= ~(STC.return_ | STC.returninferred);
                             changes = true;
                         }

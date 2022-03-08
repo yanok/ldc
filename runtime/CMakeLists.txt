@@ -37,7 +37,7 @@ set(MULTILIB              OFF                                 CACHE BOOL   "Buil
 set(BUILD_LTO_LIBS        OFF                                 CACHE BOOL   "Also build the runtime as LLVM bitcode libraries for LTO")
 set(INCLUDE_INSTALL_DIR   ${CMAKE_INSTALL_PREFIX}/include/d   CACHE PATH   "Path to install D modules to")
 set(BUILD_SHARED_LIBS     AUTO                                CACHE STRING "Whether to build the runtime as a shared library (ON|OFF|BOTH)")
-set(D_FLAGS               -w;-de;-dip1000;-preview=dtorfields CACHE STRING "Runtime D compiler flags, separated by ';'")
+set(D_FLAGS               -w;-de;-preview=dip1000;-preview=dtorfields;-preview=fieldwise CACHE STRING "Runtime D compiler flags, separated by ';'")
 set(D_EXTRA_FLAGS         ""                                  CACHE STRING "Runtime extra D compiler flags, separated by ';'")
 set(D_FLAGS_DEBUG         -g;-link-defaultlib-debug;-d-debug  CACHE STRING "Runtime D compiler flags (debug libraries), separated by ';'")
 set(D_FLAGS_RELEASE       -O3;-release                        CACHE STRING "Runtime D compiler flags (release libraries), separated by ';'")
@@ -51,7 +51,7 @@ set(RT_SUPPORT_SANITIZERS OFF                                 CACHE BOOL   "Buil
 
 set(CMAKE_INSTALL_LIBDIR ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
 
-set(DRUNTIME_EXTRA_FLAGS          -preview=fieldwise)
+set(DRUNTIME_EXTRA_FLAGS          )
 set(DRUNTIME_EXTRA_UNITTEST_FLAGS -d-version=CoreUnittest -unittest -checkaction=context -linkonce-templates)
 set(PHOBOS2_EXTRA_FLAGS           )
 set(PHOBOS2_EXTRA_UNITTEST_FLAGS  -d-version=StdUnittest -unittest -linkonce-templates)
@@ -103,7 +103,9 @@ if(${BUILD_SHARED_LIBS} STREQUAL "AUTO")
         set(BUILD_SHARED_LIBS OFF)
     endif()
 endif()
-set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS} PARENT_SCOPE) # e.g., for tests/d2/CMakeLists.txt and forwarding to dmd-testsuite
+if(LDC_EXE)
+    set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS} PARENT_SCOPE) # e.g., for tests/d2/CMakeLists.txt and forwarding to dmd-testsuite
+endif()
 
 set(SHARED_LIB_SUFFIX "")
 if(NOT ${BUILD_SHARED_LIBS} STREQUAL "OFF")
@@ -228,8 +230,12 @@ if(PHOBOS2_DIR)
 
     # Phobos C parts
     file(GLOB_RECURSE PHOBOS2_C ${PHOBOS2_DIR}/*.c)
-    # remove some obsolete zlib modules
-    list(REMOVE_ITEM PHOBOS2_C ${PHOBOS2_DIR}/etc/c/zlib/minigzip.c ${PHOBOS2_DIR}/etc/c/zlib/example.c)
+    # remove zlib test modules
+    list(REMOVE_ITEM PHOBOS2_C
+        ${PHOBOS2_DIR}/etc/c/zlib/test/example.c
+        ${PHOBOS2_DIR}/etc/c/zlib/test/infcover.c
+        ${PHOBOS2_DIR}/etc/c/zlib/test/minigzip.c
+    )
 endif()
 
 #
@@ -250,6 +256,10 @@ elseif(${BUILD_SHARED_LIBS} STREQUAL "OFF")
     set(ADDITIONAL_DEFAULT_LDC_SWITCHES "${ADDITIONAL_DEFAULT_LDC_SWITCHES}\n        \"-link-defaultlib-shared=false\",")
 endif()
 
+# Default wasm stack is only 64kb, this is rather small, let's bump it to 1mb
+set(WASM_DEFAULT_LDC_SWITCHES "${WASM_DEFAULT_LDC_SWITCHES}\n        \"-L-z\", \"-Lstack-size=1048576\",")
+# Protect from stack overflow overwriting global memory
+set(WASM_DEFAULT_LDC_SWITCHES "${WASM_DEFAULT_LDC_SWITCHES}\n        \"-L--stack-first\",")
 if(LDC_WITH_LLD)
     set(WASM_DEFAULT_LDC_SWITCHES "${WASM_DEFAULT_LDC_SWITCHES}\n        \"-link-internally\",")
 endif()
@@ -424,7 +434,7 @@ macro(dc src_files src_basedir d_flags output_basedir emit_bc all_at_once single
             set(renameCommand "")
             if(${emit_bc})
                 # rename generated *.bc to *.bc.o[bj]
-                set(renameCommand mv ${output_basedir}/${output_root}.bc ${output_bc})
+                set(renameCommand ${CMAKE_COMMAND} -E rename ${output_basedir}/${output_root}.bc ${output_bc})
                 list(APPEND outfiles ${output_bc})
             endif()
 
@@ -461,7 +471,7 @@ macro(dc src_files src_basedir d_flags output_basedir emit_bc all_at_once single
             string(REGEX REPLACE "${CMAKE_C_OUTPUT_EXTENSION}$" "" src_bc "${dst_bc}")
             add_custom_command(
                 OUTPUT ${new_o} ${new_bc} APPEND
-                COMMAND mv ${src_bc} ${dst_bc}
+                COMMAND ${CMAKE_COMMAND} -E rename ${src_bc} ${dst_bc}
             )
         endforeach()
     endif()
@@ -505,29 +515,6 @@ macro(compile_druntime d_flags lib_suffix path_suffix emit_bc all_at_once single
        ${outlist_bc}
     )
 endmacro()
-
-set(dso_windows_o "")
-if("${TARGET_SYSTEM}" MATCHES "Windows")
-    # Windows: precompile rt.dso_windows object file & install to lib dir.
-    # The existing object file isn't reused to prevent *exported* symbols (only
-    # -link-defaultlib-shared for dllimport, no -fvisibility=public).
-    # This allows to create executables with -link-defaultlib-shared without
-    # any exports (and according extra linker files such as the import .lib).
-    set(dso_windows_bc "")
-    dc("${RUNTIME_DIR}/src/rt/dso_windows.d"
-       "${RUNTIME_DIR}/src"
-       "-conf=;${D_FLAGS};${D_FLAGS_RELEASE};-link-defaultlib-shared;${DRUNTIME_EXTRA_FLAGS};-I${RUNTIME_DIR}/src"
-       "${CMAKE_BINARY_DIR}/lib${LIB_SUFFIX}"
-       "OFF" # emit_bc
-       "ON"  # all_at_once
-       "dso_windows" # single_obj_name
-       dso_windows_o
-       dso_windows_bc
-    )
-
-    add_custom_target(dso_windows DEPENDS ${dso_windows_o})
-    install(FILES ${dso_windows_o} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
-endif()
 
 # Sets up the targets for building the Phobos D object files, appending the
 # names of the (bitcode) files to link into the library to outlist_o (outlist_bc).
@@ -763,6 +750,8 @@ macro(build_runtime_variant d_flags c_flags ld_flags lib_suffix path_suffix emit
                          "${lib_suffix}${SHARED_LIB_SUFFIX}" "${path_suffix}"
                          "OFF" "${all_d_files_at_once}" "OFF" druntime_o druntime_bc)
 
+        set(rt_dso_o "${PROJECT_BINARY_DIR}/objects${target_suffix}/rt/dso${CMAKE_C_OUTPUT_EXTENSION}")
+
         # compile Phobos with public visibility (and preferably to a single object file)
         if(phobos2_common STREQUAL "")
             set(phobos2_o "")
@@ -772,10 +761,8 @@ macro(build_runtime_variant d_flags c_flags ld_flags lib_suffix path_suffix emit
                             "OFF" "${all_d_files_at_once}" "${all_d_files_at_once}" phobos2_o phobos2_bc)
         endif()
 
-        if("${TARGET_SYSTEM}" MATCHES "Windows")
-            # also link-in special rt.dso_windows druntime module
-            list(APPEND phobos2_o ${dso_windows_o})
-        endif()
+        # also link-in special rt.dso druntime module
+        list(APPEND phobos2_o ${rt_dso_o})
 
         build_runtime_libs("${druntime_o}" "${druntime_bc}" "${phobos2_o}" "${phobos2_bc}"
                            "${c_flags}" "${ld_flags}" "${lib_suffix}${SHARED_LIB_SUFFIX}" "${path_suffix}"
@@ -783,8 +770,21 @@ macro(build_runtime_variant d_flags c_flags ld_flags lib_suffix path_suffix emit
 
         if(NOT phobos2_common STREQUAL "")
             add_dependencies(phobos2-ldc${target_suffix} ${phobos2_common})
-        elseif("${TARGET_SYSTEM}" MATCHES "Windows")
-            add_dependencies(phobos2-ldc${target_suffix} dso_windows)
+        endif()
+
+        if("${lib_suffix}" STREQUAL "") # non-debug & non-unittest
+            # copy rt.dso to `ldc_rt.dso.o[bj]` in lib dir
+            add_custom_command(
+                TARGET druntime-ldc${target_suffix}
+                POST_BUILD COMMAND
+                ${CMAKE_COMMAND} -E copy ${rt_dso_o} ${CMAKE_BINARY_DIR}/lib${path_suffix}/ldc_rt.dso${CMAKE_C_OUTPUT_EXTENSION}
+            )
+            # and install it too
+            install(
+                FILES ${rt_dso_o}
+                DESTINATION ${CMAKE_INSTALL_PREFIX}/lib${path_suffix}
+                RENAME ldc_rt.dso${CMAKE_C_OUTPUT_EXTENSION}
+            )
         endif()
     endif()
 endmacro()
@@ -1030,9 +1030,9 @@ macro(compile_testrunner d_flags is_shared target_suffix extra_dir_suffix)
        test_runner_bc
     )
 
-    if("${is_shared}" STREQUAL "ON" AND "${TARGET_SYSTEM}" MATCHES "Windows")
-        # also link-in special rt.dso_windows druntime module
-        list(APPEND test_runner_o ${dso_windows_o})
+    if("${is_shared}" STREQUAL "ON")
+        # also link-in special rt.dso druntime module
+        list(APPEND test_runner_o ${PROJECT_BINARY_DIR}/objects-unittest${target_suffix}/rt/dso${CMAKE_C_OUTPUT_EXTENSION})
     endif()
 endmacro()
 
@@ -1167,8 +1167,8 @@ endmacro()
 
 function(add_tests d_files runner target_suffix)
     foreach(file ${d_files})
-        # skip rt.dso_* (no ModuleInfo)
-        if(NOT "${file}" MATCHES "druntime/src/rt/dso_")
+        # skip rt.dso (no ModuleInfo)
+        if(NOT "${file}" MATCHES "druntime/src/rt/dso.d")
             file_to_module_name(${file} module)
             add_test(NAME "${module}${target_suffix}"
                 WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"

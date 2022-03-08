@@ -16,7 +16,6 @@
 #include "gen/abi-arm.h"
 
 #include "dmd/identifier.h"
-#include "dmd/ldcbindings.h"
 #include "gen/abi.h"
 #include "gen/abi-generic.h"
 #include "llvm/Target/TargetMachine.h"
@@ -38,8 +37,8 @@ struct ArmTargetABI : TargetABI {
     if (!isPOD(rt))
       return true;
 
-    return rt->ty == Tsarray ||
-           (rt->ty == Tstruct && rt->size() > 4 &&
+    return rt->ty == TY::Tsarray ||
+           (rt->ty == TY::Tstruct && rt->size() > 4 &&
             (gTargetMachine->Options.FloatABIType == llvm::FloatABI::Soft ||
              !isHFVA(rt, hfvaToArray.maxElements)));
   }
@@ -50,7 +49,7 @@ struct ArmTargetABI : TargetABI {
     // converts back to non-byval.  Without this special handling the
     // optimzer generates bad code (e.g. std.random unittest crash).
     t = t->toBasetype();
-    return ((t->ty == Tsarray || t->ty == Tstruct) && t->size() > 64);
+    return ((t->ty == TY::Tsarray || t->ty == TY::Tstruct) && t->size() > 64);
 
     // Note: byval can have a codegen problem with -O1 and higher.
     // What happens is that load instructions are being incorrectly
@@ -72,7 +71,7 @@ struct ArmTargetABI : TargetABI {
 
   void rewriteFunctionType(IrFuncTy &fty) override {
     Type *retTy = fty.ret->type->toBasetype();
-    if (!fty.ret->byref && retTy->ty == Tstruct) {
+    if (!fty.ret->byref && retTy->ty == TY::Tstruct) {
       // Rewrite HFAs only because union HFAs are turned into IR types that are
       // non-HFA and messes up register selection
       if (isHFVA(retTy, hfvaToArray.maxElements, &fty.ret->ltype)) {
@@ -99,8 +98,8 @@ struct ArmTargetABI : TargetABI {
     // TODO: want to also rewrite Tsarray as i32 arrays, but sometimes
     // llvm selects an aligned ldrd instruction even though the ptr is
     // unaligned (e.g. walking through members of array char[5][]).
-    // if (ty->ty == Tstruct || ty->ty == Tsarray)
-    if (ty->ty == Tstruct) {
+    // if (ty->ty == TY::Tstruct || ty->ty == TY::Tsarray)
+    if (ty->ty == TY::Tstruct) {
       // Rewrite HFAs only because union HFAs are turned into IR types that are
       // non-HFA and messes up register selection
       if (isHFVA(ty, hfvaToArray.maxElements, &arg.ltype)) {
@@ -118,7 +117,7 @@ struct ArmTargetABI : TargetABI {
     // using TypeIdentifier here is a bit wonky but works, as long as the name
     // is actually available in the scope (this is what DMD does, so if a better
     // solution is found there, this should be adapted).
-    return createTypeIdentifier(Loc(), Identifier::idPool("__va_list"));
+    return TypeIdentifier::create(Loc(), Identifier::idPool("__va_list"));
   }
 
   const char *objcMsgSendFunc(Type *ret, IrFuncTy &fty) override {

@@ -489,6 +489,14 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
     args.push_back(objfile);
   }
 
+  // add precompiled rt.dso object file (in lib directory) when linking
+  // against shared druntime
+  const auto &libDirs = ConfigFile::instance.libDirs();
+  if (!defaultLibNames.empty() && linkAgainstSharedDefaultLibs() &&
+      !libDirs.empty()) {
+    args.push_back((llvm::Twine(libDirs[0]) + "/ldc_rt.dso.o").str());
+  }
+
   // Link with profile-rt library when generating an instrumented binary.
   if (opts::isInstrumentingForPGO()) {
     addProfileRuntimeLinkFlags(*global.params.targetTriple);
@@ -533,7 +541,7 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
   addUserSwitches();
 
   // lib dirs
-  for (const char *dir_c : ConfigFile::instance.libDirs()) {
+  for (const char *dir_c : libDirs) {
     const llvm::StringRef dir(dir_c);
     if (!dir.empty())
       args.push_back(("-L" + dir).str());
@@ -587,22 +595,12 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
 void ArgsBuilder::addLinker() {
   llvm::StringRef linker = opts::linker;
 
-  // We have a default linker preference for Linux targets. It can be disabled
-  // via `-linker=` (explicitly empty).
-  if (global.params.targetTriple->isOSLinux() &&
+  // Default to ld.bfd for Android (placing .tdata and .tbss sections adjacent
+  // to each other as required by druntime's rt.sections_android, contrary to
+  // gold and lld as of Android NDK r21d).
+  if (global.params.targetTriple->getEnvironment() == llvm::Triple::Android &&
       opts::linker.getNumOccurrences() == 0) {
-    // Default to ld.bfd for Android (placing .tdata and .tbss sections adjacent
-    // to each other as required by druntime's rt.sections_android, contrary to
-    // gold and lld as of Android NDK r21d).
-    if (global.params.targetTriple->getEnvironment() == llvm::Triple::Android) {
-      linker = "bfd";
-    }
-    // Otherwise default to ld.gold for Linux due to ld.bfd issues with ThinLTO
-    // (see #2278) and older bfd versions stripping llvm.used symbols (e.g.,
-    // ModuleInfo refs) with --gc-sections (see #2870).
-    else {
-      linker = "gold";
-    }
+    linker = "bfd";
   }
 
   if (!linker.empty())

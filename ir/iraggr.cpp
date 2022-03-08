@@ -53,17 +53,7 @@ bool IrAggr::suppressTypeInfo() const {
 //////////////////////////////////////////////////////////////////////////////
 
 bool IrAggr::useDLLImport() const {
-  if (!global.params.targetTriple->isOSWindows())
-    return false;
-
-  if (dllimportSymbol(aggrdecl)) {
-    // dllimport, unless defined in a root module (=> no extra indirection for
-    // other root modules, assuming *all* root modules will be linked together
-    // to one or more binaries).
-    return aggrdecl->inNonRoot();
-  }
-
-  return false;
+  return dllimportDataSymbol(aggrdecl);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -103,7 +93,7 @@ LLConstant *IrAggr::getInitSymbol(bool define) {
     init = initGlobal;
 
     if (!define)
-      define = defineOnDeclare(aggrdecl);
+      define = defineOnDeclare(aggrdecl, /*isFunction=*/false);
   }
 
   if (define) {
@@ -161,7 +151,7 @@ LLConstant *IrAggr::getDefaultInitializer(VarDeclaration *field) {
   if (field->_init) {
     // Issue 9057 workaround caused by issue 14666 fix, see DMD upstream
     // commit 069f570005.
-    if (field->semanticRun < PASSsemantic2done && field->_scope) {
+    if (field->semanticRun < PASS::semantic2done && field->_scope) {
       semantic2(field, field->_scope);
     }
     return DtoConstInitializer(field->_init->loc, field->type, field->_init);
@@ -182,7 +172,7 @@ static llvm::Constant *FillSArrayDims(Type *arrTypeD, llvm::Constant *init) {
     return init;
   }
 
-  if (arrTypeD->ty == Tsarray) {
+  if (arrTypeD->ty == TY::Tsarray) {
     init = FillSArrayDims(arrTypeD->nextOf(), init);
     size_t dim = static_cast<TypeSArray *>(arrTypeD)->dim->toUInteger();
     llvm::ArrayType *arrty = llvm::ArrayType::get(init->getType(), dim);
@@ -224,8 +214,6 @@ IrAggr::createInitializerConstant(const VarInitMap &explicitInitializers) {
   const size_t structsize = aggrdecl->size(Loc());
   if (offset < structsize)
     add_zeros(constants, offset, structsize);
-
-  assert(!constants.empty());
 
   // get LL field types
   llvm::SmallVector<llvm::Type *, 16> types;
@@ -286,7 +274,9 @@ void IrAggr::addFieldInitializers(
   }
 
   AggrTypeBuilder b(false, offset);
-  b.addAggregate(decl, &explicitInitializers, AggrTypeBuilder::Aliases::Skip);
+  b.addAggregate(decl,
+                 explicitInitializers.empty() ? nullptr : &explicitInitializers,
+                 AggrTypeBuilder::Aliases::Skip);
   offset = b.currentOffset();
 
   const size_t baseLLFieldIndex = constants.size();

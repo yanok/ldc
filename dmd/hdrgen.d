@@ -3,9 +3,9 @@
  *
  * Also used to convert AST nodes to D code in general, e.g. for error messages or `printf` debugging.
  *
- * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
- * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright:   Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
+ * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/hdrgen.d, _hdrgen.d)
  * Documentation:  https://dlang.org/phobos/dmd_hdrgen.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/hdrgen.d
@@ -19,8 +19,8 @@ import core.stdc.string;
 import dmd.aggregate;
 import dmd.aliasthis;
 import dmd.arraytypes;
+import dmd.astenums;
 import dmd.attrib;
-import dmd.complex;
 import dmd.cond;
 import dmd.ctfeexpr;
 import dmd.dclass;
@@ -42,8 +42,9 @@ import dmd.init;
 import dmd.mtype;
 import dmd.nspace;
 import dmd.parse;
+import dmd.root.complex;
 import dmd.root.ctfloat;
-import dmd.root.outbuffer;
+import dmd.common.outbuffer;
 import dmd.root.rootobject;
 import dmd.root.string;
 import dmd.statement;
@@ -168,7 +169,7 @@ public:
 
     override void visit(ExpStatement s)
     {
-        if (s.exp && s.exp.op == TOK.declaration &&
+        if (s.exp && s.exp.op == EXP.declaration &&
             (cast(DeclarationExp)s.exp).declaration)
         {
             // bypass visit(DeclarationExp)
@@ -206,7 +207,7 @@ public:
         foreach (sx; *s.statements)
         {
             auto ds = sx ? sx.isExpStatement() : null;
-            if (ds && ds.exp.op == TOK.declaration)
+            if (ds && ds.exp.op == EXP.declaration)
             {
                 auto d = (cast(DeclarationExp)ds.exp).declaration;
                 assert(d.isDeclaration());
@@ -913,6 +914,12 @@ public:
 
     override void visit(AttribDeclaration d)
     {
+        bool hasSTC;
+        if (auto stcd = d.isStorageClassDeclaration)
+        {
+            hasSTC = stcToBuffer(buf, stcd.stc);
+        }
+
         if (!d.decl)
         {
             buf.writeByte(';');
@@ -922,10 +929,12 @@ public:
         if (d.decl.dim == 0 || (hgs.hdrgen && d.decl.dim == 1 && (*d.decl)[0].isUnitTestDeclaration()))
         {
             // hack for bugzilla 8081
+            if (hasSTC) buf.writeByte(' ');
             buf.writestring("{}");
         }
         else if (d.decl.dim == 1)
         {
+            if (hasSTC) buf.writeByte(' ');
             (*d.decl)[0].accept(this);
             return;
         }
@@ -945,8 +954,6 @@ public:
 
     override void visit(StorageClassDeclaration d)
     {
-        if (stcToBuffer(buf, d.stc))
-            buf.writeByte(' ');
         visit(cast(AttribDeclaration)d);
     }
 
@@ -989,8 +996,9 @@ public:
     override void visit(VisibilityDeclaration d)
     {
         visibilityToBuffer(buf, d.visibility);
-        buf.writeByte(' ');
         AttribDeclaration ad = cast(AttribDeclaration)d;
+        if (ad.decl.dim <= 1)
+            buf.writeByte(' ');
         if (ad.decl.dim == 1 && (*ad.decl)[0].isVisibilityDeclaration)
             visit(cast(AttribDeclaration)(*ad.decl)[0]);
         else
@@ -999,16 +1007,21 @@ public:
 
     override void visit(AlignDeclaration d)
     {
-        buf.writestring("align ");
-        if (d.ealign)
+        if (d.exps)
         {
-            buf.printf("(%s)", d.ealign.toChars());
-            AttribDeclaration ad = cast(AttribDeclaration)d;
-            if (ad.decl && ad.decl.dim < 2)
+            foreach (i, exp; (*d.exps)[])
+            {
+                if (i)
+                    buf.writeByte(' ');
+                buf.printf("align (%s)", exp.toChars());
+            }
+            if (d.decl && d.decl.dim < 2)
                 buf.writeByte(' ');
         }
+        else
+            buf.writestring("align ");
 
-        visit(cast(AttribDeclaration)d);
+        visit(d.isAttribDeclaration());
     }
 
     override void visit(AnonDeclaration d)
@@ -1253,7 +1266,7 @@ public:
             {
                 buf.writestring(" = ");
                 ExpInitializer ie = vd._init.isExpInitializer();
-                if (ie && (ie.exp.op == TOK.construct || ie.exp.op == TOK.blit))
+                if (ie && (ie.exp.op == EXP.construct || ie.exp.op == EXP.blit))
                     (cast(AssignExp)ie.exp).e2.expressionToBuffer(buf, hgs);
                 else
                     vd._init.initializerToBuffer(buf, hgs);
@@ -1323,11 +1336,10 @@ public:
         if (d.ident)
         {
             buf.writestring(d.ident.toString());
-            buf.writeByte(' ');
         }
         if (d.memtype)
         {
-            buf.writestring(": ");
+            buf.writestring(" : ");
             typeToBuffer(d.memtype, null, buf, hgs);
         }
         if (!d.members)
@@ -1505,7 +1517,7 @@ public:
         {
             buf.writestring(" = ");
             auto ie = v._init.isExpInitializer();
-            if (ie && (ie.exp.op == TOK.construct || ie.exp.op == TOK.blit))
+            if (ie && (ie.exp.op == EXP.construct || ie.exp.op == EXP.blit))
                 (cast(AssignExp)ie.exp).e2.expressionToBuffer(buf, hgs);
             else
                 v._init.initializerToBuffer(buf, hgs);
@@ -1563,7 +1575,7 @@ public:
                 buf.writestring("in");
                 if (auto es = frequire.isExpStatement())
                 {
-                    assert(es.exp && es.exp.op == TOK.assert_);
+                    assert(es.exp && es.exp.op == EXP.assert_);
                     buf.writestring(" (");
                     (cast(AssertExp)es.exp).e1.expressionToBuffer(buf, hgs);
                     buf.writeByte(')');
@@ -1586,7 +1598,7 @@ public:
                 buf.writestring("out");
                 if (auto es = fensure.ensure.isExpStatement())
                 {
-                    assert(es.exp && es.exp.op == TOK.assert_);
+                    assert(es.exp && es.exp.op == EXP.assert_);
                     buf.writestring(" (");
                     if (fensure.id)
                     {
@@ -1687,17 +1699,8 @@ public:
 
     override void visit(DtorDeclaration d)
     {
-        if (d.storage_class & STC.trusted)
-            buf.writestring("@trusted ");
-        if (d.storage_class & STC.safe)
-            buf.writestring("@safe ");
-        if (d.storage_class & STC.nogc)
-            buf.writestring("@nogc ");
-        if (d.storage_class & STC.live)
-            buf.writestring("@live ");
-        if (d.storage_class & STC.disable)
-            buf.writestring("@disable ");
-
+        if (stcToBuffer(buf, d.storage_class))
+            buf.writeByte(' ');
         buf.writestring("~this()");
         bodyToBuffer(d);
     }
@@ -1743,7 +1746,7 @@ public:
         buf.writestring("invariant");
         if(auto es = d.fbody.isExpStatement())
         {
-            assert(es.exp && es.exp.op == TOK.assert_);
+            assert(es.exp && es.exp.op == EXP.assert_);
             buf.writestring(" (");
             (cast(AssertExp)es.exp).e1.expressionToBuffer(buf, hgs);
             buf.writestring(");");
@@ -1765,13 +1768,23 @@ public:
         bodyToBuffer(d);
     }
 
+    override void visit(BitFieldDeclaration d)
+    {
+        if (stcToBuffer(buf, d.storage_class))
+            buf.writeByte(' ');
+        Identifier id = d.isAnonymous() ? null : d.ident;
+        typeToBuffer(d.type, id, buf, hgs);
+        buf.writestring(" : ");
+        d.width.expressionToBuffer(buf, hgs);
+        buf.writeByte(';');
+        buf.writenl();
+    }
+
     override void visit(NewDeclaration d)
     {
         if (stcToBuffer(buf, d.storage_class & ~STC.static_))
             buf.writeByte(' ');
-        buf.writestring("new");
-        parametersToBuffer(d.parameterList, buf, hgs);
-        bodyToBuffer(d);
+        buf.writestring("new();");
     }
 
     override void visit(Module m)
@@ -1796,7 +1809,7 @@ public:
     ////////////////////////////////////////////////////////////////////////////
     override void visit(Expression e)
     {
-        buf.writestring(Token.toString(e.op));
+        buf.writestring(EXPtoString(e.op));
     }
 
     override void visit(IntegerExp e)
@@ -2049,6 +2062,14 @@ public:
         buf.writeByte(')');
     }
 
+    override void visit(CompoundLiteralExp e)
+    {
+        buf.writeByte('(');
+        typeToBuffer(e.type, null, buf, hgs);
+        buf.writeByte(')');
+        e.initializer.initializerToBuffer(buf, hgs);
+    }
+
     override void visit(TypeExp e)
     {
         typeToBuffer(e.type, null, buf, hgs);
@@ -2254,7 +2275,7 @@ public:
 
     override void visit(UnaExp e)
     {
-        buf.writestring(Token.toString(e.op));
+        buf.writestring(EXPtoString(e.op));
         expToBuffer(e.e1, precedence[e.op], buf, hgs);
     }
 
@@ -2262,7 +2283,7 @@ public:
     {
         expToBuffer(e.e1, precedence[e.op], buf, hgs);
         buf.writeByte(' ');
-        buf.writestring(Token.toString(e.op));
+        buf.writestring(EXPtoString(e.op));
         buf.writeByte(' ');
         expToBuffer(e.e2, cast(PREC)(precedence[e.op] + 1), buf, hgs);
     }
@@ -2340,10 +2361,19 @@ public:
         buf.writeByte(')');
     }
 
+    override void visit(ThrowExp e)
+    {
+        buf.writestring("throw ");
+        expToBuffer(e.e1, PREC.unary, buf, hgs);
+    }
+
     override void visit(DotIdExp e)
     {
         expToBuffer(e.e1, PREC.primary, buf, hgs);
-        buf.writeByte('.');
+        if (e.arrow)
+            buf.writestring("->");
+        else
+            buf.writeByte('.');
         buf.writestring(e.ident.toString());
     }
 
@@ -2388,7 +2418,7 @@ public:
 
     override void visit(CallExp e)
     {
-        if (e.e1.op == TOK.type)
+        if (e.e1.op == EXP.type)
         {
             /* Avoid parens around type to prevent forbidden cast syntax:
              *   (sometype)(arg1)
@@ -2513,12 +2543,12 @@ public:
     override void visit(PostExp e)
     {
         expToBuffer(e.e1, precedence[e.op], buf, hgs);
-        buf.writestring(Token.toString(e.op));
+        buf.writestring(EXPtoString(e.op));
     }
 
     override void visit(PreExp e)
     {
-        buf.writestring(Token.toString(e.op));
+        buf.writestring(EXPtoString(e.op));
         expToBuffer(e.e1, precedence[e.op], buf, hgs);
     }
 
@@ -2541,7 +2571,7 @@ public:
 
     override void visit(DefaultInitExp e)
     {
-        buf.writestring(Token.toString(e.op));
+        buf.writestring(EXPtoString(e.op));
     }
 
     override void visit(ClassReferenceExp e)
@@ -2764,11 +2794,39 @@ void toCBuffer(const Initializer iz, OutBuffer* buf, HdrGenState* hgs)
 
 bool stcToBuffer(OutBuffer* buf, StorageClass stc)
 {
+    //printf("stc: %llx\n", stc);
     bool result = false;
-    if ((stc & (STC.return_ | STC.scope_)) == (STC.return_ | STC.scope_))
-        stc &= ~STC.scope_;
+
     if (stc & STC.scopeinferred)
         stc &= ~(STC.scope_ | STC.scopeinferred);
+    if (stc & STC.returninferred)
+        stc &= ~(STC.return_ | STC.returninferred);
+
+    /* Put scope ref return into a standard order
+     */
+    string rrs;
+    const isout = (stc & STC.out_) != 0;
+    //printf("bsr = %d %llx\n", buildScopeRef(stc), stc);
+    final switch (buildScopeRef(stc))
+    {
+        case ScopeRef.None:
+        case ScopeRef.Scope:
+        case ScopeRef.Ref:
+        case ScopeRef.Return:
+            break;
+
+        case ScopeRef.ReturnScope:      rrs = "return scope"; goto L1;
+        case ScopeRef.ReturnRef:        rrs = isout ? "return out"       : "return ref";       goto L1;
+        case ScopeRef.RefScope:         rrs = isout ? "out scope"        : "ref scope";        goto L1;
+        case ScopeRef.ReturnRef_Scope:  rrs = isout ? "return out scope" : "return ref scope"; goto L1;
+        case ScopeRef.Ref_ReturnScope:  rrs = isout ? "out return scope" : "ref return scope"; goto L1;
+        L1:
+            buf.writestring(rrs);
+            result = true;
+            stc &= ~(STC.out_ | STC.scope_ | STC.ref_ | STC.return_);
+            break;
+    }
+
     while (stc)
     {
         const s = stcToString(stc);
@@ -2779,6 +2837,7 @@ bool stcToBuffer(OutBuffer* buf, StorageClass stc)
         result = true;
         buf.writestring(s);
     }
+
     return result;
 }
 
@@ -2836,7 +2895,7 @@ string stcToString(ref StorageClass stc)
     foreach (ref entry; table)
     {
         const StorageClass tbl = entry.stc;
-        assert(tbl & STCStorageClass);
+        assert(tbl & STC.visibleStorageClasses);
         if (stc & tbl)
         {
             stc &= ~tbl;
@@ -2845,22 +2904,6 @@ string stcToString(ref StorageClass stc)
     }
     //printf("stc = %llx\n", stc);
     return null;
-}
-
-/// Ditto
-extern (D) string trustToString(TRUST trust) pure nothrow
-{
-    final switch (trust)
-    {
-    case TRUST.default_:
-        return null;
-    case TRUST.system:
-        return "@system";
-    case TRUST.trusted:
-        return "@trusted";
-    case TRUST.safe:
-        return "@safe";
-    }
 }
 
 private void linkageToBuffer(OutBuffer* buf, LINK linkage)
@@ -3088,7 +3131,7 @@ private void parameterToBuffer(Parameter p, OutBuffer* buf, HdrGenState* hgs)
     {
         buf.writeByte('@');
 
-        bool isAnonymous = p.userAttribDecl.atts.dim > 0 && (*p.userAttribDecl.atts)[0].op != TOK.call;
+        bool isAnonymous = p.userAttribDecl.atts.dim > 0 && !(*p.userAttribDecl.atts)[0].isCallExp();
         if (isAnonymous)
             buf.writeByte('(');
 
@@ -3100,28 +3143,24 @@ private void parameterToBuffer(Parameter p, OutBuffer* buf, HdrGenState* hgs)
     }
     if (p.storageClass & STC.auto_)
         buf.writestring("auto ");
-    if (p.storageClass & STC.return_)
-        buf.writestring("return ");
 
+    StorageClass stc = p.storageClass;
     if (p.storageClass & STC.in_)
+    {
         buf.writestring("in ");
-    else if (global.params.previewIn && p.storageClass & STC.ref_)
-        buf.writestring("ref ");
-    else if (p.storageClass & STC.out_)
-        buf.writestring("out ");
+        if (global.params.previewIn && p.storageClass & STC.ref_)
+            stc &= ~STC.ref_;
+    }
     else if (p.storageClass & STC.lazy_)
         buf.writestring("lazy ");
     else if (p.storageClass & STC.alias_)
         buf.writestring("alias ");
 
-    if (!global.params.previewIn && p.storageClass & STC.ref_)
-        buf.writestring("ref ");
-
-    StorageClass stc = p.storageClass;
     if (p.type && p.type.mod & MODFlags.shared_)
         stc &= ~STC.shared_;
 
-    if (stcToBuffer(buf, stc & (STC.const_ | STC.immutable_ | STC.wild | STC.shared_ | STC.scope_ | STC.scopeinferred)))
+    if (stcToBuffer(buf, stc & (STC.const_ | STC.immutable_ | STC.wild | STC.shared_ |
+        STC.return_ | STC.returninferred | STC.scope_ | STC.scopeinferred | STC.out_ | STC.ref_ | STC.returnScope)))
         buf.writeByte(' ');
 
     if (p.storageClass & STC.alias_)
@@ -3201,9 +3240,9 @@ private void sizeToBuffer(Expression e, OutBuffer* buf, HdrGenState* hgs)
 {
     if (e.type == Type.tsize_t)
     {
-        Expression ex = (e.op == TOK.cast_ ? (cast(CastExp)e).e1 : e);
+        Expression ex = (e.op == EXP.cast_ ? (cast(CastExp)e).e1 : e);
         ex = ex.optimize(WANTvalue);
-        const dinteger_t uval = ex.op == TOK.int64 ? ex.toInteger() : cast(dinteger_t)-1;
+        const dinteger_t uval = ex.op == EXP.int64 ? ex.toInteger() : cast(dinteger_t)-1;
         if (cast(sinteger_t)uval >= 0)
         {
             dinteger_t sizemax = void;
@@ -3240,7 +3279,7 @@ private void expToBuffer(Expression e, PREC pr, OutBuffer* buf, HdrGenState* hgs
     debug
     {
         if (precedence[e.op] == PREC.zero)
-            printf("precedence not defined for token '%s'\n", Token.toChars(e.op));
+            printf("precedence not defined for token '%s'\n", EXPtoString(e.op).ptr);
     }
     if (e.op == 0xFF)
     {
@@ -3370,7 +3409,7 @@ private void tiargsToBuffer(TemplateInstance ti, OutBuffer* buf, HdrGenState* hg
         }
         else if (Expression e = isExpression(oarg))
         {
-            if (e.op == TOK.int64 || e.op == TOK.float64 || e.op == TOK.null_ || e.op == TOK.string_ || e.op == TOK.this_)
+            if (e.op == EXP.int64 || e.op == EXP.float64 || e.op == EXP.null_ || e.op == EXP.string_ || e.op == EXP.this_)
             {
                 buf.writestring(e.toChars());
                 return;
@@ -3408,7 +3447,7 @@ private void objectToBuffer(RootObject oarg, OutBuffer* buf, HdrGenState* hgs)
     }
     else if (auto e = isExpression(oarg))
     {
-        if (e.op == TOK.variable)
+        if (e.op == EXP.variable)
             e = e.optimize(WANTvalue); // added to fix https://issues.dlang.org/show_bug.cgi?id=7375
         expToBuffer(e, PREC.assign, buf, hgs);
     }
@@ -3614,6 +3653,36 @@ private void initializerToBuffer(Initializer inx, OutBuffer* buf, HdrGenState* h
         ei.exp.expressionToBuffer(buf, hgs);
     }
 
+    void visitC(CInitializer ci)
+    {
+        buf.writeByte('{');
+        foreach (i, ref DesigInit di; ci.initializerList)
+        {
+            if (i)
+                buf.writestring(", ");
+            if (di.designatorList)
+            {
+                foreach (ref Designator d; (*di.designatorList)[])
+                {
+                    if (d.exp)
+                    {
+                        buf.writeByte('[');
+                        toCBuffer(d.exp, buf, hgs);
+                        buf.writeByte(']');
+                    }
+                    else
+                    {
+                        buf.writeByte('.');
+                        buf.writestring(d.ident.toString());
+                    }
+                }
+                buf.writeByte('=');
+            }
+            initializerToBuffer(di.initializer, buf, hgs);
+        }
+        buf.writeByte('}');
+    }
+
     final switch (inx.kind)
     {
         case InitKind.error:   return visitError (inx.isErrorInitializer ());
@@ -3621,6 +3690,7 @@ private void initializerToBuffer(Initializer inx, OutBuffer* buf, HdrGenState* h
         case InitKind.struct_: return visitStruct(inx.isStructInitializer());
         case InitKind.array:   return visitArray (inx.isArrayInitializer ());
         case InitKind.exp:     return visitExp   (inx.isExpInitializer   ());
+        case InitKind.C_:      return visitC     (inx.isCInitializer     ());
     }
 }
 
@@ -3800,11 +3870,24 @@ private void typeToBufferx(Type t, OutBuffer* buf, HdrGenState* hgs)
         // https://issues.dlang.org/show_bug.cgi?id=13776
         // Don't use ti.toAlias() to avoid forward reference error
         // while printing messages.
-        TemplateInstance ti = t.sym.parent.isTemplateInstance();
+        TemplateInstance ti = t.sym.parent ? t.sym.parent.isTemplateInstance() : null;
         if (ti && ti.aliasdecl == t.sym)
             buf.writestring(hgs.fullQual ? ti.toPrettyChars() : ti.toChars());
         else
             buf.writestring(hgs.fullQual ? t.sym.toPrettyChars() : t.sym.toChars());
+    }
+
+    void visitTag(TypeTag t)
+    {
+        buf.writestring(Token.toChars(t.tok));
+        buf.writeByte(' ');
+        if (t.id)
+            buf.writestring(t.id.toChars());
+        if (t.tok == TOK.enum_ && t.base.ty != TY.Tint32)
+        {
+            buf.writestring(" : ");
+            visitWithMask(t.base, t.mod, buf, hgs);
+        }
     }
 
     void visitTuple(TypeTuple t)
@@ -3868,5 +3951,161 @@ private void typeToBufferx(Type t, OutBuffer* buf, HdrGenState* hgs)
         case Tnull:      return visitNull(cast(TypeNull)t);
         case Tmixin:     return visitMixin(cast(TypeMixin)t);
         case Tnoreturn:  return visitNoreturn(cast(TypeNoreturn)t);
+        case Ttag:       return visitTag(cast(TypeTag)t);
     }
+}
+
+/****************************************
+ * Convert EXP to char*.
+ */
+
+string EXPtoString(EXP op)
+{
+    static immutable char*[EXP.max + 1] strings =
+    [
+        EXP.type : "type",
+        EXP.error : "error",
+        EXP.objcClassReference : "class",
+
+        EXP.typeof_ : "typeof",
+        EXP.mixin_ : "mixin",
+
+        EXP.import_ : "import",
+        EXP.dotVariable : "dotvar",
+        EXP.scope_ : "scope",
+        EXP.identifier : "identifier",
+        EXP.this_ : "this",
+        EXP.super_ : "super",
+        EXP.int64 : "long",
+        EXP.float64 : "double",
+        EXP.complex80 : "creal",
+        EXP.null_ : "null",
+        EXP.string_ : "string",
+        EXP.arrayLiteral : "arrayliteral",
+        EXP.assocArrayLiteral : "assocarrayliteral",
+        EXP.classReference : "classreference",
+        EXP.file : "__FILE__",
+        EXP.fileFullPath : "__FILE_FULL_PATH__",
+        EXP.line : "__LINE__",
+        EXP.moduleString : "__MODULE__",
+        EXP.functionString : "__FUNCTION__",
+        EXP.prettyFunction : "__PRETTY_FUNCTION__",
+        EXP.typeid_ : "typeid",
+        EXP.is_ : "is",
+        EXP.assert_ : "assert",
+        EXP.halt : "halt",
+        EXP.template_ : "template",
+        EXP.dSymbol : "symbol",
+        EXP.function_ : "function",
+        EXP.variable : "var",
+        EXP.symbolOffset : "symoff",
+        EXP.structLiteral : "structLiteral",
+        EXP.compoundLiteral : "compoundliteral",
+        EXP.arrayLength : "arraylength",
+        EXP.delegatePointer : "delegateptr",
+        EXP.delegateFunctionPointer : "delegatefuncptr",
+        EXP.remove : "remove",
+        EXP.tuple : "tuple",
+        EXP.traits : "__traits",
+        EXP.default_ : "default",
+        EXP.overloadSet : "__overloadset",
+        EXP.void_ : "void",
+        EXP.vectorArray : "vectorarray",
+        EXP._Generic : "_Generic",
+
+        // post
+        EXP.dotTemplateInstance : "dotti",
+        EXP.dotIdentifier : "dotid",
+        EXP.dotTemplateDeclaration : "dottd",
+        EXP.dot : ".",
+        EXP.dotType : "dottype",
+        EXP.plusPlus : "++",
+        EXP.minusMinus : "--",
+        EXP.prePlusPlus : "++",
+        EXP.preMinusMinus : "--",
+        EXP.call : "call",
+        EXP.slice : "..",
+        EXP.array : "[]",
+        EXP.index : "[i]",
+
+        EXP.delegate_ : "delegate",
+        EXP.address : "&",
+        EXP.star : "*",
+        EXP.negate : "-",
+        EXP.uadd : "+",
+        EXP.not : "!",
+        EXP.tilde : "~",
+        EXP.delete_ : "delete",
+        EXP.new_ : "new",
+        EXP.newAnonymousClass : "newanonclass",
+        EXP.cast_ : "cast",
+
+        EXP.vector : "__vector",
+        EXP.pow : "^^",
+
+        EXP.mul : "*",
+        EXP.div : "/",
+        EXP.mod : "%",
+
+        EXP.add : "+",
+        EXP.min : "-",
+        EXP.concatenate : "~",
+
+        EXP.leftShift : "<<",
+        EXP.rightShift : ">>",
+        EXP.unsignedRightShift : ">>>",
+
+        EXP.lessThan : "<",
+        EXP.lessOrEqual : "<=",
+        EXP.greaterThan : ">",
+        EXP.greaterOrEqual : ">=",
+        EXP.in_ : "in",
+
+        EXP.equal : "==",
+        EXP.notEqual : "!=",
+        EXP.identity : "is",
+        EXP.notIdentity : "!is",
+
+        EXP.and : "&",
+        EXP.xor : "^",
+        EXP.or : "|",
+
+        EXP.andAnd : "&&",
+        EXP.orOr : "||",
+
+        EXP.question : "?",
+
+        EXP.assign : "=",
+        EXP.construct : "=",
+        EXP.blit : "=",
+        EXP.addAssign : "+=",
+        EXP.minAssign : "-=",
+        EXP.concatenateAssign : "~=",
+        EXP.concatenateElemAssign : "~=",
+        EXP.concatenateDcharAssign : "~=",
+        EXP.mulAssign : "*=",
+        EXP.divAssign : "/=",
+        EXP.modAssign : "%=",
+        EXP.powAssign : "^^=",
+        EXP.leftShiftAssign : "<<=",
+        EXP.rightShiftAssign : ">>=",
+        EXP.unsignedRightShiftAssign : ">>>=",
+        EXP.andAssign : "&=",
+        EXP.orAssign : "|=",
+        EXP.xorAssign : "^=",
+
+        EXP.comma : ",",
+        EXP.declaration : "declaration",
+
+        EXP.interval : "interval",
+    ];
+    const p = strings[op];
+    if (!p)
+    {
+        printf("error: EXP %d has no string\n", op);
+        return "XXXXX";
+        //assert(0);
+    }
+    assert(p);
+    return p[0 .. strlen(p)];
 }

@@ -1,3 +1,47 @@
+# LDC master
+
+#### Big news
+- Frontend, druntime and Phobos are at version [2.099.0](https://dlang.org/changelog/2.099.0.html). (#3917, #3893)
+- Support for LLVM 13. The prebuilt packages use v13.0.1. (#3842)
+- On Linux, LDC doesn't default to the `ld.gold` linker anymore. The combination of LLVM 13 and older gold linkers can apparently cause problems. We recommend using LLD, e.g., via `-linker=lld` or by setting your default `/usr/bin/ld` symlink; it's significantly faster too.
+- `-linkonce-templates` is less aggressive by default now and IMHO production-ready. (#3924)
+- When linking manually (not via LDC) against *shared* druntime, it is now required to link the bundled `lib/ldc_rt.dso.o[bj]` object file into each binary. It replaces the previously Windows-specific `dso_windows.obj`. (#3850)
+
+#### Bug fixes
+- Linux: Make LTO work with LLD. (#3786, #3850)
+- Windows: Fix most undefined symbols with `-dllimport=all` without `-linkonce-templates`. (#3916, #3923, #3926, #3927, #3928, #3931, #3932)
+- Capture NRVO variable by ref for stack closures. (#3883, #3902)
+- RISC-V: Use 128-bit quadruple `real`. (#3892)
+
+# LDC 1.28.1 (2022-01-13)
+
+#### Big news
+- Frontend, druntime and Phobos are at version [2.098.1+](https://dlang.org/changelog/2.098.0.html). (#3886, #3896)
+- New `@hidden` UDA (as counterpart of `export`). (#3855)
+- Support 'raw mangles' via leading `\1` in `pragma(mangle)` strings, e.g., to access magic linker symbols on Mac. (#3854)
+- New `@noSanitize` UDA to selectively disable sanitizer instrumentation of functions. (#3889)
+- WebAssembly: Larger default stack size (1 MB) and protection against stack overflow overwriting global memory. (#3882)
+
+#### Bug fixes
+- Linux x86/x64: Fix TLS range with static druntime and bfd/lld linkers. (#3849, https://github.com/ldc-developers/druntime/commit/ec3c0aafbf4b6f3345e276e21a26ffee077470cf)
+- Support `rdtscp` in DMD-style inline assembly. (#3895)
+
+# LDC 1.28.0 (2021-10-20)
+
+#### Big news
+- Frontend, druntime and Phobos are at version [2.098.0+](https://dlang.org/changelog/2.098.0.html). (#3821, #3839, #3844, #3852)
+- Windows: `-dllimport=defaultLibsOnly` (e.g., implied by `-link-defaultlib-shared -fvisibility=hidden`) doesn't require `-linkonce-templates` anymore. (#3816)
+- dcompute: Add support for OpenCL image I/O. (#3835)
+
+#### Platform support
+- Supports LLVM 6.0 - 12.0.
+
+#### Bug fixes
+- Fix dynamic casts across binary boundaries (DLLs etc.). (dlang/druntime#3543)
+- Windows: Fix potentially wrongly caught exceptions due to non-unique `TypeInfo_Class` names. (#3520)
+- Don't silently ignore invalid external tool specifications. (#3841)
+- LLVM v11.1: Add missing PGO `ldc-profdata` tool.
+
 # LDC 1.27.1 (2021-08-14)
 
 #### Big news

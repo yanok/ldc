@@ -58,7 +58,7 @@ struct DComputeSemanticAnalyser : public StoppableVisitor {
       if (o->dyncast() != DYNCAST_EXPRESSION)
         continue;
       Expression *e = (Expression *)o;
-      if (e->op != TOKfunction)
+      if (e->op != EXP::function_)
         continue;
       if (f->equals((((FuncExp *)e)->fd))) {
         IF_LOG Logger::println("match");
@@ -92,12 +92,12 @@ struct DComputeSemanticAnalyser : public StoppableVisitor {
       return;
     }
 
-    if (decl->type->ty == Taarray) {
+    if (decl->type->ty == TY::Taarray) {
       decl->error("associative arrays not allowed in `@compute` code");
       stop = true;
     }
     // includes interfaces
-    else if (decl->type->ty == Tclass) {
+    else if (decl->type->ty == TY::Tclass) {
       decl->error("interfaces and classes not allowed in `@compute` code");
     }
   }
@@ -112,7 +112,7 @@ struct DComputeSemanticAnalyser : public StoppableVisitor {
   // Nogc enforcement.
   // No need to check AssocArrayLiteral because AA's are banned anyway
   void visit(ArrayLiteralExp *e) override {
-    if (e->type->ty != Tarray || !e->elements || !e->elements->length)
+    if (e->type->ty != TY::Tarray || !e->elements || !e->elements->length)
       return;
     e->error("array literal in `@compute` code not allowed");
     stop = true;
@@ -128,7 +128,7 @@ struct DComputeSemanticAnalyser : public StoppableVisitor {
   }
   // No need to check IndexExp because AA's are banned anyway
   void visit(AssignExp *e) override {
-    if (e->e1->op == TOKarraylength) {
+    if (e->e1->op == EXP::arrayLength) {
       e->error("setting `length` in `@compute` code not allowed");
       stop = true;
     }
@@ -182,20 +182,17 @@ struct DComputeSemanticAnalyser : public StoppableVisitor {
 
   void visit(IfStatement *stmt) override {
     // Don't descend into ctfe only code
-    if (stmt->condition->op == TOKvar) {
-      auto ve = (VarExp *)stmt->condition;
+    if (auto ve = stmt->condition->isVarExp()) {
       if (ve->var->ident == Id::ctfe) {
         if (stmt->elsebody)
           visit(stmt->elsebody);
         stop = true;
       }
-    } else if (stmt->condition->op == TOKnot) {
-      auto ne = (NotExp *) stmt->condition;
-      if (ne->e1->op == TOKvar) {
-        auto ve = (VarExp * )ne->e1;
+    } else if (auto ne = stmt->condition->isNotExp()) {
+      if (auto ve = ne->e1->isVarExp()) {
         if (ve->var->ident == Id::ctfe) {
           visit(stmt->ifbody);
-        stop = true;
+          stop = true;
         }
       }
     }

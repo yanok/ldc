@@ -45,10 +45,10 @@ IrFuncTy &DtoIrTypeFunction(DValue *fnval) {
 
 TypeFunction *DtoTypeFunction(DValue *fnval) {
   Type *type = fnval->type->toBasetype();
-  if (type->ty == Tfunction) {
+  if (type->ty == TY::Tfunction) {
     return static_cast<TypeFunction *>(type);
   }
-  if (type->ty == Tdelegate) {
+  if (type->ty == TY::Tdelegate) {
     // FIXME: There is really no reason why the function type should be
     // unmerged at this stage, but the frontend still seems to produce such
     // cases; for example for the uint(uint) next type of the return type of
@@ -63,7 +63,7 @@ TypeFunction *DtoTypeFunction(DValue *fnval) {
     // root cause.
 
     Type *next = merge(type->nextOf());
-    assert(next->ty == Tfunction);
+    assert(next->ty == TY::Tfunction);
     return static_cast<TypeFunction *>(next);
   }
 
@@ -74,10 +74,10 @@ TypeFunction *DtoTypeFunction(DValue *fnval) {
 
 LLValue *DtoCallableValue(DValue *fn) {
   Type *type = fn->type->toBasetype();
-  if (type->ty == Tfunction) {
+  if (type->ty == TY::Tfunction) {
     return DtoRVal(fn);
   }
-  if (type->ty == Tdelegate) {
+  if (type->ty == TY::Tdelegate) {
     if (fn->isLVal()) {
       LLValue *dg = DtoLVal(fn);
       LLValue *funcptr = DtoGEP(dg, 0, 1);
@@ -357,6 +357,20 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
     return true;
   }
 
+  // va_end instruction
+  if (fndecl->llvmInternal == LLVMva_end) {
+    if (e->arguments->length != 1) {
+      e->error("`va_end` instruction expects 1 argument");
+      fatal();
+    }
+    DLValue *ap = toElem((*e->arguments)[0])->isLVal(); // va_list
+    assert(ap);
+    LLValue *llAp = gABI->prepareVaArg(ap);
+    p->ir->CreateCall(GET_INTRINSIC_DECL(vaend), llAp);
+    result = nullptr;
+    return true;
+  }
+
   // C alloca
   if (fndecl->llvmInternal == LLVMalloca) {
     if (e->arguments->length != 1) {
@@ -365,7 +379,7 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
     }
     Expression *exp = (*e->arguments)[0];
     DValue *expv = toElem(exp);
-    if (expv->type->toBasetype()->ty != Tint32) {
+    if (expv->type->toBasetype()->ty != TY::Tint32) {
       expv = DtoCast(e->loc, expv, Type::tint32);
     }
     result = new DImValue(e->type,
@@ -437,7 +451,7 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
     int atomicOrdering = (*e->arguments)[1]->toInteger();
 
     LLValue *ptr = DtoRVal(exp);
-    LLType *pointeeType = ptr->getType()->getContainedType(0);
+    LLType *pointeeType = getPointeeType(ptr);
     Type *retType = exp->type->nextOf();
 
     if (!pointeeType->isIntegerTy()) {
@@ -451,13 +465,18 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
       }
     }
 
-    llvm::LoadInst *load = p->ir->CreateLoad(ptr);
-    if (auto alignment = getTypeAllocSize(load->getType())) {
+    const auto loadedType = getPointeeType(ptr);
+    llvm::LoadInst *load = p->ir->CreateLoad(
+#if LDC_LLVM_VER >= 800
+        loadedType,
+#endif
+        ptr);
+    if (auto alignment = getTypeAllocSize(loadedType)) {
       load->setAlignment(LLAlign(alignment));
     }
     load->setAtomic(llvm::AtomicOrdering(atomicOrdering));
     llvm::Value *val = load;
-    if (val->getType() != pointeeType) {
+    if (loadedType != pointeeType) {
       val = DtoAllocaDump(val, retType);
       result = new DLValue(retType, val);
     } else {
@@ -472,7 +491,7 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
       e->error("`cmpxchg` instruction expects 6 arguments");
       fatal();
     }
-    if (e->type->ty != Tstruct) {
+    if (e->type->ty != TY::Tstruct) {
       e->error("`cmpxchg` instruction returns a struct");
       fatal();
     }
@@ -508,8 +527,12 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
       fatal();
     }
 
-    auto ret = p->ir->CreateAtomicCmpXchg(ptr, cmp, val, successOrdering,
-                                           failureOrdering);
+    auto ret =
+      p->ir->CreateAtomicCmpXchg(ptr, cmp, val,
+#if LDC_LLVM_VER >= 1300
+                                 llvm::MaybeAlign(), // default alignment
+#endif
+                                 successOrdering, failureOrdering);
     ret->setWeak(isWeak);
 
     // we return a struct; allocate on stack and store to both fields manually
@@ -554,6 +577,9 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
     LLValue *val = DtoRVal(exp2);
     LLValue *ret =
         p->ir->CreateAtomicRMW(llvm::AtomicRMWInst::BinOp(op), ptr, val,
+#if LDC_LLVM_VER >= 1300
+                               llvm::MaybeAlign(), // default alignment
+#endif
                                llvm::AtomicOrdering(atomicOrdering));
     result = new DImValue(exp2->type, ret);
     return true;
@@ -660,7 +686,7 @@ public:
       : args(args), attrs(attrs), loc(loc), fnval(fnval), argexps(argexps),
         resulttype(resulttype), sretPointer(sretPointer),
         // computed:
-        isDelegateCall(fnval->type->toBasetype()->ty == Tdelegate),
+        isDelegateCall(fnval->type->toBasetype()->ty == TY::Tdelegate),
         dfnval(fnval->isFunc()), irFty(DtoIrTypeFunction(fnval)),
         tf(DtoTypeFunction(fnval)),
         llArgTypesBegin(llCalleeType->param_begin()) {}
@@ -676,6 +702,8 @@ public:
 
     addArguments();
   }
+
+  bool hasContext = false; // set after addImplicitArgs invocation
 
 private:
   // passed:
@@ -720,12 +748,13 @@ private:
            "Sret arg not sret or inreg?");
   }
 
-  // Adds an optional context/this pointer argument.
+  // Adds an optional context/this pointer argument and sets hasContext.
   void addContext() {
-    bool thiscall = irFty.arg_this;
-    bool nestedcall = irFty.arg_nest;
+    const bool thiscall = irFty.arg_this;
+    const bool nestedcall = irFty.arg_nest;
 
-    if (!thiscall && !isDelegateCall && !nestedcall)
+    hasContext = thiscall || nestedcall || isDelegateCall;
+    if (!hasContext)
       return;
 
     size_t index = args.size();
@@ -840,9 +869,6 @@ DValue *DtoCallFunction(const Loc &loc, Type *resulttype, DValue *fnval,
       DtoExtractFunctionType(callable->getType());
   assert(callableTy);
 
-  const auto callconv =
-      gABI->callingConv(tf->linkage, tf, dfnval ? dfnval->func : nullptr);
-
   //     IF_LOG Logger::cout() << "callable: " << *callable << '\n';
 
   // parameter attributes
@@ -904,7 +930,7 @@ DValue *DtoCallFunction(const Loc &loc, Type *resulttype, DValue *fnval,
   LLValue *retllval = irFty.arg_sret ? args[sretArgIndex]
                                      : static_cast<llvm::Instruction *>(call);
   bool retValIsLVal =
-      (tf->isref() && returnTy != Tvoid) || (irFty.arg_sret != nullptr);
+      (tf->isref() && returnTy != TY::Tvoid) || (irFty.arg_sret != nullptr);
 
   if (!retValIsLVal) {
     // let the ABI transform the return value back
@@ -923,7 +949,7 @@ DValue *DtoCallFunction(const Loc &loc, Type *resulttype, DValue *fnval,
     IF_LOG Logger::println("repainting return value from '%s' to '%s'",
                            returntype->toChars(), rbase->toChars());
     switch (rbase->ty) {
-    case Tarray:
+    case TY::Tarray:
       if (tf->isref()) {
         retllval = DtoBitCast(retllval, DtoType(rbase->pointerTo()));
       } else {
@@ -931,8 +957,8 @@ DValue *DtoCallFunction(const Loc &loc, Type *resulttype, DValue *fnval,
       }
       break;
 
-    case Tsarray:
-      if (nextbase->ty == Tvector && !tf->isref()) {
+    case TY::Tsarray:
+      if (nextbase->ty == TY::Tvector && !tf->isref()) {
         if (retValIsLVal) {
           retllval = DtoBitCast(retllval, DtoType(rbase->pointerTo()));
         } else {
@@ -946,9 +972,9 @@ DValue *DtoCallFunction(const Loc &loc, Type *resulttype, DValue *fnval,
       }
       goto unknownMismatch;
 
-    case Tclass:
-    case Taarray:
-    case Tpointer:
+    case TY::Tclass:
+    case TY::Taarray:
+    case TY::Tpointer:
       if (tf->isref()) {
         retllval = DtoBitCast(retllval, DtoType(rbase->pointerTo()));
       } else {
@@ -956,8 +982,8 @@ DValue *DtoCallFunction(const Loc &loc, Type *resulttype, DValue *fnval,
       }
       break;
 
-    case Tstruct:
-      if (nextbase->ty == Taarray && !tf->isref()) {
+    case TY::Tstruct:
+      if (nextbase->ty == TY::Taarray && !tf->isref()) {
         // In the D2 frontend, the associative array type and its
         // object.AssociativeArray representation are used
         // interchangably in some places. However, AAs are returned
@@ -1014,23 +1040,27 @@ DValue *DtoCallFunction(const Loc &loc, Type *resulttype, DValue *fnval,
 
   // set calling convention and parameter attributes
   LLAttributeList &attrlist = attrs;
-  if (dfnval && dfnval->func) {
-    LLFunction *llfunc = llvm::dyn_cast<LLFunction>(DtoRVal(dfnval));
-    if (llfunc && llfunc->isIntrinsic()) // override intrinsic attrs
-    {
-      attrlist = llvm::Intrinsic::getAttributes(
-          gIR->context(),
-          static_cast<llvm::Intrinsic::ID>(llfunc->getIntrinsicID()));
-    } else {
-      call->setCallingConv(callconv);
+  if (auto cf = call->getCalledFunction()) {
+    call->setCallingConv(cf->getCallingConv());
+    if (cf->isIntrinsic()) { // override intrinsic attrs
+      attrlist =
+          llvm::Intrinsic::getAttributes(gIR->context(), cf->getIntrinsicID());
     }
+  } else if (dfnval) {
+    call->setCallingConv(gABI->callingConv(dfnval->func));
   } else {
-    call->setCallingConv(callconv);
+    call->setCallingConv(gABI->callingConv(tf, iab.hasContext));
   }
   // merge in function attributes set in callOrInvoke
+#if LDC_LLVM_VER >= 1400
+  attrlist = attrlist.addFnAttributes(
+      gIR->context(),
+      llvm::AttrBuilder(call->getAttributes(), LLAttributeList::FunctionIndex));
+#else
   attrlist = attrlist.addAttributes(
       gIR->context(), LLAttributeList::FunctionIndex,
       llvm::AttrBuilder(call->getAttributes(), LLAttributeList::FunctionIndex));
+#endif
   call->setAttributes(attrlist);
 
   // Special case for struct constructor calls: For temporaries, using the
@@ -1047,7 +1077,7 @@ DValue *DtoCallFunction(const Loc &loc, Type *resulttype, DValue *fnval,
     return new DLValue(resulttype, retllval);
   }
 
-  if (rbase->ty == Tarray) {
+  if (rbase->ty == TY::Tarray) {
     return new DSliceValue(resulttype, retllval);
   }
 

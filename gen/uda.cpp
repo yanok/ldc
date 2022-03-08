@@ -8,6 +8,7 @@
 #include "dmd/id.h"
 #include "dmd/identifier.h"
 #include "dmd/module.h"
+#include "driver/cl_options_sanitizers.h"
 #include "gen/irstate.h"
 #include "gen/llvm.h"
 #include "gen/llvmhelpers.h"
@@ -65,13 +66,9 @@ StructLiteralExp *getLdcAttributesStruct(Expression *attr) {
     return nullptr;
   }
 
-  if (e->op != TOKstructliteral) {
-    return nullptr;
-  }
-
-  auto sle = static_cast<StructLiteralExp *>(e);
-  if (isFromMagicModule(sle, Id::attributes)) {
-    return sle;
+  if (auto sle = e->isStructLiteralExp()) {
+    if (isFromMagicModule(sle, Id::attributes))
+      return sle;
   }
 
   return nullptr;
@@ -108,19 +105,32 @@ StructLiteralExp *getMagicAttribute(Dsymbol *sym, const Identifier *id,
   // Loop over all UDAs and early return the expression if a match was found.
   Expressions *attrs = sym->userAttribDecl->getAttributes();
   expandTuples(attrs);
-  for (auto &attr : *attrs) {
-    if (attr->op != TOKstructliteral)
-      continue;
-    auto sle = static_cast<StructLiteralExp *>(attr);
-    if (!isFromMagicModule(sle, from))
-      continue;
-
-    if (id == sle->sd->ident) {
-      return sle;
-    }
+  for (auto attr : *attrs) {
+    if (auto sle = attr->isStructLiteralExp())
+      if (isFromMagicModule(sle, from) && id == sle->sd->ident)
+        return sle;
   }
 
   return nullptr;
+}
+
+/// Calls `action` for each magic attribute with identifier `id` from
+/// the ldc magic module with identifier `from` (attributes or dcompute)
+/// applied to `sym`.
+void callForEachMagicAttribute(Dsymbol &sym, const Identifier *id,
+                               const Identifier *from,
+                               std::function<void(StructLiteralExp *)> action) {
+  if (!sym.userAttribDecl)
+    return;
+
+  // Loop over all UDAs and call `action` if a match was found.
+  Expressions *attrs = sym.userAttribDecl->getAttributes();
+  expandTuples(attrs);
+  for (auto attr : *attrs) {
+    if (auto sle = attr->isStructLiteralExp())
+      if (isFromMagicModule(sle, from) && id == sle->sd->ident)
+        action(sle);
+  }
 }
 
 sinteger_t getIntElem(StructLiteralExp *sle, size_t idx) {
@@ -197,7 +207,11 @@ void applyAttrAllocSize(StructLiteralExp *sle, IrFunction *irFunc) {
 
   llvm::Function *func = irFunc->getLLVMFunc();
 
+#if LDC_LLVM_VER >= 1400
+  func->addFnAttrs(builder);
+#else
   func->addAttributes(LLAttributeList::FunctionIndex, builder);
+#endif
 }
 
 // @llvmAttr("key", "value")
@@ -372,6 +386,9 @@ void applyVarDeclUDAs(VarDeclaration *decl, llvm::GlobalVariable *gvar) {
     auto ident = sle->sd->ident;
     if (ident == Id::udaSection) {
       applyAttrSection(sle, gvar);
+    } else if (ident == Id::udaHidden) {
+      if (!decl->isExport()) // export visibility is stronger
+        gvar->setVisibility(LLGlobalValue::HiddenVisibility);
     } else if (ident == Id::udaOptStrategy || ident == Id::udaTarget) {
       sle->error(
           "Special attribute `ldc.attributes.%s` is only valid for functions",
@@ -414,7 +431,14 @@ void applyFuncDeclUDAs(FuncDeclaration *decl, IrFunction *irFunc) {
       } else if (ident == Id::udaLLVMAttr) {
         llvm::AttrBuilder attrs;
         applyAttrLLVMAttr(sle, attrs);
+#if LDC_LLVM_VER >= 1400
+        func->addFnAttrs(attrs);
+#else
         func->addAttributes(LLAttributeList::FunctionIndex, attrs);
+#endif
+      } else if (ident == Id::udaHidden) {
+        if (!decl->isExport()) // export visibility is stronger
+          func->setVisibility(LLGlobalValue::HiddenVisibility);
       } else if (ident == Id::udaLLVMFastMathFlag) {
         applyAttrLLVMFastMathFlag(sle, irFunc);
       } else if (ident == Id::udaOptStrategy) {
@@ -425,8 +449,9 @@ void applyFuncDeclUDAs(FuncDeclaration *decl, IrFunction *irFunc) {
         applyAttrTarget(sle, func, irFunc);
       } else if (ident == Id::udaAssumeUsed) {
         applyAttrAssumeUsed(*gIR, sle, func);
-      } else if (ident == Id::udaWeak || ident == Id::udaKernel) {
-        // @weak and @kernel are applied elsewhere
+      } else if (ident == Id::udaWeak || ident == Id::udaKernel ||
+                 ident == Id::udaNoSanitize) {
+        // These UDAs are applied elsewhere, thus should silently be ignored here.
       } else if (ident == Id::udaDynamicCompile) {
         irFunc->dynamicCompile = true;
       } else if (ident == Id::udaDynamicCompileEmit) {
@@ -515,4 +540,26 @@ bool hasKernelAttr(Dsymbol *sym) {
   }
 
   return true;
+}
+
+/// Creates a mask (for &) of @ldc.attributes.noSanitize UDA applied to the
+/// function.
+/// If a bit is set in the mask, then the sanitizer is enabled.
+/// If a bit is not set in the mask, then the sanitizer is explicitly disabled
+/// by @noSanitize.
+unsigned getMaskFromNoSanitizeUDA(FuncDeclaration &fd) {
+  opts::SanitizerBits inverse_mask = opts::NoneSanitizer;
+
+  callForEachMagicAttribute(fd, Id::udaNoSanitize, Id::attributes,
+                            [&inverse_mask](StructLiteralExp *sle) {
+    checkStructElems(sle, {Type::tstring});
+    auto name = getFirstElemString(sle);
+    inverse_mask |= opts::parseSanitizerName(name, [&] {
+      sle->warning(
+          "Unrecognized sanitizer name '%s' for `@ldc.attributes.noSanitize`.",
+          name.str().c_str());
+    });
+  });
+
+  return ~inverse_mask;
 }

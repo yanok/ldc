@@ -1,10 +1,10 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
- * http://www.digitalmars.com
+ * https://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
- * http://www.boost.org/LICENSE_1_0.txt
+ * https://www.boost.org/LICENSE_1_0.txt
  * https://github.com/dlang/dmd/blob/master/src/dmd/dsymbol.h
  */
 
@@ -16,22 +16,13 @@
 #include "arraytypes.h"
 #include "visitor.h"
 
-#if IN_LLVM
-# if defined(_MSC_VER)
-# undef min
-# undef max
-# endif
-#include <cstdint>
-#include "../ir/irdsymbol.h"
-#endif
-
-
 class CPPNamespaceDeclaration;
 class Identifier;
 struct Scope;
 class DsymbolTable;
 class Declaration;
 class ThisDeclaration;
+class BitFieldDeclaration;
 class TypeInfoDeclaration;
 class TupleDeclaration;
 class AliasDeclaration;
@@ -83,7 +74,9 @@ class OverloadSet;
 struct AA;
 #ifdef IN_GCC
 typedef union tree_node Symbol;
-#elif !IN_LLVM
+#elif IN_LLVM
+struct IrDsymbol;
+#else
 struct Symbol;
 #endif
 
@@ -117,7 +110,21 @@ struct Visibility
 
 /* State of symbol in winding its way through the passes of the compiler
  */
-enum PASS
+enum class PASS : uint8_t
+{
+    init,           // initial state
+    semantic,       // semantic() started
+    semanticdone,   // semantic() done
+    semantic2,      // semantic2() started
+    semantic2done,  // semantic2() done
+    semantic3,      // semantic3() started
+    semantic3done,  // semantic3() done
+    inline_,         // inline started
+    inlinedone,     // inline done
+    obj             // toObjFile() run
+};
+
+enum
 {
     PASSinit,           // initial state
     PASSsemantic,       // semantic() started
@@ -145,7 +152,20 @@ enum
                                     // meaning don't search imports in that scope,
                                     // because qualified module searches search
                                     // their imports
-    IgnoreSymbolVisibility  = 0x80  // also find private and package protected symbols
+    IgnoreSymbolVisibility  = 0x80,  // also find private and package protected symbols
+    TagNameSpace            = 0x100, // search ImportC tag symbol table
+};
+
+struct FieldState
+{
+    unsigned offset;
+
+    unsigned fieldOffset;
+    unsigned fieldSize;
+    unsigned fieldAlign;
+    unsigned bitOffset;
+
+    bool inFlight;
 };
 
 class Dsymbol : public ASTNode
@@ -157,7 +177,7 @@ public:
     CPPNamespaceDeclaration *namespace_;
 #if IN_LLVM
     IrDsymbol *ir;
-    uint32_t llvmInternal;
+    unsigned llvmInternal;
 #else
     Symbol *csym;               // symbol for code generator
     Symbol *isym;               // import version of csym
@@ -186,6 +206,7 @@ public:
     void deprecation(const char *format, ...);
     bool checkDeprecated(const Loc &loc, Scope *sc);
     Module *getModule();
+    bool isCsymbol();
     Module *getAccessModule();
     Dsymbol *pastMixin();
     Dsymbol *toParent();
@@ -229,7 +250,7 @@ public:
     virtual Visibility visible();
     virtual Dsymbol *syntaxCopy(Dsymbol *s);    // copy only syntax trees
     virtual bool oneMember(Dsymbol **ps, Identifier *ident);
-    virtual void setFieldOffset(AggregateDeclaration *ad, unsigned *poffset, bool isunion);
+    virtual void setFieldOffset(AggregateDeclaration *ad, FieldState& fieldState, bool isunion);
     virtual bool hasPointers();
     virtual bool hasStaticCtorOrDtor();
     virtual void addLocalClass(ClassDeclarations *) { }
@@ -254,6 +275,7 @@ public:
     virtual ExpressionDsymbol *isExpressionDsymbol() { return NULL; }
     virtual AliasAssign *isAliasAssign() { return NULL; }
     virtual ThisDeclaration *isThisDeclaration() { return NULL; }
+    virtual BitFieldDeclaration *isBitFieldDeclaration() { return NULL; }
     virtual TypeInfoDeclaration *isTypeInfoDeclaration() { return NULL; }
     virtual TupleDeclaration *isTupleDeclaration() { return NULL; }
     virtual AliasDeclaration *isAliasDeclaration() { return NULL; }
@@ -402,7 +424,7 @@ public:
     Dsymbol *lookup(Identifier const * const ident);
 
     // Look for Dsymbol in table. If there, return it. If not, insert s and return that.
-    Dsymbol *update(Dsymbol *s);
+    void update(Dsymbol *s);
 
     // Insert Dsymbol in table. Return NULL if already there.
     Dsymbol *insert(Dsymbol *s);

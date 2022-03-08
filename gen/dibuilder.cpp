@@ -12,13 +12,14 @@
 #include "dmd/declaration.h"
 #include "dmd/enum.h"
 #include "dmd/errors.h"
+#include "dmd/expression.h"
 #include "dmd/identifier.h"
 #include "dmd/import.h"
-#include "dmd/ldcbindings.h"
 #include "dmd/mangle.h"
 #include "dmd/module.h"
 #include "dmd/mtype.h"
 #include "dmd/nspace.h"
+#include "dmd/root/dcompat.h"
 #include "dmd/target.h"
 #include "dmd/template.h"
 #include "driver/cl_options.h"
@@ -51,7 +52,8 @@ static cl::opt<cl::boolOrDefault> emitColumnInfo(
 namespace ldc {
 
 // in gen/cpp-imitating-naming.d
-const char *convertDIdentifierToCPlusPlus(const char *name, size_t nameLength);
+const char *convertDIdentifierToCPlusPlus(const char *name,
+                                          d_size_t nameLength);
 
 namespace {
 llvm::StringRef uniqueIdent(Type *t) {
@@ -250,54 +252,54 @@ DIType DIBuilder::CreateBasicType(Type *type) {
   // find encoding
   unsigned Encoding;
   switch (t->ty) {
-  case Tbool:
+  case TY::Tbool:
     Encoding = DW_ATE_boolean;
     break;
-  case Tchar:
+  case TY::Tchar:
     if (emitCodeView) {
       // VS debugger does not support DW_ATE_UTF for char
       Encoding = DW_ATE_unsigned_char;
       break;
     }
     // fall through
-  case Twchar:
-  case Tdchar:
+  case TY::Twchar:
+  case TY::Tdchar:
     Encoding = DW_ATE_UTF;
     break;
-  case Tint8:
+  case TY::Tint8:
     if (emitCodeView) {
       // VS debugger does not support DW_ATE_signed for 8-bit
       Encoding = DW_ATE_signed_char;
       break;
     }
     // fall through
-  case Tint16:
-  case Tint32:
-  case Tint64:
-  case Tint128:
+  case TY::Tint16:
+  case TY::Tint32:
+  case TY::Tint64:
+  case TY::Tint128:
     Encoding = DW_ATE_signed;
     break;
-  case Tuns8:
+  case TY::Tuns8:
     if (emitCodeView) {
       // VS debugger does not support DW_ATE_unsigned for 8-bit
       Encoding = DW_ATE_unsigned_char;
       break;
     }
     // fall through
-  case Tuns16:
-  case Tuns32:
-  case Tuns64:
-  case Tuns128:
+  case TY::Tuns16:
+  case TY::Tuns32:
+  case TY::Tuns64:
+  case TY::Tuns128:
     Encoding = DW_ATE_unsigned;
     break;
-  case Tfloat32:
-  case Tfloat64:
-  case Tfloat80:
+  case TY::Tfloat32:
+  case TY::Tfloat64:
+  case TY::Tfloat80:
     Encoding = DW_ATE_float;
     break;
-  case Timaginary32:
-  case Timaginary64:
-  case Timaginary80:
+  case TY::Timaginary32:
+  case TY::Timaginary64:
+  case TY::Timaginary80:
     if (emitCodeView) {
       // DW_ATE_imaginary_float not supported by the LLVM DWARF->CodeView
       // conversion
@@ -306,9 +308,9 @@ DIType DIBuilder::CreateBasicType(Type *type) {
     }
     Encoding = DW_ATE_imaginary_float;
     break;
-  case Tcomplex32:
-  case Tcomplex64:
-  case Tcomplex80:
+  case TY::Tcomplex32:
+  case TY::Tcomplex64:
+  case TY::Tcomplex80:
     if (emitCodeView) {
       // DW_ATE_complex_float not supported by the LLVM DWARF->CodeView
       // conversion
@@ -368,8 +370,6 @@ DIType DIBuilder::CreateEnumType(TypeEnum *type) {
 }
 
 DIType DIBuilder::CreatePointerType(TypePointer *type) {
-  llvm::Type *T = DtoType(type);
-
   // TODO: The addressspace is important for dcompute targets. See e.g.
   // https://www.mail-archive.com/dwarf-discuss@lists.dwarfstd.org/msg00326.html
   const llvm::Optional<unsigned> DWARFAddressSpace = llvm::None;
@@ -378,9 +378,7 @@ DIType DIBuilder::CreatePointerType(TypePointer *type) {
 
   return DBuilder.createPointerType(
       CreateTypeDescription(type->nextOf(), /*voidToUbyte=*/true),
-      getTypeAllocSize(T) * 8, // size (bits)
-      getABITypeAlign(T) * 8,  // align (bits)
-      DWARFAddressSpace, name);
+      target.ptrsize * 8, 0, DWARFAddressSpace, name);
 }
 
 DIType DIBuilder::CreateVectorType(TypeVector *type) {
@@ -408,13 +406,13 @@ DIType DIBuilder::CreateComplexType(Type *type) {
 
   Type *elemtype = nullptr;
   switch (t->ty) {
-  case Tcomplex32:
+  case TY::Tcomplex32:
     elemtype = Type::tfloat32;
     break;
-  case Tcomplex64:
+  case TY::Tcomplex64:
     elemtype = Type::tfloat64;
     break;
-  case Tcomplex80:
+  case TY::Tcomplex80:
     elemtype = Type::tfloat80;
     break;
   default:
@@ -486,6 +484,9 @@ void DIBuilder::AddFields(AggregateDeclaration *ad, DIFile file,
   size_t narr = ad->fields.length;
   elems.reserve(narr);
   for (auto vd : ad->fields) {
+    if (vd->type->toBasetype()->isTypeNoreturn())
+      continue;
+
     elems.push_back(CreateMemberType(vd->loc.linnum, vd->type, file,
                                      vd->toChars(), vd->offset,
                                      vd->visibility.kind));
@@ -513,7 +514,8 @@ void DIBuilder::AddStaticMembers(AggregateDeclaration *ad, DIFile file,
         // currently does nothing with DIImportedEntity except at CU-level.
         visitMembers(tmixin->members);
       } else if (auto vd = s->isVarDeclaration())
-        if (vd->isDataseg() && !vd->aliassym /* TODO: tuples*/) {
+        if (vd->isDataseg() && !vd->aliassym /* TODO: tuples*/ &&
+            !vd->type->toBasetype()->isTypeNoreturn()) {
           llvm::MDNode *elem =
               CreateMemberType(vd->loc.linnum, vd->type, file, vd->toChars(), 0,
                                vd->visibility.kind,
@@ -531,11 +533,11 @@ void DIBuilder::AddStaticMembers(AggregateDeclaration *ad, DIFile file,
 }
 
 DIType DIBuilder::CreateCompositeType(Type *t) {
-  assert((t->ty == Tstruct || t->ty == Tclass) &&
+  assert((t->ty == TY::Tstruct || t->ty == TY::Tclass) &&
          "Unsupported type for debug info in DIBuilder::CreateCompositeType");
 
   AggregateDeclaration *ad;
-  if (t->ty == Tstruct) {
+  if (t->ty == TY::Tstruct) {
     ad = static_cast<TypeStruct *>(t)->sym;
   } else {
     ad = static_cast<TypeClass *>(t)->sym;
@@ -544,7 +546,7 @@ DIType DIBuilder::CreateCompositeType(Type *t) {
   // Use the actual type associated with the declaration, ignoring any
   // const/wrappers.
   LLType *T = DtoType(ad->type);
-  if (t->ty == Tclass)
+  if (t->ty == TY::Tclass)
     T = T->getPointerElementType();
   IrAggr *irAggr = getIrAggr(ad, true);
 
@@ -578,8 +580,8 @@ DIType DIBuilder::CreateCompositeType(Type *t) {
   const auto uniqueIdentifier = uniqueIdent(t);
 
   // set diCompositeType to handle recursive types properly
-  unsigned tag = (t->ty == Tstruct) ? llvm::dwarf::DW_TAG_structure_type
-                                    : llvm::dwarf::DW_TAG_class_type;
+  unsigned tag = (t->ty == TY::Tstruct) ? llvm::dwarf::DW_TAG_structure_type
+                                        : llvm::dwarf::DW_TAG_class_type;
   irAggr->diCompositeType =
       DBuilder.createReplaceableCompositeType(tag, name, scope, file, lineNum);
 
@@ -604,7 +606,7 @@ DIType DIBuilder::CreateCompositeType(Type *t) {
   const auto elemsArray = DBuilder.getOrCreateArray(elems);
 
   DIType ret;
-  if (t->ty == Tclass) {
+  if (t->ty == TY::Tclass) {
     ret = DBuilder.createClassType(
         scope, name, file, lineNum, sizeInBits, alignmentInBits,
         classOffsetInBits, DIFlags::FlagZero, derivedFrom, elemsArray,
@@ -653,7 +655,7 @@ DIType DIBuilder::CreateSArrayType(TypeSArray *type) {
 
   Type *te = type;
   llvm::SmallVector<LLMetadata *, 8> subscripts;
-  for (; te->ty == Tsarray; te = te->nextOf()) {
+  for (; te->ty == TY::Tsarray; te = te->nextOf()) {
     TypeSArray *tsa = static_cast<TypeSArray *>(te);
     const auto count = tsa->dim->toInteger();
 #if LDC_LLVM_VER >= 1100
@@ -737,7 +739,7 @@ DIType DIBuilder::CreateDelegateType(TypeDelegate *type) {
   const auto file = CreateFile();
 
   LLMetadata *elems[] = {
-      CreateMemberType(0, Type::tvoidptr, file, "context", 0,
+      CreateMemberType(0, Type::tvoidptr, file, "ptr", 0,
                        Visibility::public_),
       CreateMemberType(0, type->next->pointerTo(), file, "funcptr",
                        target.ptrsize, Visibility::public_)};
@@ -762,16 +764,16 @@ DIType DIBuilder::CreateUnspecifiedType(Dsymbol *sym) {
 ////////////////////////////////////////////////////////////////////////////////
 
 DIType DIBuilder::CreateTypeDescription(Type *t, bool voidToUbyte) {
-  if (voidToUbyte && t->toBasetype()->ty == Tvoid)
+  if (voidToUbyte && t->toBasetype()->ty == TY::Tvoid)
     t = Type::tuns8;
 
-  if (t->ty == Tvoid || t->ty == Tnoreturn)
+  if (t->ty == TY::Tvoid || t->ty == TY::Tnoreturn)
     return nullptr;
-  if (t->ty == Tnull) {
+  if (t->ty == TY::Tnull) {
     // display null as void*
-    return DBuilder.createPointerType(CreateTypeDescription(Type::tvoid), 8, 8,
-                                      /* DWARFAddressSpace */ llvm::None,
-                                      "typeof(null)");
+    return DBuilder.createPointerType(
+        CreateTypeDescription(Type::tvoid), target.ptrsize * 8, 0,
+        /* DWARFAddressSpace */ llvm::None, "typeof(null)");
   }
   if (auto te = t->isTypeEnum())
     return CreateEnumType(te);
@@ -787,16 +789,14 @@ DIType DIBuilder::CreateTypeDescription(Type *t, bool voidToUbyte) {
     return CreateSArrayType(tsa);
   if (auto taa = t->isTypeAArray())
     return CreateAArrayType(taa);
-  if (t->ty == Tstruct)
+  if (t->ty == TY::Tstruct)
     return CreateCompositeType(t);
   if (auto tc = t->isTypeClass()) {
-    LLType *T = DtoType(t);
     const auto aggregateDIType = CreateCompositeType(t);
     const auto name =
         (tc->sym->toPrettyChars(true) + llvm::StringRef("*")).str();
-    return DBuilder.createPointerType(aggregateDIType, getTypeAllocSize(T) * 8,
-                                      getABITypeAlign(T) * 8, llvm::None,
-                                      processDIName(name));
+    return DBuilder.createPointerType(aggregateDIType, target.ptrsize * 8, 0,
+                                      llvm::None, processDIName(name));
   }
   if (auto tf = t->isTypeFunction())
     return CreateFunctionType(tf);
@@ -1168,6 +1168,11 @@ void DIBuilder::EmitLocalVariable(llvm::Value *ll, VarDeclaration *vd,
   Logger::println("D to dwarf local variable");
   LOG_SCOPE;
 
+  if (vd->type->toBasetype()->isTypeNoreturn()) {
+    Logger::println("of type noreturn, skip");
+    return;
+  }
+
   auto &variableMap = IR->func()->variableMap;
   auto sub = variableMap.find(vd);
   if (sub != variableMap.end())
@@ -1193,7 +1198,7 @@ void DIBuilder::EmitLocalVariable(llvm::Value *ll, VarDeclaration *vd,
     } else {
       // 2) dynamic arrays, delegates and vectors
       TY ty = type->toBasetype()->ty;
-      if (ty == Tarray || ty == Tdelegate || ty == Tvector)
+      if (ty == TY::Tarray || ty == TY::Tdelegate || ty == TY::Tvector)
         forceAsLocal = true;
     }
   }
@@ -1272,6 +1277,11 @@ void DIBuilder::EmitGlobalVariable(llvm::GlobalVariable *llVar,
 
   Logger::println("D to dwarf global_variable");
   LOG_SCOPE;
+
+  if (vd->type->toBasetype()->isTypeNoreturn()) {
+    Logger::println("of type noreturn, skip");
+    return;
+  }
 
   assert(vd->isDataseg() ||
          (vd->storage_class & (STCconst | STCimmutable) && vd->_init));

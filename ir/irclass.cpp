@@ -29,6 +29,7 @@
 #include "gen/tollvm.h"
 #include "gen/typinf.h"
 #include "ir/iraggr.h"
+#include "ir/irdsymbol.h"
 #include "ir/irfunction.h"
 #include "ir/irtypeclass.h"
 #include "llvm/ADT/SmallString.h"
@@ -73,7 +74,7 @@ LLGlobalVariable *IrClass::getVtblSymbol(bool define) {
                          /*isConstant=*/true, false, useDLLImport());
 
     if (!define)
-      define = defineOnDeclare(aggrdecl);
+      define = defineOnDeclare(aggrdecl, /*isFunction=*/false);
   }
 
   if (define) {
@@ -112,16 +113,12 @@ LLGlobalVariable *IrClass::getClassInfoSymbol(bool define) {
       LLType *type = DtoType(aggrdecl->type);
       LLType *bodyType = llvm::cast<LLPointerType>(type)->getElementType();
       bool hasDestructor = (aggrdecl->dtor != nullptr);
-      bool hasCustomDelete = false;
       // Construct the fields
       llvm::Metadata *mdVals[CD_NumFields];
       mdVals[CD_BodyType] =
           llvm::ConstantAsMetadata::get(llvm::UndefValue::get(bodyType));
       mdVals[CD_Finalize] = llvm::ConstantAsMetadata::get(
           LLConstantInt::get(LLType::getInt1Ty(gIR->context()), hasDestructor));
-      mdVals[CD_CustomDelete] =
-          llvm::ConstantAsMetadata::get(LLConstantInt::get(
-              LLType::getInt1Ty(gIR->context()), hasCustomDelete));
       // Construct the metadata and insert it into the module.
       const auto metaname = getMetadataName(CD_PREFIX, typeInfo);
       llvm::NamedMDNode *node = gIR->module.getOrInsertNamedMetadata(metaname);
@@ -130,7 +127,7 @@ LLGlobalVariable *IrClass::getClassInfoSymbol(bool define) {
     }
 
     if (!define)
-      define = defineOnDeclare(aggrdecl);
+      define = defineOnDeclare(aggrdecl, /*isFunction=*/false);
   }
 
   if (define) {
@@ -250,9 +247,10 @@ LLConstant *IrClass::getVtblInit() {
           if (fd2->isFuture()) {
             continue;
           }
-          if (fd->leastAsSpecialized(fd2) || fd2->leastAsSpecialized(fd)) {
+          if (fd->leastAsSpecialized(fd2) != MATCH::nomatch ||
+              fd2->leastAsSpecialized(fd) != MATCH::nomatch) {
             TypeFunction *tf = static_cast<TypeFunction *>(fd->type);
-            if (tf->ty == Tfunction) {
+            if (tf->ty == TY::Tfunction) {
               cd->error("use of `%s%s` is hidden by `%s`; use `alias %s = "
                         "%s.%s;` to introduce base class overload set",
                         fd->toPrettyChars(),
@@ -368,7 +366,7 @@ LLConstant *IrClass::getClassInfoInit() {
   // string name
   const char *name = cd->ident->toChars();
   if (strncmp(name, "TypeInfo_", 9) != 0) {
-    name = cd->toPrettyChars();
+    name = cd->toPrettyChars(/*QualifyTypes=*/true);
   }
   b.push_string(name);
 
@@ -473,7 +471,7 @@ llvm::GlobalVariable *IrClass::getInterfaceVtblSymbol(BaseClass *b,
     interfaceVtblMap.insert({{b->sym, interfaces_index}, gvar});
 
     if (!define)
-      define = defineOnDeclare(aggrdecl);
+      define = defineOnDeclare(aggrdecl, /*isFunction=*/false);
   }
 
   if (define && !gvar->hasInitializer()) {
@@ -514,8 +512,7 @@ LLConstant *IrClass::getInterfaceVtblInit(BaseClass *b,
 
       llvm::GlobalVariable *interfaceInfosZ = getInterfaceArraySymbol();
       llvm::Constant *c = llvm::ConstantExpr::getGetElementPtr(
-          isaPointer(interfaceInfosZ)->getElementType(), interfaceInfosZ, idxs,
-          true);
+          getPointeeType(interfaceInfosZ), interfaceInfosZ, idxs, true);
 
       constants.push_back(DtoBitCast(c, voidPtrTy));
     } else {
@@ -765,8 +762,8 @@ LLConstant *IrClass::getClassInfoInterfaces() {
   LLConstant *idxs[2] = {DtoConstSize_t(0),
                          DtoConstSize_t(n - cd->vtblInterfaces->length)};
 
-  LLConstant *ptr = llvm::ConstantExpr::getGetElementPtr(
-      isaPointer(ciarr)->getElementType(), ciarr, idxs, true);
+  LLConstant *ptr = llvm::ConstantExpr::getGetElementPtr(getPointeeType(ciarr),
+                                                         ciarr, idxs, true);
 
   // return as a slice
   return DtoConstSlice(DtoConstSize_t(cd->vtblInterfaces->length), ptr);

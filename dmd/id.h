@@ -1,10 +1,10 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 2017-2021 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 2017-2022 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
- * http://www.digitalmars.com
+ * https://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
- * http://www.boost.org/LICENSE_1_0.txt
+ * https://www.boost.org/LICENSE_1_0.txt
  * https://github.com/dlang/dmd/blob/master/src/dmd/id.h
  */
 
@@ -77,6 +77,7 @@ struct Id
     static Identifier *LDC_extern_weak;
     static Identifier *LDC_profile_instr;
     static Identifier *dcReflect;
+    static Identifier *opencl;
     static Identifier *criticalenter;
     static Identifier *criticalexit;
     static Identifier *attributes;
@@ -93,6 +94,8 @@ struct Id
     static Identifier *udaDynamicCompile;
     static Identifier *udaDynamicCompileConst;
     static Identifier *udaDynamicCompileEmit;
+    static Identifier *udaHidden;
+    static Identifier *udaNoSanitize;
     static Identifier *io;
 #endif
 };

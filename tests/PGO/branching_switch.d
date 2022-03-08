@@ -14,13 +14,12 @@ extern(C):  // simplify name mangling for simpler string matching
 
 // PROFGEN-DAG: @[[BoB:__(llvm_profile_counters|profc)_bunch_of_branches]] ={{.*}} global [15 x i64] zeroinitializer
 
-// PROFGEN-LABEL: @bunch_of_branches()
-// PROFUSE-LABEL: @bunch_of_branches()
+// PROFGEN-LABEL: @bunch_of_branches(i32
+// PROFUSE-LABEL: @bunch_of_branches(i32
 // PROFGEN: store {{.*}} @[[BoB]], i64 0, i64 0
 // PROFUSE-SAME: !prof ![[BoB0:[0-9]+]]
-void bunch_of_branches() {
+void bunch_of_branches(const uint two) {
   uint i;
-  uint two = 2;
 
   // PROFGEN: store {{.*}} @[[BoB]], i64 0, i64 1
   // PROFUSE: br {{.*}} !prof ![[BoB1:[0-9]+]]
@@ -42,6 +41,7 @@ void bunch_of_branches() {
       // PROFGEN: store {{.*}} @[[BoB]], i64 0, i64 7
       // never reached, no branch weights
       if (i != 11) {}
+      goto case;
 
     // PROFGEN: store {{.*}} @[[BoB]], i64 0, i64 8
     case two: // 1x
@@ -52,12 +52,12 @@ void bunch_of_branches() {
       goto case 1;
 
     // PROFGEN: store {{.*}} @[[BoB]], i64 0, i64 10
-    default: // 1 + 1*gototarget
+    default: // 1 + 2*gototarget
       // PROFGEN: store {{.*}} @[[BoB]], i64 0, i64 11
-      // fall through
+      goto case;
 
     // PROFGEN: store {{.*}} @[[BoB]], i64 0, i64 12
-    case 5: // 0 + 2*fallthrough
+    case 5: // 0 + 3*fallthrough
 
       // PROFGEN: store {{.*}} @[[BoB]], i64 0, i64 13
       // PROFUSE: br {{.*}} !prof ![[BoB13:[0-9]+]]
@@ -84,7 +84,7 @@ void bunch_of_branches() {
 // PROFUSE-LABEL: @_Dmain(
 extern(D):
 void main() {
-  bunch_of_branches();
+  bunch_of_branches(2);
 }
 
 
@@ -98,4 +98,4 @@ void main() {
 
 // PROFUSE-DAG: ![[BoB5]] = !{!"branch_weights", i32 2, i32 2}
 // PROFUSE-DAG: ![[BoB9]] = !{!"branch_weights", i32 1, i32 2}
-// PROFUSE-DAG: ![[BoB13]] = !{!"branch_weights", i32 4, i32 1}
+// PROFUSE-DAG: ![[BoB13]] = !{!"branch_weights", i32 1, i32 -1}

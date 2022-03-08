@@ -1,10 +1,10 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
- * http://www.digitalmars.com
+ * https://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
- * http://www.boost.org/LICENSE_1_0.txt
+ * https://www.boost.org/LICENSE_1_0.txt
  * https://github.com/dlang/dmd/blob/master/src/dmd/globals.h
  */
 
@@ -12,7 +12,7 @@
 
 #include "root/dcompat.h"
 #include "root/ctfloat.h"
-#include "root/outbuffer.h"
+#include "common/outbuffer.h"
 #include "root/filename.h"
 #include "compiler.h"
 
@@ -99,6 +99,13 @@ enum class FeatureState : signed char
 };
 
 #if IN_LLVM
+enum class LinkonceTemplates : char
+{
+    no,        // non-discardable weak_odr linkage
+    yes,       // discardable linkonce_odr linkage + lazily and recursively define all referenced instantiated symbols in each object file (define-on-declare)
+    aggressive // be more aggressive wrt. speculative instantiations - don't append to module members and skip needsCodegen() culling; rely on define-on-declare.
+};
+
 enum class DLLImport : char
 {
     none,
@@ -127,6 +134,7 @@ struct Param
     bool vgc;           // identify gc usage
     bool vfield;        // identify non-mutable field variables
     bool vcomplex;      // identify complex/imaginary type usage
+    bool vin;           // identify 'in' parameters
     unsigned char symdebug;  // insert debug symbolic information
     bool symdebugref;   // insert debug information for all referenced types, too
     bool optimize;      // run optimizer
@@ -134,7 +142,8 @@ struct Param
     bool stackstomp;    // add stack stomping code
     bool useUnitTests;  // generate unittest code
     bool useInline;     // inline expand functions
-    FeatureState useDIP25;      // implement http://wiki.dlang.org/DIP25
+    FeatureState useDIP25;      // implement https://wiki.dlang.org/DIP25
+    FeatureState useDIP1000; // implement https://dlang.org/spec/memory-safe-d.html#scope-return-params
     bool useDIP1021;    // implement https://github.com/dlang/DIPs/blob/master/DIPs/accepted/DIP1021.md
     bool release;       // build release version
     bool preservePaths; // true means don't strip path from source file
@@ -159,7 +168,6 @@ struct Param
                         // https://issues.dlang.org/show_bug.cgi?id=16997
     bool fixAliasThis;  // if the current scope has an alias this, check it before searching upper scopes
     bool inclusiveInContracts;   // 'in' contracts of overridden methods must be a superset of parent contract
-    bool vsafe;         // use enhanced @safe checking
     bool ehnogc;        // use @nogc exception handling
     FeatureState dtorFields;  // destruct fields of partially constructed objects
                               // https://issues.dlang.org/show_bug.cgi?id=14246
@@ -285,7 +293,7 @@ struct Param
 
     bool outputSourceLocations; // if true, output line tables.
 
-    bool linkonceTemplates; // -linkonce-templates
+    LinkonceTemplates linkonceTemplates; // -linkonce-templates
 
     // Windows-specific:
     bool dllexport;      // dllexport ~all defined symbols?
@@ -298,10 +306,24 @@ struct Param
 #endif
 };
 
-typedef unsigned structalign_t;
+struct structalign_t
+{
+    unsigned short value;
+    bool pack;
+
+    bool isDefault() const;
+    void setDefault();
+    bool isUnknown() const;
+    void setUnknown();
+    void set(unsigned value);
+    unsigned get() const;
+    bool isPack() const;
+    void setPack(bool pack);
+};
+
 // magic value means "match whatever the underlying C compiler does"
 // other values are all powers of 2
-#define STRUCTALIGN_DEFAULT ((structalign_t) ~0)
+//#define STRUCTALIGN_DEFAULT ((structalign_t) ~0)
 
 const DString mars_ext = "d";
 const DString doc_ext  = "html";     // for Ddoc generated files
@@ -339,6 +361,9 @@ struct Global
 
     Array<class Identifier*>* versionids; // command line versions and predefined versions
     Array<class Identifier*>* debugids;   // command line debug versions and predefined versions
+
+    bool hasMainFunction;
+    unsigned varSequenceNumber;
 
 #if IN_LLVM
     DString ldc_version;
@@ -453,12 +478,12 @@ enum class CPPMANGLE : uint8_t
     asClass
 };
 
-enum MATCH
+enum class MATCH : int
 {
-    MATCHnomatch,       // no match
-    MATCHconvert,       // match with conversions
-    MATCHconst,         // match with conversion to const
-    MATCHexact          // exact match
+    nomatch,       // no match
+    convert,       // match with conversions
+    constant,      // match with conversion to const
+    exact          // exact match
 };
 
 enum class PINLINE : uint8_t

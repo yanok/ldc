@@ -12,10 +12,10 @@
 #include "dmd/aggregate.h"
 #include "dmd/declaration.h"
 #include "dmd/errors.h"
+#include "dmd/expression.h"
 #include "dmd/id.h"
 #include "dmd/identifier.h"
 #include "dmd/init.h"
-#include "dmd/ldcbindings.h"
 #include "dmd/mangle.h"
 #include "dmd/module.h"
 #include "dmd/mtype.h"
@@ -49,6 +49,7 @@
 #include "gen/scope_exit.h"
 #include "gen/tollvm.h"
 #include "gen/uda.h"
+#include "ir/irdsymbol.h"
 #include "ir/irfunction.h"
 #include "ir/irmodule.h"
 #include "llvm/IR/Intrinsics.h"
@@ -68,7 +69,7 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
   LOG_SCOPE
 
   // sanity check
-  assert(type->ty == Tfunction);
+  assert(type->ty == TY::Tfunction);
   TypeFunction *f = static_cast<TypeFunction *>(type);
   assert(f->next && "Encountered function type with invalid return type; "
                     "trying to codegen function ignored by the frontend?");
@@ -94,7 +95,7 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
     newIrFty.ret = new IrFuncTyArg(Type::tint32, false);
   } else {
     Type *rt = f->next;
-    const bool byref = f->isref() && rt->toBasetype()->ty != Tvoid;
+    const bool byref = f->isref() && rt->toBasetype()->ty != TY::Tvoid;
     llvm::AttrBuilder attrs;
 
     if (abi->returnInArg(f, fd && fd->needThis())) {
@@ -126,8 +127,8 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
     if (fd && fd->isCtorDeclaration()) {
       attrs.addAttribute(LLAttribute::Returned);
     }
-    newIrFty.arg_this =
-        new IrFuncTyArg(thistype, thistype->toBasetype()->ty == Tstruct, attrs);
+    newIrFty.arg_this = new IrFuncTyArg(
+        thistype, thistype->toBasetype()->ty == TY::Tstruct, attrs);
     ++nextLLArgIdx;
   } else if (nesttype) {
     // Add the context pointer for nested functions
@@ -183,7 +184,7 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
       // Lazy arguments are lowered to delegates.
       Logger::println("lazy param");
       auto ltf = TypeFunction::create(nullptr, arg->type, VARARGnone, LINK::d);
-      auto ltd = createTypeDelegate(ltf);
+      auto ltd = TypeDelegate::create(ltf);
       loweredDType = merge(ltd);
     } else if (passPointer) {
       // ref/out
@@ -377,9 +378,9 @@ void DtoResolveFunction(FuncDeclaration *fdecl, const bool willDeclare) {
 
   Type *type = fdecl->type;
   // If errors occurred compiling it, such as bugzilla 6118
-  if (type && type->ty == Tfunction) {
+  if (type && type->ty == TY::Tfunction) {
     Type *next = static_cast<TypeFunction *>(type)->next;
-    if (!next || next->ty == Terror) {
+    if (!next || next->ty == TY::Terror) {
       return;
     }
   }
@@ -422,7 +423,7 @@ void DtoResolveFunction(FuncDeclaration *fdecl, const bool willDeclare) {
           fdecl->llvmInternal = LLVMinline_ir;
           fdecl->linkage = LINK::c;
           Type *type = fdecl->type;
-          assert(type->ty == Tfunction);
+          assert(type->ty == TY::Tfunction);
           static_cast<TypeFunction *>(type)->linkage = LINK::c;
 
           DtoFunctionType(fdecl);
@@ -598,10 +599,10 @@ void DtoDeclareFunction(FuncDeclaration *fdecl, const bool willDefine) {
   bool defineAsAvailableExternally = false;
   if (willDefine) {
     // will be defined anyway after declaration
-  } else if (defineOnDeclare(fdecl)) {
+  } else if (defineOnDeclare(fdecl, /*isFunction=*/true)) {
     Logger::println("Function is inside a linkonce_odr template, will be "
                     "defined after declaration.");
-    if (fdecl->semanticRun < PASSsemantic3done) {
+    if (fdecl->semanticRun < PASS::semantic3done) {
       Logger::println("Function hasn't had sema3 run yet, running it now.");
       const bool semaSuccess = fdecl->functionSemantic3();
       (void)semaSuccess;
@@ -634,10 +635,9 @@ void DtoDeclareFunction(FuncDeclaration *fdecl, const bool willDefine) {
   // hardcoded into druntime, even if the frontend type has D linkage (Bugzilla
   // issue 9028).
   const bool forceC = vafunc || DtoIsIntrinsic(fdecl) || fdecl->isMain();
-  const auto link = forceC ? LINK::c : f->linkage;
 
   // mangled name
-  const auto irMangle = getIRMangledName(fdecl, link);
+  const auto irMangle = getIRMangledName(fdecl, forceC ? LINK::c : f->linkage);
 
   // construct function
   LLFunctionType *functype = DtoFunctionType(fdecl);
@@ -650,7 +650,16 @@ void DtoDeclareFunction(FuncDeclaration *fdecl, const bool willDefine) {
     if (fdecl->llvmInternal == LLVMextern_weak)
       linkage = llvm::GlobalValue::ExternalWeakLinkage;
     func = LLFunction::Create(functype, linkage, irMangle, &gIR->module);
-  } else if (func->getFunctionType() != functype) {
+  } else if (func->getFunctionType() == functype) {
+    // IR signature matches existing function
+  } else if (fdecl->isCsymbol() &&
+             func->getFunctionType() ==
+                 LLFunctionType::get(functype->getReturnType(),
+                                     functype->params(), false)) {
+    // ImportC: a variadic definition replaces a non-variadic declaration; keep
+    // existing non-variadic IR function
+    assert(func->isDeclaration());
+  } else {
     const auto existingTypeString = llvmTypeToString(func->getFunctionType());
     const auto newTypeString = llvmTypeToString(functype);
     error(fdecl->loc,
@@ -664,7 +673,8 @@ void DtoDeclareFunction(FuncDeclaration *fdecl, const bool willDefine) {
     fatal();
   }
 
-  func->setCallingConv(gABI->callingConv(link, f, fdecl));
+  func->setCallingConv(forceC ? gABI->callingConv(LINK::c)
+                              : gABI->callingConv(fdecl));
 
   IF_LOG Logger::cout() << "func = " << *func << std::endl;
 
@@ -679,7 +689,7 @@ void DtoDeclareFunction(FuncDeclaration *fdecl, const bool willDefine) {
     // the codegen options allow skipping PLT.
     func->addFnAttr(LLAttribute::NonLazyBind);
   }
-  if (f->next->toBasetype()->ty == Tnoreturn) {
+  if (f->next->toBasetype()->ty == TY::Tnoreturn) {
     func->addFnAttr(LLAttribute::NoReturn);
   }
 
@@ -945,14 +955,16 @@ bool eraseDummyAfterReturnBB(llvm::BasicBlock *bb) {
 
 /**
  * LLVM doesn't really support weak linkage for MSVC targets, it just prevents
- * inlining. We can emulate it though, by conceptually renaming the defined
- * function, only declaring the original function and embedding a linker
- * directive in the object file, instructing the linker to fall back to the weak
- * implementation if there's no strong definition.
+ * inlining. We can emulate it though, by renaming the defined function, only
+ * declaring the original function and embedding a linker directive in the
+ * object file, instructing the linker to fall back to the weak implementation
+ * if there's no strong definition.
  * The object file still needs to be pulled in by the linker for the directive
  * to be found.
  */
-void emulateWeakAnyLinkageForMSVC(LLFunction *func, LINK linkage) {
+void emulateWeakAnyLinkageForMSVC(IrFunction *irFunc, LINK linkage) {
+  LLFunction *func = irFunc->getLLVMFunc();
+
   const bool isWin32 = global.params.targetTriple->isArch32Bit();
 
   std::string mangleBuffer;
@@ -986,17 +998,22 @@ void emulateWeakAnyLinkageForMSVC(LLFunction *func, LINK linkage) {
       ("/ALTERNATENAME:" + finalMangle + "=" + finalWeakMangle).str();
   gIR->addLinkerOption(llvm::StringRef(linkerOption));
 
-  // work around LLVM assertion when cloning a function's debuginfos
-  func->setSubprogram(nullptr);
+  // rename existing function
+  const std::string oldName = func->getName().str();
+  func->setName("\1" + finalWeakMangle);
+  if (func->hasComdat()) {
+    func->setComdat(gIR->module.getOrInsertComdat(func->getName()));
+  }
 
-  llvm::ValueToValueMapTy dummy;
-  auto clone = llvm::CloneFunction(func, dummy);
-  clone->setName("\1" + finalWeakMangle);
-  setLinkage({LLGlobalValue::ExternalLinkage, func->hasComdat()}, clone);
+  // create a new body-less declaration with the old name
+  auto newFunc =
+      LLFunction::Create(func->getFunctionType(),
+                         LLGlobalValue::ExternalLinkage, oldName, &gIR->module);
 
-  // reduce the original definition to a declaration
-  setLinkage({LLGlobalValue::ExternalLinkage, false}, func);
-  func->deleteBody();
+  // replace existing and future uses of the old, renamed function with the new
+  // declaration
+  irFunc->setLLVMFunc(newFunc);
+  func->replaceNonMetadataUsesWith(newFunc);
 }
 
 } // anonymous namespace
@@ -1033,18 +1050,18 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
     return;
   }
 
-  if ((fd->type && fd->type->ty == Terror) ||
-      (fd->type && fd->type->ty == Tfunction &&
+  if ((fd->type && fd->type->ty == TY::Terror) ||
+      (fd->type && fd->type->ty == TY::Tfunction &&
        static_cast<TypeFunction *>(fd->type)->next == nullptr) ||
-      (fd->type && fd->type->ty == Tfunction &&
-       static_cast<TypeFunction *>(fd->type)->next->ty == Terror)) {
+      (fd->type && fd->type->ty == TY::Tfunction &&
+       static_cast<TypeFunction *>(fd->type)->next->ty == TY::Terror)) {
     IF_LOG Logger::println(
         "Ignoring; has error type, no return type or returns error type");
     fd->ir->setDefined();
     return;
   }
 
-  if (fd->semanticRun == PASSsemanticdone) {
+  if (fd->semanticRun == PASS::semanticdone) {
     // This function failed semantic3() with errors but the errors were gagged.
     // In contrast to DMD we immediately bail out here, since other parts of
     // the codegen expect irFunc to be set for defined functions.
@@ -1094,7 +1111,7 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   // nested context creation code.
   FuncDeclaration *parent = fd;
   while ((parent = getParentFunc(parent))) {
-    if (parent->semanticRun != PASSsemantic3done || parent->semantic3Errors) {
+    if (parent->semanticRun != PASS::semantic3done || parent->semantic3Errors) {
       IF_LOG Logger::println(
           "Ignoring nested function with unanalyzed parent.");
       return;
@@ -1106,7 +1123,7 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
 
   assert(fd->ident != Id::empty);
 
-  if (fd->semanticRun != PASSsemantic3done) {
+  if (fd->semanticRun != PASS::semantic3done) {
     error(fd->loc,
           "Internal Compiler Error: function not fully analyzed; "
           "previous unreported errors compiling `%s`?",
@@ -1115,7 +1132,9 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   }
 
   if (fd->isUnitTestDeclaration()) {
-    getIrModule(gIR->dmodule)->unitTests.push_back(fd);
+    // ignore unparsed unittests from non-root modules
+    if (fd->fbody)
+      getIrModule(gIR->dmodule)->unitTests.push_back(fd);
   } else if (fd->isSharedStaticCtorDeclaration()) {
     getIrModule(gIR->dmodule)->sharedCtors.push_back(fd);
   } else if (StaticDtorDeclaration *dtorDecl =
@@ -1200,16 +1219,19 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   }
   if (opts::isAnySanitizerEnabled() &&
       !opts::functionIsInSanitizerBlacklist(fd)) {
+    // Get the @noSanitize mask
+    auto noSanitizeMask = getMaskFromNoSanitizeUDA(*fd);
+
     // Set the required sanitizer attribute.
-    if (opts::isSanitizerEnabled(opts::AddressSanitizer)) {
+    if (opts::isSanitizerEnabled(opts::AddressSanitizer & noSanitizeMask)) {
       func->addFnAttr(LLAttribute::SanitizeAddress);
     }
 
-    if (opts::isSanitizerEnabled(opts::MemorySanitizer)) {
+    if (opts::isSanitizerEnabled(opts::MemorySanitizer & noSanitizeMask)) {
       func->addFnAttr(LLAttribute::SanitizeMemory);
     }
 
-    if (opts::isSanitizerEnabled(opts::ThreadSanitizer)) {
+    if (opts::isSanitizerEnabled(opts::ThreadSanitizer & noSanitizeMask)) {
       func->addFnAttr(LLAttribute::SanitizeThread);
     }
   }
@@ -1322,8 +1344,7 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
 
     // Push cleanup block that calls va_end to match the va_start call.
     {
-      auto *vaendBB =
-          llvm::BasicBlock::Create(gIR->context(), "vaend", gIR->topfunc());
+      auto *vaendBB = llvm::BasicBlock::Create(gIR->context(), "vaend", func);
       const auto savedInsertPoint = gIR->saveInsertPoint();
       gIR->ir->SetInsertPoint(vaendBB);
       gIR->ir->CreateCall(GET_INTRINSIC_DECL(vaend), llAp);
@@ -1384,7 +1405,7 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
   if (func->getLinkage() == LLGlobalValue::WeakAnyLinkage &&
       !func->hasDLLExportStorageClass() &&
       global.params.targetTriple->isWindowsMSVCEnvironment()) {
-    emulateWeakAnyLinkageForMSVC(func, fd->linkage);
+    emulateWeakAnyLinkageForMSVC(irFunc, fd->linkage);
   }
 }
 
@@ -1406,7 +1427,7 @@ DValue *DtoArgument(Parameter *fnarg, Expression *argexp) {
 
   // lazy arg
   if (fnarg && (fnarg->storageClass & STClazy)) {
-    assert(argexp->type->toBasetype()->ty == Tdelegate);
+    assert(argexp->type->toBasetype()->ty == TY::Tdelegate);
     assert(!arg->isLVal());
     return arg;
   }

@@ -1,9 +1,9 @@
 # syntax: https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema
 
 variables:
-  LLVM_VERSION: 12.0.1
-  CLANG_VERSION: 11.1.0
-  HOST_LDC_VERSION: 1.24.0
+  LLVM_VERSION: 13.0.1
+  CLANG_VERSION: 12.0.1
+  HOST_LDC_VERSION: 1.27.1
 
 trigger:
 - '*'
@@ -63,8 +63,8 @@ jobs:
   variables:
     CI_OS: linux
     ARCH: x86_64
-    # To improve portability of the generated binaries, link the C++ standard library statically.
     BOOTSTRAP_CMAKE_FLAGS: -DBUILD_LTO_LIBS=ON
+    # To improve portability of the generated binaries, link the C++ standard library statically.
     EXTRA_CMAKE_FLAGS: >
       -DMULTILIB=ON
       -DBUILD_LTO_LIBS=ON

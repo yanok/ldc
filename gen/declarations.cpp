@@ -17,6 +17,7 @@
 #include "dmd/init.h"
 #include "dmd/nspace.h"
 #include "dmd/root/rmem.h"
+#include "dmd/target.h"
 #include "dmd/template.h"
 #include "driver/cl_options.h"
 #include "gen/classes.h"
@@ -28,6 +29,7 @@
 #include "gen/tollvm.h"
 #include "gen/typinf.h"
 #include "gen/uda.h"
+#include "ir/irdsymbol.h"
 #include "ir/irtype.h"
 #include "ir/irvar.h"
 #include "llvm/ADT/SmallString.h"
@@ -86,7 +88,7 @@ public:
       return;
     }
 
-    if (decl->type->ty == Terror) {
+    if (decl->type->ty == TY::Terror) {
       decl->error("had semantic errors when compiling");
       decl->ir->setDefined();
       return;
@@ -122,7 +124,7 @@ public:
       return;
     }
 
-    if (decl->type->ty == Terror) {
+    if (decl->type->ty == TY::Terror) {
       decl->error("had semantic errors when compiling");
       decl->ir->setDefined();
       return;
@@ -181,7 +183,7 @@ public:
       return;
     }
 
-    if (decl->type->ty == Terror) {
+    if (decl->type->ty == TY::Terror) {
       decl->error("had semantic errors when compiling");
       decl->ir->setDefined();
       return;
@@ -229,7 +231,7 @@ public:
 
     for (auto o : *decl->objects) {
       DsymbolExp *exp = static_cast<DsymbolExp *>(o);
-      assert(exp->op == TOKdsymbol);
+      assert(exp->op == EXP::dSymbol);
       exp->s->accept(this);
     }
   }
@@ -245,7 +247,7 @@ public:
       return;
     }
 
-    if (decl->type->ty == Terror) {
+    if (decl->type->ty == TY::Terror) {
       decl->error("had semantic errors when compiling");
       decl->ir->setDefined();
       return;
@@ -279,7 +281,7 @@ public:
     IF_LOG Logger::println("Ignoring EnumDeclaration::codegen: '%s'",
                            decl->toPrettyChars());
 
-    if (decl->type->ty == Terror) {
+    if (decl->type->ty == TY::Terror) {
       decl->error("had semantic errors when compiling");
       return;
     }
@@ -317,8 +319,15 @@ public:
       return;
     }
 
-    // FIXME: This is #673 all over again.
-    if (!global.params.linkonceTemplates && !decl->needsCodegen()) {
+    // With -linkonce-templates-aggressive, only non-speculative instances make
+    // it to module members (see `TemplateInstance.appendToModuleMember()`), and
+    // we don't need full needsCodegen() culling in that case; isDiscardable()
+    // is sufficient. Speculative ones are lazily emitted if actually referenced
+    // during codegen - per IR module.
+    if ((global.params.linkonceTemplates == LinkonceTemplates::aggressive &&
+         decl->isDiscardable()) ||
+        (global.params.linkonceTemplates != LinkonceTemplates::aggressive &&
+         !decl->needsCodegen())) {
       Logger::println("Does not need codegen, skipping.");
       return;
     }
@@ -434,7 +443,7 @@ public:
       }
     } else if (decl->ident == Id::linkerDirective) {
       // embed in object file (if supported)
-      if (triple.isWindowsMSVCEnvironment() || triple.isOSBinFormatMachO()) {
+      if (target.supportsLinkerDirective()) {
         assert(decl->args);
         llvm::SmallVector<llvm::StringRef, 2> args;
         args.reserve(decl->args->length);

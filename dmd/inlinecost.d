@@ -1,9 +1,9 @@
 /**
  * Compute the cost of inlining a function call by counting expressions.
  *
- * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
- * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright:   Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
+ * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/inlinecost.d, _inlinecost.d)
  * Documentation:  https://dlang.org/phobos/dmd_inlinecost.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/inlinecost.d
@@ -17,6 +17,7 @@ import core.stdc.string;
 import dmd.aggregate;
 import dmd.apply;
 import dmd.arraytypes;
+import dmd.astenums;
 import dmd.attrib;
 import dmd.dclass;
 import dmd.declaration;
@@ -497,13 +498,15 @@ public:
     override void visit(CallExp e)
     {
         //printf("CallExp.inlineCost3() %s\n", toChars());
+        // in LDC, we only use the inliner for default arguments
+        static if (IN_LLVM)
+            cost++;
         // https://issues.dlang.org/show_bug.cgi?id=3500
         // super.func() calls must be devirtualized, and the inliner
         // can't handle that at present.
-        if (e.e1.op == TOK.dotVariable && (cast(DotVarExp)e.e1).e1.op == TOK.super_)
+        else if (e.e1.op == EXP.dotVariable && (cast(DotVarExp)e.e1).e1.op == EXP.super_)
             cost = COST_MAX;
-        // In LDC, we only use the inliner for default arguments, so disable the "else if":
-        else if (!IN_LLVM && e.f && e.f.ident == Id.__alloca && e.f.linkage == LINK.c && !allowAlloca)
+        else if (e.f && e.f.ident == Id.__alloca && e.f.linkage == LINK.c && !allowAlloca)
             cost = COST_MAX; // inlining alloca may cause stack overflows
         else
             cost++;

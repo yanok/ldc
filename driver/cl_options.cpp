@@ -80,9 +80,7 @@ cl::opt<DLLImport, true> dllimport(
                    "None (default with -link-defaultlib-shared=false)"),
         clEnumValN(DLLImport::defaultLibsOnly, "defaultLibsOnly",
                    "Only druntime/Phobos symbols (default with "
-                   "-link-defaultlib-shared and -fvisibility=hidden). May "
-                   "likely need to be coupled with -linkonce-templates to "
-                   "overcome linker errors wrt. instantiated symbols."),
+                   "-link-defaultlib-shared and -fvisibility=hidden)."),
         clEnumValN(DLLImport::all, "all",
                    "All (default with -link-defaultlib-shared and "
                    "-fvisibility=public)")));
@@ -355,9 +353,10 @@ static cl::list<std::string, StringsAdapter> stringImportPaths(
     "J", cl::desc("Look for string imports also in <directory>"),
     cl::value_desc("directory"), cl::location(strImpPathStore), cl::Prefix);
 
-static cl::opt<bool, true>
-    addMain("main", cl::desc("Add default main() (e.g. for unittesting)"),
-            cl::ZeroOrMore, cl::location(global.params.addMain));
+static cl::opt<bool, true> addMain(
+    "main", cl::ZeroOrMore, cl::location(global.params.addMain),
+    cl::desc(
+        "Add default main() if not present already (e.g. for unittesting)"));
 
 // -d-debug is a bit messy, it has 3 modes:
 // -d-debug=ident, -d-debug=level and -d-debug (without argument)
@@ -516,11 +515,16 @@ cl::opt<uint32_t, true> hashThreshold(
     "hash-threshold", cl::ZeroOrMore, cl::location(global.params.hashThreshold),
     cl::desc("Hash symbol names longer than this threshold (experimental)"));
 
-static cl::opt<bool, true> linkonceTemplates(
-    "linkonce-templates", cl::ZeroOrMore,
-    cl::location(global.params.linkonceTemplates),
-    cl::desc(
-        "Use linkonce_odr linkage for template symbols instead of weak_odr"));
+static cl::opt<LinkonceTemplates, true> linkonceTemplates(
+    cl::ZeroOrMore, cl::location(global.params.linkonceTemplates),
+    cl::values(
+        clEnumValN(LinkonceTemplates::yes, "linkonce-templates",
+                   "Use discardable linkonce_odr linkage for template symbols "
+                   "and lazily & recursively define all referenced "
+                   "instantiated symbols in each object file"),
+        clEnumValN(LinkonceTemplates::aggressive,
+                   "linkonce-templates-aggressive",
+                   "Experimental, more aggressive variant")));
 
 cl::opt<bool> disableLinkerStripDead(
     "disable-linker-strip-dead", cl::ZeroOrMore,
@@ -553,10 +557,8 @@ cl::opt<unsigned, true> nestedTemplateDepth(
 // legacy options superseded by `-preview=dip<N>`
 cl::opt<bool> useDIP25("dip25", cl::ZeroOrMore, cl::ReallyHidden,
                        cl::desc("Implement DIP25 (sealed references)"));
-static cl::opt<bool, true>
-    useDIP1000("dip1000", cl::ZeroOrMore, cl::location(global.params.vsafe),
-               cl::desc("Implement DIP1000 (scoped pointers)"),
-               cl::ReallyHidden);
+cl::opt<bool> useDIP1000("dip1000", cl::ZeroOrMore, cl::ReallyHidden,
+                         cl::desc("Implement DIP1000 (scoped pointers)"));
 static cl::opt<bool, true>
     useDIP1008("dip1008", cl::ZeroOrMore, cl::location(global.params.ehnogc),
                cl::desc("Implement DIP1008 (@nogc Throwable)"),
@@ -745,8 +747,10 @@ void createClashingOptions() {
 /// to be useful for end users from the -help output.
 void hideLLVMOptions() {
   static const char *const hiddenOptions[] = {
-      "aarch64-neon-syntax", "abort-on-max-devirt-iterations-reached",
-      "addrsig", "amdgpu-bypass-slow-div", "amdgpu-disable-loop-alignment",
+      "aarch64-neon-syntax", "aarch64-use-aa",
+      "abort-on-max-devirt-iterations-reached",
+      "addrsig", "allow-ginsert-as-artifact",
+      "amdgpu-bypass-slow-div", "amdgpu-disable-loop-alignment",
       "amdgpu-disable-power-sched", "amdgpu-dpp-combine",
       "amdgpu-dump-hsa-metadata", "amdgpu-enable-flat-scratch",
       "amdgpu-enable-global-sgpr-addr", "amdgpu-enable-merge-m0",
@@ -758,12 +762,14 @@ void hideLLVMOptions() {
       "atomic-counter-update-promoted", "atomic-first-counter",
       "basic-block-sections",
       "basicblock-sections", "bounds-checking-single-trap",
+      "cfg-hide-cold-paths",
       "cfg-hide-deoptimize-paths", "cfg-hide-unreachable-paths",
       "code-model", "cost-kind", "cppfname", "cppfor", "cppgen",
       "cvp-dont-add-nowrap-flags",
       "cvp-dont-process-adds", "debug-counter", "debug-entry-values",
       "debugger-tune", "debugify-level", "debugify-quiet",
       "denormal-fp-math", "denormal-fp-math-f32", "disable-debug-info-verifier",
+      "disable-i2p-p2i-opt",
       "disable-objc-arc-checkforcfghazards", "disable-promote-alloca-to-lds",
       "disable-promote-alloca-to-vector", "disable-slp-vectorization",
       "disable-spill-fusing",
@@ -786,7 +792,8 @@ void hideLLVMOptions() {
       "exhaustive-register-search", "expensive-combines",
       "experimental-debug-variable-locations",
       "fatal-assembler-warnings", "filter-print-funcs",
-      "force-dwarf-frame-section", "gpsize", "hash-based-counter-split",
+      "force-dwarf-frame-section", "force-opaque-pointers",
+      "gpsize", "hash-based-counter-split",
       "hot-cold-split", "ignore-xcoff-visibility",
       "imp-null-check-page-size", "imp-null-max-insts-to-consider",
       "import-all-index", "incremental-linker-compatible",
@@ -806,7 +813,7 @@ void hideLLVMOptions() {
       "mir-strip-debugify-only", "mlsm", "mno-compound",
       "mno-fixup", "mno-ldc1-sdc1", "mno-pairing", "mwarn-missing-parenthesis",
       "mwarn-noncontigious-register", "mwarn-sign-mismatch",
-      "no-discriminators", "no-xray-index",
+      "no-discriminators", "no-type-check", "no-xray-index",
       "nozero-initialized-in-bss", "nvptx-sched4reg",
       "objc-arc-annotation-target-identifier", "pie-copy-relocations",
       "poison-checking-function-local",
@@ -834,9 +841,9 @@ void hideLLVMOptions() {
       "stack-protector-guard-offset", "stack-protector-guard-reg",
       "stack-size-section", "stack-symbol-ordering",
       "stackmap-version", "static-func-full-module-prefix",
-      "static-func-strip-dirname-prefix", "stats", "stats-json", "strip-debug",
-      "struct-path-tbaa", "summary-file", "tail-predication", "tailcallopt",
-      "thinlto-assume-merged",
+      "static-func-strip-dirname-prefix", "stats", "stats-json", "strict-dwarf",
+      "strip-debug", "struct-path-tbaa", "summary-file", "tail-predication",
+      "tailcallopt", "thinlto-assume-merged",
       "thread-model", "time-passes", "time-trace-granularity", "tls-size",
       "unfold-element-atomic-memcpy-max-elements",
       "unique-basic-block-section-names", "unique-bb-section-names",

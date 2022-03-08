@@ -19,7 +19,6 @@
 #include "dmd/module.h"
 #include "dmd/mtype.h"
 #include "dmd/root/rmem.h"
-#include "dmd/root/root.h"
 #include "dmd/scope.h"
 #include "dmd/target.h"
 #include "driver/args.h"
@@ -345,7 +344,7 @@ void parseCommandLine(Strings &sourceFiles) {
       global.params.docdir.length || global.params.docname.length;
 
   global.params.jsonfilename = opts::fromPathString(jsonFile);
-  if (global.params.jsonfilename.length) {
+  if (global.params.jsonfilename.length || !jsonFields.empty()) {
     global.params.doJsonGeneration = true;
   }
 
@@ -364,7 +363,7 @@ void parseCommandLine(Strings &sourceFiles) {
   global.params.mixinFile = opts::fromPathString(mixinFile).ptr;
 
   if (moduleDeps.getNumOccurrences() != 0) {
-    global.params.moduleDeps = new OutBuffer;
+    global.params.moduleDeps = createOutBuffer();
     if (!moduleDeps.empty())
       global.params.moduleDepsFile = opts::dupPathString(moduleDeps);
   }
@@ -425,8 +424,15 @@ void parseCommandLine(Strings &sourceFiles) {
     parseRevertOption(global.params, id.c_str());
 
   if (global.params.useDIP1021) // DIP1021 implies DIP1000
-    global.params.vsafe = true;
-  if (global.params.vsafe) // DIP1000 implies DIP25
+    global.params.useDIP1000 = FeatureState::enabled;
+  // legacy -dip1000 option
+  if (global.params.useDIP1000 == FeatureState::default_ &&
+      opts::useDIP1000.getNumOccurrences()) {
+    global.params.useDIP1000 =
+        opts::useDIP1000 ? FeatureState::enabled : FeatureState::disabled;
+  }
+
+  if (global.params.useDIP1000 == FeatureState::enabled) // DIP1000 implies DIP25
     global.params.useDIP25 = FeatureState::enabled;
   // legacy -dip25 option
   if (global.params.useDIP25 == FeatureState::default_ &&
@@ -446,9 +452,9 @@ void parseCommandLine(Strings &sourceFiles) {
   global.params.output_mlir = opts::output_mlir ? OUTPUTFLAGset : OUTPUTFLAGno;
   global.params.output_s = opts::output_s ? OUTPUTFLAGset : OUTPUTFLAGno;
 
-  templateLinkage = global.params.linkonceTemplates
-                        ? LLGlobalValue::LinkOnceODRLinkage
-                        : LLGlobalValue::WeakODRLinkage;
+  templateLinkage = global.params.linkonceTemplates == LinkonceTemplates::no
+                        ? LLGlobalValue::WeakODRLinkage
+                        : LLGlobalValue::LinkOnceODRLinkage;
 
   if (global.params.run || !runargs.empty()) {
     // FIXME: how to properly detect the presence of a PositionalEatsArgs
@@ -909,6 +915,14 @@ void registerPredefinedVersions() {
     VersionCondition::addPredefinedGlobalIdent("assert");
   }
 
+  if (global.params.useIn == CHECKENABLEon) {
+    VersionCondition::addPredefinedGlobalIdent("D_PreConditions");
+  }
+
+  if (global.params.useOut == CHECKENABLEon) {
+    VersionCondition::addPredefinedGlobalIdent("D_PostConditions");
+  }
+
   if (global.params.useArrayBounds == CHECKENABLEoff) {
     VersionCondition::addPredefinedGlobalIdent("D_NoBoundsChecks");
   }
@@ -919,6 +933,10 @@ void registerPredefinedVersions() {
     VersionCondition::addPredefinedGlobalIdent("D_ModuleInfo");
     VersionCondition::addPredefinedGlobalIdent("D_Exceptions");
     VersionCondition::addPredefinedGlobalIdent("D_TypeInfo");
+  }
+
+  if (global.params.tracegc) {
+    VersionCondition::addPredefinedGlobalIdent("D_ProfileGC");
   }
 
   registerPredefinedTargetVersions();

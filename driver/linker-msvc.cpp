@@ -36,6 +36,10 @@ void addMscrtLibs(bool useInternalToolchain, std::vector<std::string> &args) {
   // We need the vcruntime lib for druntime's exception handling (ldc.eh_msvc).
   // Pick one of the 4 variants matching the selected main UCRT lib.
 
+#if LDC_LLVM_VER >= 1300
+#define contains_lower contains_insensitive
+#define endswith_lower endswith_insensitive
+#endif
   if (useInternalToolchain) {
     assert(mscrtlibName.contains_lower("vcruntime"));
     return;
@@ -129,6 +133,16 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
     args.push_back(global.params.symdebug ? "/OPT:NOICF" : "/OPT:ICF");
   }
 
+  const bool willLinkAgainstSharedDefaultLibs =
+      !defaultLibNames.empty() && linkAgainstSharedDefaultLibs();
+  if (willLinkAgainstSharedDefaultLibs) {
+    // Suppress linker warning LNK4217 wrt. 'importing locally defined symbol'
+    // (dllimport of symbol dllexported from the same binary), because there
+    // might be *many* of those (=> instantiated globals) if compiled with
+    // -dllimport=all (and without -linkonce-templates).
+    args.push_back("/IGNORE:4217");
+  }
+
   // add C runtime libs
   addMscrtLibs(useInternalToolchain, args);
 
@@ -144,10 +158,11 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
     args.push_back(objfile);
   }
 
-  // add precompiled rt.dso_windows object file (in lib directory) when linking
+  // add precompiled rt.dso object file (in lib directory) when linking
   // against shared druntime
-  if (!defaultLibNames.empty() && linkAgainstSharedDefaultLibs()) {
-    args.push_back("dso_windows.obj");
+  const auto &libDirs = ConfigFile::instance.libDirs();
+  if (willLinkAgainstSharedDefaultLibs && !libDirs.empty()) {
+    args.push_back((llvm::Twine(libDirs[0]) + "/ldc_rt.dso.obj").str());
   }
 
   // .res/.def files
@@ -193,7 +208,6 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
   }
 
   // lib dirs
-  const auto &libDirs = ConfigFile::instance.libDirs();
   for (const char *dir_c : libDirs) {
     const llvm::StringRef dir(dir_c);
     if (!dir.empty())
@@ -201,8 +215,7 @@ int linkObjToBinaryMSVC(llvm::StringRef outputPath,
   }
 
   if (useInternalToolchain && !libDirs.empty()) {
-    args.push_back(
-        (llvm::Twine("/LIBPATH:") + *libDirs.begin() + "/mingw").str());
+    args.push_back((llvm::Twine("/LIBPATH:") + libDirs[0] + "/mingw").str());
   }
 
   // default libs

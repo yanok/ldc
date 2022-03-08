@@ -25,7 +25,7 @@
 namespace {
 bool parseStringExp(Expression *e, const char *&res) {
   e = e->optimize(WANTvalue);
-  if (e->op != TOKstring) {
+  if (e->op != EXP::string_) {
     return false;
   }
   auto se = static_cast<StringExp *>(e);
@@ -49,7 +49,7 @@ bool parseBoolExp(Expression *e, bool &res) {
   e = e->optimize(WANTvalue);
   if (auto i = e->isIntegerExp()) {
     if (e->type->equals(Type::tbool)) {
-      res = i->isBool(true);
+      res = (i->toInteger() != 0);
       return true;
     }
   }
@@ -369,10 +369,10 @@ void DtoCheckPragma(PragmaDeclaration *decl, Dsymbol *s,
   case LLVMglobal_crt_dtor: {
     const unsigned char flag = llvm_internal == LLVMglobal_crt_ctor ? 1 : 2;
     const int count = applyFunctionPragma(s, [=](FuncDeclaration *fd) {
-      assert(fd->type->ty == Tfunction);
+      assert(fd->type->ty == TY::Tfunction);
       TypeFunction *type = static_cast<TypeFunction *>(fd->type);
       Type *retType = type->next;
-      if (retType->ty != Tvoid || type->parameterList.length() > 0 ||
+      if (retType->ty != TY::Tvoid || type->parameterList.length() > 0 ||
           (fd->isMember() && !fd->isStatic())) {
         error(s->loc,
               "the `%s` pragma is only allowed on `void` functions which take "

@@ -71,7 +71,7 @@ bool TargetABI::isHFVA(Type *t, int maxNumElements, LLType **hfvaType) {
 bool TargetABI::isHVA(Type *t, int maxNumElements, LLType **hvaType) {
   Type *rewriteType = nullptr;
   if (::isHFVA(t, maxNumElements, &rewriteType) &&
-      rewriteType->nextOf()->ty == Tvector) {
+      rewriteType->nextOf()->ty == TY::Tvector) {
     if (hvaType)
       *hvaType = DtoType(rewriteType);
     return true;
@@ -118,8 +118,8 @@ bool TargetABI::isAggregate(Type *t) {
   // FIXME: dynamic arrays can currently not be rewritten as they are used
   //        by runtime functions, for which we don't apply the rewrites yet
   //        when calling them
-  return ty == Tstruct || ty == Tsarray ||
-         /*ty == Tarray ||*/ ty == Tdelegate || t->iscomplex();
+  return ty == TY::Tstruct || ty == TY::Tsarray ||
+         /*ty == TY::Tarray ||*/ ty == TY::Tdelegate || t->iscomplex();
 }
 
 namespace {
@@ -139,7 +139,7 @@ bool hasCtor(StructDeclaration *s) {
 
 bool TargetABI::isPOD(Type *t, bool excludeStructsWithCtor) {
   t = t->baseElemOf();
-  if (t->ty != Tstruct)
+  if (t->ty != TY::Tstruct)
     return true;
   StructDeclaration *sd = static_cast<TypeStruct *>(t)->sym;
   return sd->isPOD() && !(excludeStructsWithCtor && hasCtor(sd));
@@ -159,7 +159,21 @@ bool TargetABI::skipReturnValueRewrite(IrFuncTy &fty) {
     return true;
 
   auto ty = fty.ret->type->toBasetype()->ty;
-  return ty == Tvoid || ty == Tnoreturn;
+  return ty == TY::Tvoid || ty == TY::Tnoreturn;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+llvm::CallingConv::ID TargetABI::callingConv(TypeFunction *tf, bool) {
+  return tf->parameterList.varargs == VARARGvariadic
+             ? static_cast<llvm::CallingConv::ID>(llvm::CallingConv::C)
+             : callingConv(tf->linkage);
+}
+
+llvm::CallingConv::ID TargetABI::callingConv(FuncDeclaration *fdecl) {
+  auto tf = fdecl->type->isTypeFunction();
+  assert(tf);
+  return callingConv(tf, fdecl->needThis() || fdecl->isNested());
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -301,7 +315,7 @@ struct IntrinsicABI : TargetABI {
 
   void rewriteArgument(IrFuncTy &fty, IrFuncTyArg &arg) override {
     Type *ty = arg.type->toBasetype();
-    if (ty->ty != Tstruct) {
+    if (ty->ty != TY::Tstruct) {
       return;
     }
     // TODO: Check that no unions are passed in or returned.
@@ -316,7 +330,7 @@ struct IntrinsicABI : TargetABI {
   void rewriteFunctionType(IrFuncTy &fty) override {
     if (!fty.arg_sret) {
       Type *rt = fty.ret->type->toBasetype();
-      if (rt->ty == Tstruct) {
+      if (rt->ty == TY::Tstruct) {
         Logger::println("Intrinsic ABI: Transforming return type");
         rewriteArgument(fty, *fty.ret);
       }

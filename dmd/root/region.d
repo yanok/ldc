@@ -1,9 +1,9 @@
 /**
  * Region storage allocator implementation.
  *
- * Copyright:   Copyright (C) 2019-2021 by The D Language Foundation, All Rights Reserved
- * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
- * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright:   Copyright (C) 2019-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
+ * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/root/region.d, root/_region.d)
  * Documentation:  https://dlang.org/phobos/dmd_root_region.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/root/region.d
@@ -77,7 +77,7 @@ public:
      * Returns:
      *  an opaque struct to be passed to `release()`
      */
-    RegionPos savePos()
+    RegionPos savePos() pure @nogc @safe
     {
         return RegionPos(used, available);
     }
@@ -87,7 +87,7 @@ public:
      * Params:
      *  pos = position returned by `savePos()`
      */
-    void release(RegionPos pos)
+    void release(RegionPos pos) pure @nogc @safe
     {
         version (all)
         {
@@ -115,7 +115,7 @@ public:
      * Returns:
      *  true if it points into the region
      */
-    bool contains(void* p)
+    bool contains(void* p) pure @nogc
     {
         foreach (h; array[0 .. used])
         {
@@ -128,7 +128,7 @@ public:
     /*********************
      * Returns: size of Region
      */
-    size_t size()
+    size_t size() pure @nogc @safe
     {
         return used * MaxAllocSize - available.length;
     }

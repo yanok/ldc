@@ -15,7 +15,6 @@
 #include "gen/abi-aarch64.h"
 
 #include "dmd/identifier.h"
-#include "dmd/ldcbindings.h"
 #include "dmd/nspace.h"
 #include "gen/abi.h"
 #include "gen/abi-generic.h"
@@ -60,7 +59,7 @@ public:
     }
 
     Type *rt = tf->next->toBasetype();
-    if (rt->ty == Tstruct || rt->ty == Tsarray) {
+    if (rt->ty == TY::Tstruct || rt->ty == TY::Tsarray) {
       auto argTypes = getArgTypes(rt);
       return !argTypes // FIXME: get rid of sret workaround for 0-sized return
                        //        values (static arrays with 0 elements)
@@ -75,7 +74,7 @@ public:
   bool preferPassByRef(Type *t) override {
     t = t->toBasetype();
 
-    if (!(t->ty == Tstruct || t->ty == Tsarray))
+    if (!(t->ty == TY::Tstruct || t->ty == TY::Tsarray))
       return false;
 
     auto argTypes = getArgTypes(t);
@@ -174,7 +173,7 @@ public:
     // using TypeIdentifier here is a bit wonky but works, as long as the name
     // is actually available in the scope (this is what DMD does, so if a
     // better solution is found there, this should be adapted).
-    return createTypeIdentifier(Loc(), Identifier::idPool("__va_list"));
+    return TypeIdentifier::create(Loc(), Identifier::idPool("__va_list"));
   }
 
   const char *objcMsgSendFunc(Type *ret, IrFuncTy &fty) override {

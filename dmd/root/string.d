@@ -1,9 +1,9 @@
 /**
  * Contains various string related functions.
  *
- * Copyright: Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:   Walter Bright, http://www.digitalmars.com
- * License:   $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright: Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:   Walter Bright, https://www.digitalmars.com
+ * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/root/string.d, root/_string.d)
  * Documentation:  https://dlang.org/phobos/dmd_root_string.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/root/string.d
@@ -30,7 +30,7 @@ s2 = string to compare
 Returns:
 `true` if `s1 == s2` regardless of case
 */
-extern(D) static bool iequals(const(char)[] s1, const(char)[] s2)
+extern(D) static bool iequals(const(char)[] s1, const(char)[] s2) pure nothrow @nogc
 {
     import core.stdc.ctype : toupper;
 

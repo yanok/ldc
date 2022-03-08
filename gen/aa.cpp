@@ -27,7 +27,7 @@
 // returns the keytype typeinfo
 static LLConstant *to_keyti(const Loc &loc, DValue *aa, LLType *targetType) {
   // keyti param
-  assert(aa->type->toBasetype()->ty == Taarray);
+  assert(aa->type->toBasetype()->ty == TY::Taarray);
   TypeAArray *aatype = static_cast<TypeAArray *>(aa->type->toBasetype());
   LLConstant *ti = DtoTypeInfoOf(loc, aatype->index, /*base=*/false);
   return DtoBitCast(ti, targetType);
@@ -88,10 +88,8 @@ DLValue *DtoAAIndex(const Loc &loc, Type *type, DValue *aa, DValue *key,
     gIR->ir->CreateCondBr(cond, okbb, failbb);
 
     // set up failbb to call the array bounds error runtime function
-
     gIR->ir->SetInsertPoint(failbb);
-
-    DtoBoundsCheckFailCall(gIR, loc);
+    emitRangeError(gIR, loc);
 
     // if ok, proceed in okbb
     gIR->ir->SetInsertPoint(okbb);
@@ -183,7 +181,7 @@ DValue *DtoAARemove(const Loc &loc, DValue *aa, DValue *key) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-LLValue *DtoAAEquals(const Loc &loc, TOK op, DValue *l, DValue *r) {
+LLValue *DtoAAEquals(const Loc &loc, EXP op, DValue *l, DValue *r) {
   Type *t = l->type->toBasetype();
   assert(t == r->type->toBasetype() &&
          "aa equality is only defined for aas of same type");

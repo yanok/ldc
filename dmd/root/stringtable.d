@@ -1,9 +1,9 @@
 /**
  * A specialized associative array with string keys stored in a variable length structure.
  *
- * Copyright: Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:   Walter Bright, http://www.digitalmars.com
- * License:   $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright: Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:   Walter Bright, https://www.digitalmars.com
+ * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/root/stringtable.d, root/_stringtable.d)
  * Documentation:  https://dlang.org/phobos/dmd_root_stringtable.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/root/stringtable.d
@@ -47,12 +47,18 @@ private struct StringEntry
     uint vptr;
 }
 
-// StringValue is a variable-length structure. It has neither proper c'tors nor a
-// factory method because the only thing which should be creating these is StringTable.
+/********************************
+ * StringValue is a variable-length structure. It has neither proper c'tors nor a
+ * factory method because the only thing which should be creating these is StringTable.
+ * The string characters are stored in memory immediately after the StringValue struct.
+ */
 struct StringValue(T)
 {
     T value; //T is/should typically be a pointer or a slice
     private size_t length;
+    /+
+    char[length] chars;  // the string characters are stored here
+     +/
 
     char* lstring() @nogc nothrow pure return
     {
@@ -70,7 +76,7 @@ struct StringValue(T)
     }
 
     /// Returns: The content of this entry as a D slice
-    inout(char)[] toString() inout @nogc nothrow pure
+    const(char)[] toString() const @nogc nothrow pure
     {
         return (cast(inout(char)*)(&this + 1))[0 .. length];
     }
@@ -121,7 +127,7 @@ public:
     Returns: the string's associated value, or `null` if the string doesn't
      exist in the string table
     */
-    inout(StringValue!T)* lookup(const(char)[] str) inout @nogc nothrow pure
+    inout(StringValue!T)* lookup(scope const(char)[] str) inout @nogc nothrow pure
     {
         const(size_t) hash = calcHash(str);
         const(size_t) i = findSlot(hash, str);
@@ -130,7 +136,7 @@ public:
     }
 
     /// ditto
-    inout(StringValue!T)* lookup(const(char)* s, size_t length) inout @nogc nothrow pure
+    inout(StringValue!T)* lookup(scope const(char)* s, size_t length) inout @nogc nothrow pure
     {
         return lookup(s[0 .. length]);
     }
@@ -149,7 +155,7 @@ public:
     Returns: the newly inserted value, or `null` if the string table already
      contains the string
     */
-    StringValue!(T)* insert(const(char)[] str, T value) nothrow pure
+    StringValue!(T)* insert(scope const(char)[] str, T value) nothrow pure
     {
         const(size_t) hash = calcHash(str);
         size_t i = findSlot(hash, str);
@@ -167,12 +173,12 @@ public:
     }
 
     /// ditto
-    StringValue!(T)* insert(const(char)* s, size_t length, T value) nothrow pure
+    StringValue!(T)* insert(scope const(char)* s, size_t length, T value) nothrow pure
     {
         return insert(s[0 .. length], value);
     }
 
-    StringValue!(T)* update(const(char)[] str) nothrow pure
+    StringValue!(T)* update(scope const(char)[] str) nothrow pure
     {
         const(size_t) hash = calcHash(str);
         size_t i = findSlot(hash, str);
@@ -190,7 +196,7 @@ public:
         return getValue(table[i].vptr);
     }
 
-    StringValue!(T)* update(const(char)* s, size_t length) nothrow pure
+    StringValue!(T)* update(scope const(char)* s, size_t length) nothrow pure
     {
         return update(s[0 .. length]);
     }
@@ -244,7 +250,8 @@ private:
         pools = null;
     }
 
-    uint allocValue(const(char)[] str, T value) nothrow pure
+    // Note that a copy is made of str
+    uint allocValue(scope const(char)[] str, T value) nothrow pure
     {
         const(size_t) nbytes = (StringValue!T).sizeof + str.length + 1;
         if (!pools.length || nfill + nbytes > POOL_SIZE)
@@ -274,10 +281,10 @@ private:
         return cast(inout(StringValue!T)*)&pools[idx][off];
     }
 
-    size_t findSlot(hash_t hash, const(char)[] str) const @nogc nothrow pure
+    size_t findSlot(hash_t hash, scope const(char)[] str) const @nogc nothrow pure
     {
         // quadratic probing using triangular numbers
-        // http://stackoverflow.com/questions/2348187/moving-from-linear-probing-to-quadratic-probing-hash-collisons/2349774#2349774
+        // https://stackoverflow.com/questions/2348187/moving-from-linear-probing-to-quadratic-probing-hash-collisons/2349774#2349774
         for (size_t i = hash & (table.length - 1), j = 1;; ++j)
         {
             const(StringValue!T)* sv;

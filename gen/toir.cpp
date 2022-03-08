@@ -15,7 +15,6 @@
 #include "dmd/id.h"
 #include "dmd/identifier.h"
 #include "dmd/init.h"
-#include "dmd/ldcbindings.h"
 #include "dmd/module.h"
 #include "dmd/mtype.h"
 #include "dmd/root/port.h"
@@ -102,21 +101,6 @@ static void write_struct_literal(Loc loc, LLValue *mem, StructDeclaration *sd,
     Expression *expr =
         (index < elements->length ? (*elements)[index] : nullptr);
     if (expr || field == sd->vthis) {
-      // DMD issue #16471:
-      // There may be overlapping initializer expressions in some cases.
-      // Prefer the last expression in lexical (declaration) order to mimic DMD.
-      if (field->overlapped) {
-        const unsigned f_begin = field->offset;
-        const unsigned f_end = f_begin + field->type->size();
-        const auto newEndIt =
-            std::remove_if(data.begin(), data.end(), [=](const Data &d) {
-              unsigned v_begin = d.field->offset;
-              unsigned v_end = v_begin + d.field->type->size();
-              return v_begin < f_end && v_end > f_begin;
-            });
-        data.erase(newEndIt, data.end());
-      }
-
       data.push_back({field, expr});
     }
   }
@@ -152,7 +136,7 @@ static void write_struct_literal(Loc loc, LLValue *mem, StructDeclaration *sd,
       IF_LOG Logger::println("expr = %s", expr->toChars());
       // try to construct it in-place
       if (!toInPlaceConstruction(&field, expr)) {
-        DtoAssign(loc, &field, toElem(expr), TOKblit);
+        DtoAssign(loc, &field, toElem(expr), EXP::blit);
         if (expr->isLvalue())
           callPostblit(loc, expr, DtoLVal(&field));
       }
@@ -162,20 +146,12 @@ static void write_struct_literal(Loc loc, LLValue *mem, StructDeclaration *sd,
       LOG_SCOPE
       DImValue val(vd->type,
                    DtoBitCast(DtoNestedContext(loc, sd), DtoType(vd->type)));
-      DtoAssign(loc, &field, &val, TOKblit);
+      DtoAssign(loc, &field, &val, EXP::blit);
     }
 
-    offset += vd->type->size();
-
-    // Also zero out padding bytes counted as being part of the type in DMD
-    // but not in LLVM; e.g. real/x86_fp80.
-    int implicitPadding =
-        vd->type->size() - gDataLayout->getTypeStoreSize(DtoType(vd->type));
-    assert(implicitPadding >= 0);
-    if (implicitPadding > 0) {
-      IF_LOG Logger::println("zeroing %d padding bytes", implicitPadding);
-      voidptr = write_zeroes(voidptr, offset - implicitPadding, offset);
-    }
+    // Make sure to zero out padding bytes counted as being part of the type in
+    // DMD but not in LLVM; e.g. real/x86_fp80.
+    offset += gDataLayout->getTypeStoreSize(DtoType(vd->type));
   }
 
   // initialize trailing padding
@@ -236,7 +212,7 @@ public:
       // Thus, dump the result to a temporary stack slot (created in the entry
       // bb) if it is not guaranteed to dominate the end bb after possibly
       // adding more control flow.
-      if (result && result->type->ty != Tvoid &&
+      if (result && result->type->ty != TY::Tvoid &&
           !result->definedInFuncEntryBB()) {
         if (result->isRVal()) {
           LLValue *lval = DtoAllocaDump(result, ".toElemRValResult");
@@ -354,13 +330,13 @@ public:
       switch (e->type->toBasetype()->ty) {
       default:
         llvm_unreachable("Unexpected complex floating point type");
-      case Tcomplex32:
+      case TY::Tcomplex32:
         c = DtoConstFP(Type::tfloat32, ldouble(0));
         break;
-      case Tcomplex64:
+      case TY::Tcomplex64:
         c = DtoConstFP(Type::tfloat64, ldouble(0));
         break;
-      case Tcomplex80:
+      case TY::Tcomplex80:
         c = DtoConstFP(Type::tfloat80, ldouble(0));
         break;
       }
@@ -380,29 +356,22 @@ public:
     LOG_SCOPE;
 
     Type *dtype = e->type->toBasetype();
-    Type *cty = dtype->nextOf()->toBasetype();
-    LLType *ct = DtoMemType(cty);
 
     llvm::GlobalVariable *gvar = p->getCachedStringLiteral(e);
+    LLConstant *arrptr = DtoGEP(gvar, 0u, 0u);
 
-    llvm::ConstantInt *zero =
-        LLConstantInt::get(LLType::getInt32Ty(gIR->context()), 0, false);
-    LLConstant *idxs[2] = {zero, zero};
-    LLConstant *arrptr = llvm::ConstantExpr::getGetElementPtr(
-        isaPointer(gvar)->getElementType(), gvar, idxs, true);
-
-    if (dtype->ty == Tarray) {
+    if (dtype->ty == TY::Tarray) {
       LLConstant *clen =
           LLConstantInt::get(DtoSize_t(), e->numberOfCodeUnits(), false);
       result = new DSliceValue(e->type, DtoConstSlice(clen, arrptr, dtype));
-    } else if (dtype->ty == Tsarray) {
+    } else if (dtype->ty == TY::Tsarray) {
+      Type *cty = dtype->nextOf()->toBasetype();
+      LLType *ct = DtoMemType(cty);
       LLType *dstType =
           getPtrToType(LLArrayType::get(ct, e->numberOfCodeUnits()));
-      LLValue *emem =
-          (gvar->getType() == dstType) ? gvar : DtoBitCast(gvar, dstType);
-      result = new DLValue(e->type, emem);
-    } else if (dtype->ty == Tpointer) {
-      result = new DImValue(e->type, arrptr);
+      result = new DLValue(e->type, DtoBitCast(gvar, dstType));
+    } else if (dtype->ty == TY::Tpointer) {
+      result = new DImValue(e->type, DtoBitCast(arrptr, DtoType(dtype)));
     } else {
       llvm_unreachable("Unknown type for StringExp.");
     }
@@ -429,12 +398,12 @@ public:
     }
 
     // Initialization of ref variable?
-    // Can't just override ConstructExp::toElem because not all TOKconstruct
+    // Can't just override ConstructExp::toElem because not all EXP::construct
     // operations are actually instances of ConstructExp... Long live the DMD
     // coding style!
     if (static_cast<int>(e->memset) &
         static_cast<int>(MemorySet::referenceInit)) {
-      assert(e->op == TOKconstruct || e->op == TOKblit);
+      assert(e->op == EXP::construct || e->op == EXP::blit);
       auto ve = e->e1->isVarExp();
       assert(ve);
 
@@ -463,7 +432,7 @@ public:
     DValue *rewrittenLhsStaticArray = nullptr;
     if (auto se = e->e1->isSliceExp()) {
       Type *sliceeBaseType = se->e1->type->toBasetype();
-      if (se->lwr == nullptr && sliceeBaseType->ty == Tsarray &&
+      if (se->lwr == nullptr && sliceeBaseType->ty == TY::Tsarray &&
           se->type->toBasetype()->nextOf() == sliceeBaseType->nextOf())
         rewrittenLhsStaticArray = toElem(se->e1, true);
     }
@@ -486,7 +455,7 @@ public:
     };
 
     // Try to construct the lhs in-place.
-    if (lhs->isLVal() && (e->op == TOKconstruct || e->op == TOKblit)) {
+    if (lhs->isLVal() && (e->op == EXP::construct || e->op == EXP::blit)) {
       if (toInPlaceConstruction(lhs->isLVal(), e->e2))
         return;
     }
@@ -502,7 +471,7 @@ public:
     // where `i` is a ref variable aliasing with a).
     // Be conservative with this optimization for now: only do the optimization
     // for struct `.init` assignment.
-    if (lhs->isLVal() && e->op == TOKassign) {
+    if (lhs->isLVal() && e->op == EXP::assign) {
       if (auto sle = e->e2->isStructLiteralExp()) {
         if (sle->useStaticInit) {
           if (toInPlaceConstruction(lhs->isLVal(), sle))
@@ -513,7 +482,8 @@ public:
 
     DValue *r = toElem(e->e2);
 
-    if (e->e1->type->toBasetype()->ty == Tstruct && e->e2->op == TOKint64) {
+    if (e->e1->type->toBasetype()->ty == TY::Tstruct &&
+        e->e2->op == EXP::int64) {
       Logger::println("performing aggregate zero initialization");
       assert(e->e2->toInteger() == 0);
       LLValue *lval = DtoLVal(lhs);
@@ -528,11 +498,11 @@ public:
     // TODO: Should be cached in the frontend to avoid issues with the code
     // getting out of sync?
     bool lvalueElem = false;
-    if ((e->e2->op == TOKslice &&
+    if ((e->e2->op == EXP::slice &&
          static_cast<UnaExp *>(e->e2)->e1->isLvalue()) ||
-        (e->e2->op == TOKcast &&
+        (e->e2->op == EXP::cast_ &&
          static_cast<UnaExp *>(e->e2)->e1->isLvalue()) ||
-        (e->e2->op != TOKslice && e->e2->isLvalue())) {
+        (e->e2->op != EXP::slice && e->e2->isLvalue())) {
       lvalueElem = true;
     }
 
@@ -548,8 +518,8 @@ public:
     Type *t2 = e2->type->toBasetype();
 
     // valid array ops would have been transformed by optimize
-    if ((t1->ty == Tarray || t1->ty == Tsarray) &&
-        (t2->ty == Tarray || t2->ty == Tsarray)) {
+    if ((t1->ty == TY::Tarray || t1->ty == TY::Tsarray) &&
+        (t2->ty == TY::Tarray || t2->ty == TY::Tsarray)) {
       base->error("Array operation `%s` not recognized", base->toChars());
       fatal();
     }
@@ -617,7 +587,7 @@ public:
     DValue *opResult = binOpFunc(e->loc, opType, lhsLVal, e->e2, true);
 
     DValue *assignedResult = DtoCast(e->loc, opResult, lhsLVal->type);
-    DtoAssign(e->loc, lhsLVal, assignedResult, TOKassign);
+    DtoAssign(e->loc, lhsLVal, assignedResult, EXP::assign);
 
     if (e->type->equals(lhsLVal->type))
       return lhsLVal;
@@ -690,7 +660,7 @@ public:
     if (e->f && e->f->isCtorDeclaration()) {
       if (auto dve = e->e1->isDotVarExp())
         if (auto ce = dve->e1->isCommaExp())
-          if (ce->e1->op == TOKdeclaration)
+          if (ce->e1->op == EXP::declaration)
             if (auto ve = ce->e2->isVarExp())
               if (auto vd = ve->var->isVarDeclaration())
                 if (vd->needsScopeDtor()) {
@@ -710,7 +680,7 @@ public:
       FuncDeclaration *fdecl = dve->var->isFuncDeclaration();
       assert(fdecl);
       Expression *thisExp = dve->e1;
-      LLValue *thisArg = thisExp->type->toBasetype()->ty == Tclass
+      LLValue *thisArg = thisExp->type->toBasetype()->ty == TY::Tclass
                              ? DtoRVal(thisExp)
                              : DtoLVal(thisExp); // when calling a struct method
       fnval = new DFuncValue(fdecl, DtoCallee(fdecl), thisArg);
@@ -850,7 +820,7 @@ public:
 
     // The address of a StructLiteralExp can in fact be a global variable, check
     // for that instead of re-codegening the literal.
-    if (e->e1->op == TOKstructliteral) {
+    if (e->e1->op == EXP::structLiteral) {
       // lvalue literal must be a global, hence we can just use
       // toConstElem on the AddrExp to get the address.
       LLConstant *addr = toConstElem(e, p);
@@ -901,7 +871,7 @@ public:
     PGO.setCurrentStmt(e);
 
     // function pointers are special
-    if (e->type->toBasetype()->ty == Tfunction) {
+    if (e->type->toBasetype()->ty == TY::Tfunction) {
       DValue *dv = toElem(e->e1);
       LLValue *llVal = DtoRVal(dv);
       if (DFuncValue *dfv = dv->isFunc()) {
@@ -938,18 +908,18 @@ public:
     if (VarDeclaration *vd = e->var->isVarDeclaration()) {
       LLValue *arrptr;
       // indexing struct pointer
-      if (e1type->ty == Tpointer) {
-        assert(e1type->nextOf()->ty == Tstruct);
+      if (e1type->ty == TY::Tpointer) {
+        assert(e1type->nextOf()->ty == TY::Tstruct);
         TypeStruct *ts = static_cast<TypeStruct *>(e1type->nextOf());
         arrptr = DtoIndexAggregate(DtoRVal(l), ts->sym, vd);
       }
       // indexing normal struct
-      else if (e1type->ty == Tstruct) {
+      else if (e1type->ty == TY::Tstruct) {
         TypeStruct *ts = static_cast<TypeStruct *>(e1type);
         arrptr = DtoIndexAggregate(DtoLVal(l), ts->sym, vd);
       }
       // indexing class
-      else if (e1type->ty == Tclass) {
+      else if (e1type->ty == TY::Tclass) {
         TypeClass *tc = static_cast<TypeClass *>(e1type);
         arrptr = DtoIndexAggregate(DtoRVal(l), tc->sym, vd);
       } else {
@@ -1027,7 +997,8 @@ public:
       result = new DLValue(e->type, DtoBitCast(v, DtoPtrToType(e->type)));
     } else if (vd->toParent2() != p->func()->decl) {
       Logger::println("nested this exp");
-      result = DtoNestedVariable(e->loc, e->type, vd, e->type->ty == Tstruct);
+      result =
+          DtoNestedVariable(e->loc, e->type, vd, e->type->ty == TY::Tstruct);
     } else {
       Logger::println("normal this exp");
       LLValue *v = p->func()->thisArg;
@@ -1054,19 +1025,19 @@ public:
     p->arrays.pop_back();
 
     LLValue *arrptr = nullptr;
-    if (e1type->ty == Tpointer) {
+    if (e1type->ty == TY::Tpointer) {
       arrptr = DtoGEP1(DtoRVal(l), DtoRVal(r));
-    } else if (e1type->ty == Tsarray) {
+    } else if (e1type->ty == TY::Tsarray) {
       if (p->emitArrayBoundsChecks() && !e->indexIsInBounds) {
         DtoIndexBoundsCheck(e->loc, l, r);
       }
       arrptr = DtoGEP(DtoLVal(l), DtoConstUint(0), DtoRVal(r));
-    } else if (e1type->ty == Tarray) {
+    } else if (e1type->ty == TY::Tarray) {
       if (p->emitArrayBoundsChecks() && !e->indexIsInBounds) {
         DtoIndexBoundsCheck(e->loc, l, r);
       }
       arrptr = DtoGEP1(DtoArrayPtr(l), DtoRVal(r));
-    } else if (e1type->ty == Taarray) {
+    } else if (e1type->ty == TY::Taarray) {
       result = DtoAAIndex(e->loc, e->type, l, r, e->modifiable);
       return;
     } else {
@@ -1095,7 +1066,7 @@ public:
     // potential bounds have been evaluated
     DValue *v = toElem(e->e1);
     auto getBasePointer = [v, etype]() {
-      if (etype->ty == Tpointer) {
+      if (etype->ty == TY::Tpointer) {
         // pointer slicing
         return DtoRVal(v);
       } else {
@@ -1119,22 +1090,24 @@ public:
       LLValue *vup = DtoRVal(e->upr);
       p->arrays.pop_back();
 
-      const bool needCheckUpper =
-          (etype->ty != Tpointer) && !e->upperIsInBounds;
+      const bool hasLength = etype->ty != TY::Tpointer;
+      const bool needCheckUpper = hasLength && !e->upperIsInBounds;
       const bool needCheckLower = !e->lowerIsLessThanUpper;
       if (p->emitArrayBoundsChecks() && (needCheckUpper || needCheckLower)) {
         llvm::BasicBlock *okbb = p->insertBB("bounds.ok");
         llvm::BasicBlock *failbb = p->insertBBAfter(okbb, "bounds.fail");
 
-        llvm::Value *okCond = nullptr;
+        LLValue *const vlen = hasLength ? DtoArrayLen(v) : nullptr;
+
+        LLValue *okCond = nullptr;
         if (needCheckUpper) {
-          okCond = p->ir->CreateICmp(llvm::ICmpInst::ICMP_ULE, vup,
-                                     DtoArrayLen(v), "bounds.cmp.lo");
+          okCond = p->ir->CreateICmp(llvm::ICmpInst::ICMP_ULE, vup, vlen,
+                                     "bounds.cmp.up");
         }
 
         if (needCheckLower) {
-          llvm::Value *cmp = p->ir->CreateICmp(llvm::ICmpInst::ICMP_ULE, vlo,
-                                               vup, "bounds.cmp.up");
+          LLValue *cmp = p->ir->CreateICmp(llvm::ICmpInst::ICMP_ULE, vlo, vup,
+                                           "bounds.cmp.lo");
           if (okCond) {
             okCond = p->ir->CreateAnd(okCond, cmp);
           } else {
@@ -1145,7 +1118,8 @@ public:
         p->ir->CreateCondBr(okCond, okbb, failbb);
 
         p->ir->SetInsertPoint(failbb);
-        DtoBoundsCheckFailCall(p, e->loc);
+        emitArraySliceError(p, e->loc, vlo, vup,
+                            vlen ? vlen : DtoConstSize_t(0));
 
         p->ir->SetInsertPoint(okbb);
       }
@@ -1158,13 +1132,13 @@ public:
     }
     // no bounds or full slice -> just convert to slice
     else {
-      assert(etype->ty != Tpointer);
+      assert(etype->ty != TY::Tpointer);
       eptr = getBasePointer();
       // if the slicee is a static array, we use the length of that as DMD seems
       // to give contrary inconsistent sizesin some multidimensional static
       // array cases.
       // (namely default initialization, int[16][16] arr; -> int[256] arr = 0;)
-      if (etype->ty == Tsarray) {
+      if (etype->ty == TY::Tsarray) {
         TypeSArray *tsa = static_cast<TypeSArray *>(etype);
         elen = DtoConstSize_t(tsa->dim->toUInteger());
 
@@ -1177,12 +1151,12 @@ public:
     // The frontend generates a SliceExp of static array type when assigning a
     // fixed-width slice to a static array.
     Type *const ety = e->type->toBasetype();
-    if (ety->ty == Tsarray) {
+    if (ety->ty == TY::Tsarray) {
       result = new DLValue(e->type, DtoBitCast(eptr, DtoPtrToType(e->type)));
       return;
     }
 
-    assert(ety->ty == Tarray);
+    assert(ety->ty == TY::Tarray);
     if (!elen)
       elen = DtoArrayLen(v);
     eptr = DtoBitCast(eptr, DtoPtrToType(ety->nextOf()));
@@ -1207,7 +1181,7 @@ public:
 
     LLValue *eval = nullptr;
 
-    if (t->isintegral() || t->ty == Tpointer || t->ty == Tnull) {
+    if (t->isintegral() || t->ty == TY::Tpointer || t->ty == TY::Tnull) {
       llvm::ICmpInst::Predicate icmpPred;
       tokToICmpPred(e->op, isLLVMUnsigned(t), &icmpPred, &eval);
 
@@ -1226,16 +1200,16 @@ public:
     } else if (t->isfloating()) {
       llvm::FCmpInst::Predicate cmpop;
       switch (e->op) {
-      case TOKlt:
+      case EXP::lessThan:
         cmpop = llvm::FCmpInst::FCMP_OLT;
         break;
-      case TOKle:
+      case EXP::lessOrEqual:
         cmpop = llvm::FCmpInst::FCMP_OLE;
         break;
-      case TOKgt:
+      case EXP::greaterThan:
         cmpop = llvm::FCmpInst::FCMP_OGT;
         break;
-      case TOKge:
+      case EXP::greaterOrEqual:
         cmpop = llvm::FCmpInst::FCMP_OGE;
         break;
 
@@ -1243,9 +1217,9 @@ public:
         llvm_unreachable("Unsupported floating point comparison operator.");
       }
       eval = p->ir->CreateFCmp(cmpop, DtoRVal(l), DtoRVal(r));
-    } else if (t->ty == Taarray) {
+    } else if (t->ty == TY::Taarray) {
       eval = LLConstantInt::getFalse(gIR->context());
-    } else if (t->ty == Tdelegate) {
+    } else if (t->ty == TY::Tdelegate) {
       llvm::ICmpInst::Predicate icmpPred;
       tokToICmpPred(e->op, isLLVMUnsigned(t), &icmpPred, &eval);
 
@@ -1310,15 +1284,15 @@ public:
 
     // the Tclass catches interface comparisons, regular
     // class equality should be rewritten as a.opEquals(b) by this time
-    if (t->isintegral() || t->ty == Tpointer || t->ty == Tclass ||
-        t->ty == Tnull) {
+    if (t->isintegral() || t->ty == TY::Tpointer || t->ty == TY::Tclass ||
+        t->ty == TY::Tnull) {
       Logger::println("integral or pointer or interface");
       llvm::ICmpInst::Predicate cmpop;
       switch (e->op) {
-      case TOKequal:
+      case EXP::equal:
         cmpop = llvm::ICmpInst::ICMP_EQ;
         break;
-      case TOKnotequal:
+      case EXP::notEqual:
         cmpop = llvm::ICmpInst::ICMP_NE;
         break;
       default:
@@ -1334,22 +1308,22 @@ public:
         Logger::cout() << "rv: " << *rv << '\n';
       }
       eval = p->ir->CreateICmp(cmpop, lv, rv);
-      if (t->ty == Tvector) {
+      if (t->ty == TY::Tvector) {
         eval = mergeVectorEquals(eval, e->op);
       }
     } else if (t->isfloating()) // includes iscomplex
     {
       eval = DtoBinNumericEquals(e->loc, l, r, e->op);
-    } else if (t->ty == Tsarray || t->ty == Tarray) {
+    } else if (t->ty == TY::Tsarray || t->ty == TY::Tarray) {
       Logger::println("static or dynamic array");
       eval = DtoArrayEquals(e->loc, e->op, l, r);
-    } else if (t->ty == Taarray) {
+    } else if (t->ty == TY::Taarray) {
       Logger::println("associative array");
       eval = DtoAAEquals(e->loc, e->op, l, r);
-    } else if (t->ty == Tdelegate) {
+    } else if (t->ty == TY::Tdelegate) {
       Logger::println("delegate");
       eval = DtoDelegateEquals(e->op, DtoRVal(l), DtoRVal(r));
-    } else if (t->ty == Tstruct) {
+    } else if (t->ty == TY::Tstruct) {
       Logger::println("struct");
       // when this is reached it means there is no opEquals overload.
       eval = DtoStructEquals(e->op, l, r);
@@ -1384,33 +1358,33 @@ public:
       assert(e2type->isintegral());
       LLValue *one =
           LLConstantInt::get(val->getType(), 1, !e2type->isunsigned());
-      if (e->op == TOKplusplus) {
+      if (e->op == EXP::plusPlus) {
         post = llvm::BinaryOperator::CreateAdd(val, one, "", p->scopebb());
-      } else if (e->op == TOKminusminus) {
+      } else if (e->op == EXP::minusMinus) {
         post = llvm::BinaryOperator::CreateSub(val, one, "", p->scopebb());
       }
-    } else if (e1type->ty == Tpointer) {
-      assert(e->e2->op == TOKint64);
+    } else if (e1type->ty == TY::Tpointer) {
+      assert(e->e2->op == EXP::int64);
       LLConstant *offset =
-          e->op == TOKplusplus ? DtoConstUint(1) : DtoConstInt(-1);
+          e->op == EXP::plusPlus ? DtoConstUint(1) : DtoConstInt(-1);
       post = DtoGEP1(val, offset, "", p->scopebb());
     } else if (e1type->iscomplex()) {
       assert(e2type->iscomplex());
       LLValue *one = LLConstantFP::get(DtoComplexBaseType(e1type), 1.0);
       LLValue *re, *im;
       DtoGetComplexParts(e->loc, e1type, dv, re, im);
-      if (e->op == TOKplusplus) {
+      if (e->op == EXP::plusPlus) {
         re = llvm::BinaryOperator::CreateFAdd(re, one, "", p->scopebb());
-      } else if (e->op == TOKminusminus) {
+      } else if (e->op == EXP::minusMinus) {
         re = llvm::BinaryOperator::CreateFSub(re, one, "", p->scopebb());
       }
       DtoComplexSet(lval, re, im);
     } else if (e1type->isfloating()) {
       assert(e2type->isfloating());
       LLValue *one = DtoConstFP(e1type, ldouble(1.0));
-      if (e->op == TOKplusplus) {
+      if (e->op == EXP::plusPlus) {
         post = llvm::BinaryOperator::CreateFAdd(val, one, "", p->scopebb());
-      } else if (e->op == TOKminusminus) {
+      } else if (e->op == EXP::minusMinus) {
         post = llvm::BinaryOperator::CreateFSub(val, one, "", p->scopebb());
       }
     } else {
@@ -1441,13 +1415,13 @@ public:
     Type *ntype = e->newtype->toBasetype();
 
     // new class
-    if (ntype->ty == Tclass) {
+    if (ntype->ty == TY::Tclass) {
       Logger::println("new class");
       result = DtoNewClass(e->loc, static_cast<TypeClass *>(ntype), e);
       isArgprefixHandled = true; // by DtoNewClass()
     }
     // new dynamic array
-    else if (ntype->ty == Tarray) {
+    else if (ntype->ty == TY::Tarray) {
       IF_LOG Logger::println("new dynamic array: %s", e->newtype->toChars());
       assert(e->argprefix == NULL);
       // get dim
@@ -1468,27 +1442,17 @@ public:
       }
     }
     // new static array
-    else if (ntype->ty == Tsarray) {
+    else if (ntype->ty == TY::Tsarray) {
       llvm_unreachable("Static array new should decay to dynamic array.");
     }
     // new struct
-    else if (ntype->ty == Tstruct) {
+    else if (ntype->ty == TY::Tstruct) {
       IF_LOG Logger::println("new struct on heap: %s\n", e->newtype->toChars());
 
       TypeStruct *ts = static_cast<TypeStruct *>(ntype);
 
       // allocate
-      LLValue *mem = nullptr;
-      if (e->allocator) {
-        // custom allocator
-        DFuncValue dfn(e->allocator, DtoCallee(e->allocator));
-        DValue *res = DtoCallFunction(e->loc, nullptr, &dfn, e->newargs);
-        mem = DtoBitCast(DtoRVal(res), DtoType(ntype->pointerTo()),
-                         ".newstruct_custom");
-      } else {
-        // default allocator
-        mem = DtoNewStruct(e->loc, ts);
-      }
+      LLValue *mem = DtoNewStruct(e->loc, ts);
 
       if (!e->member && e->arguments) {
         IF_LOG Logger::println("Constructing using literal");
@@ -1538,7 +1502,7 @@ public:
 
       // try to construct it in-place
       if (!toInPlaceConstruction(&tmpvar, exp))
-        DtoAssign(e->loc, &tmpvar, toElem(exp), TOKblit);
+        DtoAssign(e->loc, &tmpvar, toElem(exp), EXP::blit);
 
       // return as pointer-to
       result = new DImValue(e->type, mem);
@@ -1562,16 +1526,16 @@ public:
     Type *et = e->e1->type->toBasetype();
 
     // pointer
-    if (et->ty == Tpointer) {
+    if (et->ty == TY::Tpointer) {
       Type *elementType = et->nextOf()->toBasetype();
-      if (elementType->ty == Tstruct && elementType->needsDestruction()) {
+      if (elementType->ty == TY::Tstruct && elementType->needsDestruction()) {
         DtoDeleteStruct(e->loc, dval);
       } else {
         DtoDeleteMemory(e->loc, dval);
       }
     }
     // class
-    else if (et->ty == Tclass) {
+    else if (et->ty == TY::Tclass) {
       bool onstack = false;
       TypeClass *tc = static_cast<TypeClass *>(et);
       if (tc->sym->isInterfaceDeclaration()) {
@@ -1595,7 +1559,7 @@ public:
       }
     }
     // dyn array
-    else if (et->ty == Tarray) {
+    else if (et->ty == TY::Tarray) {
       DtoDeleteArray(e->loc, dval);
       if (dval->isLVal()) {
         DtoSetArrayToNull(DtoLVal(dval));
@@ -1619,6 +1583,19 @@ public:
 
     DValue *u = toElem(e->e1);
     result = new DImValue(e->type, DtoArrayLen(u));
+  }
+
+  //////////////////////////////////////////////////////////////////////////////
+
+  void visit(ThrowExp *e) override {
+    IF_LOG Logger::print("ThrowExp::toElem: %s\n", e->toChars());
+    LOG_SCOPE;
+
+    auto &PGO = gIR->funcGen().pgo;
+    PGO.setCurrentStmt(e);
+
+    DtoThrow(e->loc, toElem(e->e1));
+    result = new DNullValue(e->type, llvm::UndefValue::get(DtoType(e->type)));
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -1698,7 +1675,8 @@ public:
           DtoBitCast(DtoRVal(cond), fn->getFunctionType()->getParamType(0));
 
       gIR->CreateCallOrInvoke(fn, arg);
-    } else if (condty->ty == Tpointer && condty->nextOf()->ty == Tstruct) {
+    } else if (condty->ty == TY::Tpointer &&
+               condty->nextOf()->ty == TY::Tstruct) {
       const auto invDecl =
           static_cast<TypeStruct *>(condty->nextOf())->sym->inv;
       if (!invDecl)
@@ -1743,7 +1721,7 @@ public:
 
     DValue *u = toElem(e->e1);
 
-    const bool isAndAnd = (e->op == TOKandand); // otherwise OrOr
+    const bool isAndAnd = (e->op == EXP::andAnd); // otherwise OrOr
     llvm::BasicBlock *rhsBB = p->insertBB(isAndAnd ? "andand" : "oror");
     llvm::BasicBlock *endBB =
         p->insertBBAfter(rhsBB, isAndAnd ? "andandend" : "ororend");
@@ -1778,7 +1756,7 @@ public:
     p->ir->SetInsertPoint(endBB);
 
     // DMD allows stuff like `x == 0 && assert(false)`
-    if (e->type->toBasetype()->ty == Tvoid) {
+    if (e->type->toBasetype()->ty == TY::Tvoid) {
       result = nullptr;
       return;
     }
@@ -1838,7 +1816,7 @@ public:
 
     LLPointerType *int8ptrty = getPtrToType(LLType::getInt8Ty(gIR->context()));
 
-    assert(e->type->toBasetype()->ty == Tdelegate);
+    assert(e->type->toBasetype()->ty == TY::Tdelegate);
     LLType *dgty = DtoType(e->type);
 
     DValue *u = toElem(e->e1);
@@ -1859,7 +1837,7 @@ public:
 
     LLValue *castfptr;
 
-    if (e->e1->op != TOKsuper && e->e1->op != TOKdottype &&
+    if (e->e1->op != EXP::super_ && e->e1->op != EXP::dotType &&
         e->func->isVirtual() && !e->func->isFinalFunc()) {
       castfptr = DtoVirtualFunctionPointer(u, e->func);
     } else if (e->func->isAbstract()) {
@@ -1871,7 +1849,7 @@ public:
 
       // We need to actually codegen the function here, as literals are not
       // added to the module member list.
-      if (e->func->semanticRun == PASSsemantic3done) {
+      if (e->func->semanticRun == PASS::semantic3done) {
         Dsymbol *owner = e->func->toParent();
         while (!owner->isTemplateInstance() && owner->toParent()) {
           owner = owner->toParent();
@@ -1903,12 +1881,12 @@ public:
     Type *t1 = e->e1->type->toBasetype();
 
     // handle dynarray specially
-    if (t1->ty == Tarray) {
+    if (t1->ty == TY::Tarray) {
       result = new DImValue(e->type, DtoDynArrayIs(e->op, l, r));
       return;
     }
     // also structs
-    if (t1->ty == Tstruct) {
+    if (t1->ty == TY::Tstruct) {
       result = new DImValue(e->type, DtoStructEquals(e->op, l, r));
       return;
     }
@@ -1916,7 +1894,7 @@ public:
     // FIXME this stuff isn't pretty
     LLValue *eval = nullptr;
 
-    if (t1->ty == Tdelegate) {
+    if (t1->ty == TY::Tdelegate) {
       LLValue *lv = DtoRVal(l);
       LLValue *rv = nullptr;
       if (!r->isNull()) {
@@ -1927,33 +1905,33 @@ public:
     } else if (t1->isfloating()) // includes iscomplex
     {
       eval = DtoBinNumericEquals(e->loc, l, r, e->op);
-    } else if (t1->ty == Tpointer || t1->ty == Tclass) {
+    } else if (t1->ty == TY::Tpointer || t1->ty == TY::Tclass) {
       LLValue *lv = DtoRVal(l);
       LLValue *rv = DtoRVal(r);
       if (lv->getType() != rv->getType()) {
         if (r->isNull()) {
-          rv = llvm::ConstantPointerNull::get(isaPointer(lv->getType()));
+          rv = llvm::ConstantPointerNull::get(isaPointer(lv));
         } else {
           rv = DtoBitCast(rv, lv->getType());
         }
       }
-      eval = (e->op == TOKidentity) ? p->ir->CreateICmpEQ(lv, rv)
-                                    : p->ir->CreateICmpNE(lv, rv);
-    } else if (t1->ty == Tsarray) {
+      eval = (e->op == EXP::identity) ? p->ir->CreateICmpEQ(lv, rv)
+                                      : p->ir->CreateICmpNE(lv, rv);
+    } else if (t1->ty == TY::Tsarray) {
       LLValue *lptr = DtoLVal(l);
       LLValue *rptr = DtoLVal(r);
       assert(lptr->getType() == rptr->getType());
-      eval = (e->op == TOKidentity) ? p->ir->CreateICmpEQ(lptr, rptr)
-                                    : p->ir->CreateICmpNE(lptr, rptr);
+      eval = (e->op == EXP::identity) ? p->ir->CreateICmpEQ(lptr, rptr)
+                                      : p->ir->CreateICmpNE(lptr, rptr);
     } else {
       LLValue *lv = DtoRVal(l);
       LLValue *rv = DtoRVal(r);
       assert(lv->getType() == rv->getType());
-      eval = (e->op == TOKidentity) ? p->ir->CreateICmpEQ(lv, rv)
-                                    : p->ir->CreateICmpNE(lv, rv);
-      if (t1->ty == Tvector) {
-        eval = mergeVectorEquals(eval,
-                                 e->op == TOKidentity ? TOKequal : TOKnotequal);
+      eval = (e->op == EXP::identity) ? p->ir->CreateICmpEQ(lv, rv)
+                                      : p->ir->CreateICmpNE(lv, rv);
+      if (t1->ty == TY::Tvector) {
+        eval = mergeVectorEquals(eval, e->op == EXP::identity ? EXP::equal
+                                                              : EXP::notEqual);
       }
     }
     result = new DImValue(e->type, eval);
@@ -1985,7 +1963,7 @@ public:
 
     Type *dtype = e->type->toBasetype();
     LLValue *retPtr = nullptr;
-    if (!(dtype->ty == Tvoid || dtype->ty == Tnoreturn)) {
+    if (!(dtype->ty == TY::Tvoid || dtype->ty == TY::Tnoreturn)) {
       // allocate a temporary for pointer to the final result.
       retPtr = DtoAlloca(dtype->pointerTo(), "condtmp");
     }
@@ -2005,7 +1983,7 @@ public:
     p->ir->SetInsertPoint(condtrue);
     PGO.emitCounterIncrement(e);
     DValue *u = toElem(e->e1);
-    if (retPtr && u->type->toBasetype()->ty != Tnoreturn) {
+    if (retPtr && u->type->toBasetype()->ty != TY::Tnoreturn) {
       LLValue *lval = makeLValue(e->loc, u);
       DtoStore(lval, DtoBitCast(retPtr, lval->getType()->getPointerTo()));
     }
@@ -2013,7 +1991,7 @@ public:
 
     p->ir->SetInsertPoint(condfalse);
     DValue *v = toElem(e->e2);
-    if (retPtr && v->type->toBasetype()->ty != Tnoreturn) {
+    if (retPtr && v->type->toBasetype()->ty != TY::Tnoreturn) {
       LLValue *lval = makeLValue(e->loc, v);
       DtoStore(lval, DtoBitCast(retPtr, lval->getType()->getPointerTo()));
     }
@@ -2096,16 +2074,16 @@ public:
     result = toElem(e->e1);
 
     Type *e1type = e->e1->type->toBasetype();
-    assert(e1type->ty == Tarray);
+    assert(e1type->ty == TY::Tarray);
     Type *elemtype = e1type->nextOf()->toBasetype();
     Type *e2type = e->e2->type->toBasetype();
 
-    if (e1type->ty == Tarray && e2type->ty == Tdchar &&
-        (elemtype->ty == Tchar || elemtype->ty == Twchar)) {
-      if (elemtype->ty == Tchar) {
+    if (e1type->ty == TY::Tarray && e2type->ty == TY::Tdchar &&
+        (elemtype->ty == TY::Tchar || elemtype->ty == TY::Twchar)) {
+      if (elemtype->ty == TY::Tchar) {
         // append dchar to char[]
         DtoAppendDCharToString(e->loc, result, e->e2);
-      } else { /*if (elemtype->ty == Twchar)*/
+      } else { /*if (elemtype->ty == TY::Twchar)*/
         // append dchar to wchar[]
         DtoAppendDCharToUnicodeString(e->loc, result, e->e2);
       }
@@ -2122,12 +2100,12 @@ public:
   //////////////////////////////////////////////////////////////////////////////
 
   void genFuncLiteral(FuncLiteralDeclaration *fd, FuncExp *e) {
-    if ((fd->tok == TOKreserved || fd->tok == TOKdelegate) &&
-        (e && e->type->ty == Tpointer)) {
+    if ((fd->tok == TOK::reserved || fd->tok == TOK::delegate_) &&
+        (e && e->type->ty == TY::Tpointer)) {
       // This is a lambda that was inferred to be a function literal instead
       // of a delegate, so set tok here in order to get correct types/mangling.
       // Horrible hack, but DMD does the same thing.
-      fd->tok = TOKfunction;
+      fd->tok = TOK::function_;
       fd->vthis = nullptr;
     }
 
@@ -2187,7 +2165,7 @@ public:
     Type *elemType = arrayType->nextOf()->toBasetype();
 
     // is dynamic ?
-    bool const dyn = (arrayType->ty == Tarray);
+    bool const dyn = (arrayType->ty == TY::Tarray);
     // length
     size_t const len = e->elements->length;
 
@@ -2228,9 +2206,9 @@ public:
       llvm::Value *storage =
           DtoRawAlloca(llStoType, DtoAlignment(e->type), "arrayliteral");
       initializeArrayLiteral(p, e, storage);
-      if (arrayType->ty == Tsarray) {
+      if (arrayType->ty == TY::Tsarray) {
         result = new DLValue(e->type, storage);
-      } else if (arrayType->ty == Tpointer) {
+      } else if (arrayType->ty == TY::Tpointer) {
         storage = DtoBitCast(storage, llElemType->getPointerTo());
         result = new DImValue(e->type, storage);
       } else {
@@ -2366,7 +2344,7 @@ public:
       goto LruntimeInit;
     }
 
-    if (aatype->ty != Taarray) {
+    if (aatype->ty != TY::Taarray) {
       // It's the AssociativeArray type.
       // Turn it back into a TypeAArray
       vtype = e->values->tdata()[0]->type;
@@ -2384,18 +2362,16 @@ public:
         IF_LOG Logger::println("(%llu) aa[%s] = %s",
                                static_cast<unsigned long long>(i),
                                ekey->toChars(), eval->toChars());
-        unsigned errors = global.startGagging();
-        LLConstant *ekeyConst = toConstElem(ekey, p);
-        LLConstant *evalConst = toConstElem(eval, p);
-        if (global.endGagging(errors)) {
+        LLConstant *ekeyConst = tryToConstElem(ekey, p);
+        LLConstant *evalConst = tryToConstElem(eval, p);
+        if (!ekeyConst || !evalConst) {
           goto LruntimeInit;
         }
-        assert(ekeyConst && evalConst);
         keysInits.push_back(ekeyConst);
         valuesInits.push_back(evalConst);
       }
 
-      assert(aatype->ty == Taarray);
+      assert(aatype->ty == TY::Taarray);
       Type *indexType = static_cast<TypeAArray *>(aatype)->index;
       assert(indexType && vtype);
 
@@ -2406,14 +2382,11 @@ public:
           DtoTypeInfoOf(e->loc, stripModifiers(aatype), /*base=*/false),
           DtoType(getAssociativeArrayTypeInfoType()));
 
-      LLConstant *idxs[2] = {DtoConstUint(0), DtoConstUint(0)};
-
       LLConstant *initval = arrayConst(keysInits, indexType);
       LLConstant *globalstore = new LLGlobalVariable(
           gIR->module, initval->getType(), false,
           LLGlobalValue::InternalLinkage, initval, ".aaKeysStorage");
-      LLConstant *slice = llvm::ConstantExpr::getGetElementPtr(
-          isaPointer(globalstore)->getElementType(), globalstore, idxs, true);
+      LLConstant *slice = DtoGEP(globalstore, 0u, 0u);
       slice = DtoConstSlice(DtoConstSize_t(e->keys->length), slice);
       LLValue *keysArray = DtoAggrPaint(slice, funcTy->getParamType(1));
 
@@ -2421,14 +2394,13 @@ public:
       globalstore = new LLGlobalVariable(gIR->module, initval->getType(), false,
                                          LLGlobalValue::InternalLinkage,
                                          initval, ".aaValuesStorage");
-      slice = llvm::ConstantExpr::getGetElementPtr(
-          isaPointer(globalstore)->getElementType(), globalstore, idxs, true);
+      slice = DtoGEP(globalstore, 0u, 0u);
       slice = DtoConstSlice(DtoConstSize_t(e->keys->length), slice);
       LLValue *valuesArray = DtoAggrPaint(slice, funcTy->getParamType(2));
 
       LLValue *aa = gIR->CreateCallOrInvoke(func, aaTypeInfo, keysArray,
                                             valuesArray, "aa");
-      if (basetype->ty != Taarray) {
+      if (basetype->ty != TY::Taarray) {
         LLValue *tmp = DtoAlloca(e->type, "aaliteral");
         DtoStore(aa, DtoGEP(tmp, 0u, 0));
         result = new DLValue(e->type, tmp);
@@ -2461,7 +2433,7 @@ public:
 
       // try to construct it in-place
       if (!toInPlaceConstruction(mem, eval))
-        DtoAssign(e->loc, mem, toElem(eval), TOKblit);
+        DtoAssign(e->loc, mem, toElem(eval), EXP::blit);
     }
   }
 
@@ -2534,7 +2506,7 @@ public:
       LLValue *gep = DtoGEP(val, 0, i);
       if (DtoIsInMemoryOnly(el->type)) {
         DtoMemCpy(gep, DtoLVal(ep));
-      } else if (el->type->ty != Tvoid) {
+      } else if (el->type->ty != TY::Tvoid) {
         DtoStoreZextI8(DtoRVal(ep), gep);
       } else {
         DtoStore(LLConstantInt::get(LLType::getInt8Ty(p->context()), 0, false),
@@ -2553,7 +2525,7 @@ public:
     const unsigned N = e->dim;
 
     Type *elementType = type->elementType();
-    if (elementType->ty == Tvoid)
+    if (elementType->ty == TY::Tvoid)
       elementType = Type::tuns8;
 
     const auto getCastElement = [e, elementType](DValue *element) {
@@ -2590,7 +2562,7 @@ public:
           DtoStore(llElements[i], DtoGEP(dstMem, 0, i));
         }
       }
-    } else if (tsrc->ty == Tarray || tsrc->ty == Tsarray) {
+    } else if (tsrc->ty == TY::Tarray || tsrc->ty == TY::Tsarray) {
       // Arrays: prefer a memcpy if the LL element types match, otherwise cast
       // and store element-wise.
       if (auto ts = tsrc->isTypeSArray()) {
@@ -2678,7 +2650,7 @@ public:
     }
     if (Expression *ex = isExpression(e->obj)) {
       Type *t = ex->type->toBasetype();
-      assert(t->ty == Tclass);
+      assert(t->ty == TY::Tclass);
 
       LLValue *val = DtoRVal(ex);
 
@@ -2768,7 +2740,7 @@ bool toInPlaceConstruction(DLValue *lhs, Expression *rhs) {
   if (auto ve = rhs->isVarExp()) {
     if (auto symdecl = ve->var->isSymbolDeclaration()) {
       // exclude void[]-typed `__traits(initSymbol)` (LDC extension)
-      if (symdecl->type->toBasetype()->ty == Tstruct) {
+      if (symdecl->type->toBasetype()->ty == TY::Tstruct) {
         auto sd = symdecl->dsym->isStructDeclaration();
         assert(sd);
         DtoResolveStruct(sd);
@@ -2826,7 +2798,7 @@ bool toInPlaceConstruction(DLValue *lhs, Expression *rhs) {
   }
   // and static array literals
   else if (auto al = rhs->isArrayLiteralExp()) {
-    if (lhs->type->toBasetype()->ty == Tsarray) {
+    if (lhs->type->toBasetype()->ty == TY::Tsarray) {
       Logger::println("success, in-place-constructing array literal");
       initializeArrayLiteral(gIR, al, DtoLVal(lhs));
       return true;

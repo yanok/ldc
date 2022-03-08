@@ -25,12 +25,8 @@
 #include "ir/irtypeclass.h"
 #include "ir/irtypestruct.h"
 
-/// Emits an LLVM constant corresponding to the expression.
-///
-/// Due to the current implementation of AssocArrayLiteralExp::toElem, the
-/// implementations have to be able to handle being called on expressions
-/// that are not actually constant. In such a case, an LLVM undef of the
-/// expected type should be returned (_not_ null).
+/// Emits an LLVM constant corresponding to the expression (or an error if
+/// impossible).
 class ToConstElemVisitor : public Visitor {
   IRState *p;
   LLConstant *result;
@@ -43,7 +39,7 @@ public:
 
   //////////////////////////////////////////////////////////////////////////////
 
-  LLConstant *toConstElem(Expression *e) {
+  LLConstant *process(Expression *e) {
     result = nullptr;
     e->accept(this);
     return result;
@@ -51,16 +47,11 @@ public:
 
   //////////////////////////////////////////////////////////////////////////////
 
-  void fatalError(Expression *e) {
+  void fatalError() {
+    result = nullptr;
     if (!global.gag) {
       fatal();
     }
-
-    // Do not return null here, as AssocArrayLiteralExp::toElem determines
-    // whether it can allocate the needed arrays statically by just invoking
-    // toConstElem on its key/value expressions, and handling the null value
-    // consequently would require error-prone adaptions in all other code.
-    result = llvm::UndefValue::get(DtoType(e->type));
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -73,7 +64,7 @@ public:
     if (SymbolDeclaration *sdecl = e->var->isSymbolDeclaration()) {
       // This is the static initialiser (init symbol) for aggregates.
       // Exclude void[]-typed `__traits(initSymbol)` (LDC extension).
-      if (sdecl->type->toBasetype()->ty == Tstruct) {
+      if (sdecl->type->toBasetype()->ty == TY::Tstruct) {
         const auto sd = sdecl->dsym->isStructDeclaration();
         assert(sd);
         IF_LOG Logger::print("Sym: sd=%s\n", sd->toChars());
@@ -93,7 +84,7 @@ public:
     if (vd && vd->isConst() && vd->_init) {
       if (vd->inuse) {
         e->error("recursive reference `%s`", e->toChars());
-        result = llvm::UndefValue::get(DtoType(e->type));
+        result = nullptr;
       } else {
         vd->inuse++;
         // return the initializer
@@ -104,7 +95,7 @@ public:
     // fail
     else {
       e->error("non-constant expression `%s`", e->toChars());
-      result = llvm::UndefValue::get(DtoType(e->type));
+      result = nullptr;
     }
   }
 
@@ -146,7 +137,7 @@ public:
                          e->type->toChars(), e->toChars());
     LOG_SCOPE;
     LLType *t = DtoType(e->type);
-    if (e->type->ty == Tarray) {
+    if (e->type->ty == TY::Tarray) {
       assert(isaStruct(t));
       result = llvm::ConstantAggregateZero::get(t);
     } else {
@@ -172,22 +163,18 @@ public:
 
     Type *const t = e->type->toBasetype();
 
-    if (t->ty == Tsarray) {
-      result = buildStringLiteralConstant(e, false);
+    if (auto ts = t->isTypeSArray()) {
+      bool zeroTerm = ts->dim->toInteger() == e->numberOfCodeUnits() + 1;
+      result = buildStringLiteralConstant(e, zeroTerm);
       return;
     }
 
     llvm::GlobalVariable *gvar = p->getCachedStringLiteral(e);
+    LLConstant *arrptr = DtoGEP(gvar, 0u, 0u);
 
-    llvm::ConstantInt *zero =
-        LLConstantInt::get(LLType::getInt32Ty(gIR->context()), 0, false);
-    LLConstant *idxs[2] = {zero, zero};
-    LLConstant *arrptr = llvm::ConstantExpr::getGetElementPtr(
-        isaPointer(gvar)->getElementType(), gvar, idxs, true);
-
-    if (t->ty == Tpointer) {
-      result = arrptr;
-    } else if (t->ty == Tarray) {
+    if (t->ty == TY::Tpointer) {
+      result = DtoBitCast(arrptr, DtoType(t));
+    } else if (t->ty == TY::Tarray) {
       LLConstant *clen =
           LLConstantInt::get(DtoSize_t(), e->numberOfCodeUnits(), false);
       result = DtoConstSlice(clen, arrptr, e->type);
@@ -205,11 +192,11 @@ public:
 
     // add to pointer
     Type *t1b = e->e1->type->toBasetype();
-    if (t1b->ty == Tpointer && e->e2->type->isintegral()) {
-      llvm::Constant *ptr = toConstElem(e->e1);
+    if (t1b->ty == TY::Tpointer && e->e2->type->isintegral()) {
+      llvm::Constant *ptr = toConstElem(e->e1, p);
       dinteger_t idx = undoStrideMul(e->loc, t1b, e->e2->toInteger());
-      result = llvm::ConstantExpr::getGetElementPtr(
-          isaPointer(ptr)->getElementType(), ptr, DtoConstSize_t(idx));
+      result = llvm::ConstantExpr::getGetElementPtr(getPointeeType(ptr), ptr,
+                                                    DtoConstSize_t(idx));
       return;
     }
 
@@ -222,14 +209,38 @@ public:
     LOG_SCOPE;
 
     Type *t1b = e->e1->type->toBasetype();
-    if (t1b->ty == Tpointer && e->e2->type->isintegral()) {
-      llvm::Constant *ptr = toConstElem(e->e1);
+    if (t1b->ty == TY::Tpointer && e->e2->type->isintegral()) {
+      llvm::Constant *ptr = toConstElem(e->e1, p);
       dinteger_t idx = undoStrideMul(e->loc, t1b, e->e2->toInteger());
 
       llvm::Constant *negIdx = llvm::ConstantExpr::getNeg(DtoConstSize_t(idx));
-      result = llvm::ConstantExpr::getGetElementPtr(
-          isaPointer(ptr)->getElementType(), ptr, negIdx);
+      result = llvm::ConstantExpr::getGetElementPtr(getPointeeType(ptr), ptr,
+                                                    negIdx);
       return;
+    }
+
+    visit(static_cast<Expression *>(e));
+  }
+
+  //////////////////////////////////////////////////////////////////////////////
+
+  void visit(SliceExp *e) override {
+    IF_LOG Logger::print("SliceExp::toConstElem: %s @ %s\n", e->toChars(),
+                         e->type->toChars());
+    LOG_SCOPE;
+
+    if (e->type->equivalent(e->e1->type)) {
+      if (!e->lwr && !e->upr) {
+        result = toConstElem(e->e1, p);
+        return;
+      }
+      if (auto se = e->e1->isStringExp())
+        if (auto lwr = e->lwr->isIntegerExp())
+          if (auto upr = e->upr->isIntegerExp())
+            if (lwr->toInteger() == 0 && upr->toInteger() == se->len) {
+              result = toConstElem(se, p);
+              return;
+            }
     }
 
     visit(static_cast<Expression *>(e));
@@ -247,7 +258,7 @@ public:
 
     // string literal to dyn array:
     // reinterpret the string data as an array, calculate the length
-    if (e->e1->op == TOKstring && tb->ty == Tarray) {
+    if (e->e1->op == EXP::string_ && tb->ty == TY::Tarray) {
 #if 0
             StringExp *strexp = static_cast<StringExp*>(e1);
             size_t datalen = strexp->sz * strexp->len;
@@ -259,14 +270,15 @@ public:
             size_t arrlen = datalen / eltype->size();
 #endif
       e->error("ct cast of `string` to dynamic array not fully implemented");
-      result = toConstElem(e->e1);
+      result = nullptr;
     }
     // pointer to pointer
-    else if (tb->ty == Tpointer && e->e1->type->toBasetype()->ty == Tpointer) {
-      result = llvm::ConstantExpr::getBitCast(toConstElem(e->e1), lltype);
+    else if (tb->ty == TY::Tpointer &&
+             e->e1->type->toBasetype()->ty == TY::Tpointer) {
+      result = llvm::ConstantExpr::getBitCast(toConstElem(e->e1, p), lltype);
     }
     // global variable to pointer
-    else if (tb->ty == Tpointer && e->e1->op == TOKvar) {
+    else if (tb->ty == TY::Tpointer && e->e1->op == EXP::variable) {
       VarDeclaration *vd =
           static_cast<VarExp *>(e->e1)->var->isVarDeclaration();
       assert(vd);
@@ -277,16 +289,14 @@ public:
         goto Lerr;
       }
       Type *type = vd->type->toBasetype();
-      if (type->ty == Tarray || type->ty == Tdelegate) {
-        LLConstant *idxs[2] = {DtoConstSize_t(0), DtoConstSize_t(1)};
-        value = llvm::ConstantExpr::getGetElementPtr(
-            isaPointer(value)->getElementType(), value, idxs, true);
+      if (type->ty == TY::Tarray || type->ty == TY::Tdelegate) {
+        value = DtoGEP(value, 0u, 1u);
       }
       result = DtoBitCast(value, DtoType(tb));
-    } else if (tb->ty == Tclass && e->e1->type->ty == Tclass &&
-               e->e1->op == TOKclassreference) {
+    } else if (tb->ty == TY::Tclass && e->e1->type->ty == TY::Tclass &&
+               e->e1->op == EXP::classReference) {
       auto cd = static_cast<ClassReferenceExp *>(e->e1)->originalClass();
-      llvm::Constant *instance = toConstElem(e->e1);
+      llvm::Constant *instance = toConstElem(e->e1, p);
       if (InterfaceDeclaration *it =
               static_cast<TypeClass *>(tb)->sym->isInterfaceDeclaration()) {
         assert(it->isBaseOf(cd, NULL));
@@ -309,7 +319,7 @@ public:
   Lerr:
     e->error("cannot cast `%s` to `%s` at compile time", e->e1->type->toChars(),
              e->type->toChars());
-    fatalError(e);
+    fatalError();
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -321,7 +331,7 @@ public:
 
     llvm::Constant *base = DtoConstSymbolAddress(e->loc, e->var);
     if (base == nullptr) {
-      result = llvm::UndefValue::get(DtoType(e->type));
+      result = nullptr;
       return;
     }
 
@@ -337,13 +347,15 @@ public:
 
       if (e->offset % elemSize == 0) {
         // We can turn this into a "nice" GEP.
-        result = llvm::ConstantExpr::getGetElementPtr(nullptr,
-            base, DtoConstSize_t(e->offset / elemSize));
+        result = llvm::ConstantExpr::getGetElementPtr(
+            getPointeeType(base), base, DtoConstSize_t(e->offset / elemSize));
       } else {
         // Offset isn't a multiple of base type size, just cast to i8* and
         // apply the byte offset.
-        result = llvm::ConstantExpr::getGetElementPtr(nullptr,
-            DtoBitCast(base, getVoidPtrType()), DtoConstSize_t(e->offset));
+        auto voidPtrType = getVoidPtrType();
+        result = llvm::ConstantExpr::getGetElementPtr(
+            voidPtrType->getElementType(), DtoBitCast(base, voidPtrType),
+            DtoConstSize_t(e->offset));
       }
     }
 
@@ -373,12 +385,12 @@ public:
       assert(vexp);
       VarDeclaration *vd = vexp->var->isVarDeclaration();
       assert(vd);
-      assert(vd->type->toBasetype()->ty == Tsarray);
+      assert(vd->type->toBasetype()->ty == TY::Tsarray);
       DtoResolveVariable(vd);
       assert(isIrGlobalCreated(vd));
 
       // get index
-      LLConstant *index = toConstElem(iexp->e2);
+      LLConstant *index = toConstElem(iexp->e2, p);
       assert(index->getType() == DtoSize_t());
 
       // gep
@@ -386,10 +398,10 @@ public:
       LLConstant *val = isaConstant(getIrGlobal(vd)->value);
       val = DtoBitCast(val, DtoType(vd->type->pointerTo()));
       LLConstant *gep = llvm::ConstantExpr::getGetElementPtr(
-          isaPointer(val)->getElementType(), val, idxs, true);
+          getPointeeType(val), val, idxs, true);
 
       // bitcast to requested type
-      assert(e->type->toBasetype()->ty == Tpointer);
+      assert(e->type->toBasetype()->ty == TY::Tpointer);
       result = DtoBitCast(gep, DtoType(e->type));
       return;
     }
@@ -408,7 +420,7 @@ public:
       globalVar->setAlignment(LLMaybeAlign(DtoAlignment(se->type)));
 
       p->setStructLiteralConstant(se, globalVar);
-      llvm::Constant *constValue = toConstElem(se);
+      llvm::Constant *constValue = toConstElem(se, p);
       constValue = p->setGlobalVarInitializer(globalVar, constValue, nullptr);
       p->setStructLiteralConstant(se, constValue);
 
@@ -416,7 +428,7 @@ public:
       return;
     }
 
-    if (e->e1->op == TOKslice || e->e1->op == TOKdotvar) {
+    if (e->e1->op == EXP::slice || e->e1->op == EXP::dotVariable) {
       visit(static_cast<Expression *>(e));
       return;
     }
@@ -434,17 +446,17 @@ public:
     FuncLiteralDeclaration *fd = e->fd;
     assert(fd);
 
-    if (fd->tok == TOKreserved && e->type->ty == Tpointer) {
+    if (fd->tok == TOK::reserved && e->type->ty == TY::Tpointer) {
       // This is a lambda that was inferred to be a function literal instead
       // of a delegate, so set tok here in order to get correct types/mangling.
       // Horrible hack, but DMD does the same thing in FuncExp::toElem and
       // other random places.
-      fd->tok = TOKfunction;
+      fd->tok = TOK::function_;
       fd->vthis = nullptr;
     }
 
-    if (fd->tok != TOKfunction) {
-      assert(fd->tok == TOKdelegate || fd->tok == TOKreserved);
+    if (fd->tok != TOK::function_) {
+      assert(fd->tok == TOK::delegate_ || fd->tok == TOK::reserved);
 
       // Only if the function doesn't access its nested context, we can emit a
       // constant delegate with context pointer being null.
@@ -453,7 +465,7 @@ public:
       if (!fd->toParent2()->isModule()) {
         e->error("non-constant nested delegate literal expression `%s`",
                  e->toChars());
-        fatalError(e);
+        fatalError();
         return;
       }
     }
@@ -465,7 +477,7 @@ public:
     result = DtoCallee(fd, false);
     assert(result);
 
-    if (fd->tok != TOKfunction) {
+    if (fd->tok != TOK::function_) {
       auto contextPtr = getNullPtr(getVoidPtrType());
       result = LLConstantStruct::getAnon(gIR->context(), {contextPtr, result});
     }
@@ -487,7 +499,7 @@ public:
         LLArrayType::get(DtoMemType(elemt), e->elements->length);
 
     // dynamic arrays can occur here as well ...
-    bool dyn = (bt->ty != Tsarray);
+    bool dyn = (bt->ty != TY::Tsarray);
 
     llvm::Constant *initval = arrayLiteralToConst(p, e);
 
@@ -505,7 +517,7 @@ public:
                                     : llvm::GlobalValue::UnnamedAddr::None);
     llvm::Constant *store = DtoBitCast(gvar, getPtrToType(arrtype));
 
-    if (bt->ty == Tpointer) {
+    if (bt->ty == TY::Tpointer) {
       // we need to return pointer to the static array.
       result = store;
       return;
@@ -513,10 +525,7 @@ public:
 
     // build a constant dynamic array reference with the .ptr field pointing
     // into store
-    LLConstant *idxs[2] = {DtoConstUint(0), DtoConstUint(0)};
-    LLConstant *globalstorePtr = llvm::ConstantExpr::getGetElementPtr(
-        isaPointer(store)->getElementType(), store, idxs, true);
-
+    LLConstant *globalstorePtr = DtoGEP(store, 0u, 0u);
     result = DtoConstSlice(DtoConstSize_t(e->elements->length), globalstorePtr);
   }
 
@@ -539,11 +548,15 @@ public:
       const size_t nexprs = e->elements->length;
       for (size_t i = 0; i < nexprs; i++) {
         if (auto elem = (*e->elements)[i]) {
-          LLConstant *c = toConstElem(elem);
-          // extend i1 to i8
-          if (c->getType() == LLType::getInt1Ty(p->context()))
-            c = llvm::ConstantExpr::getZExt(c, LLType::getInt8Ty(p->context()));
-          varInits[e->sd->fields[i]] = c;
+          if (!elem->isVoidInitExp()) {
+            LLConstant *c = toConstElem(elem, p);
+            // extend i1 to i8
+            if (c->getType() == LLType::getInt1Ty(p->context())) {
+              c = llvm::ConstantExpr::getZExt(c,
+                                              LLType::getInt8Ty(p->context()));
+            }
+            varInits[e->sd->fields[i]] = c;
+          }
         }
       }
 
@@ -590,11 +603,13 @@ public:
           classHierachy.pop();
           for (size_t j = 0; j < cur->fields.length; ++j) {
             if (auto elem = (*value->elements)[i]) {
-              VarDeclaration *field = cur->fields[j];
-              IF_LOG Logger::println("Getting initializer for: %s",
-                                     field->toChars());
-              LOG_SCOPE;
-              varInits[field] = toConstElem(elem);
+              if (!elem->isVoidInitExp()) {
+                VarDeclaration *field = cur->fields[j];
+                IF_LOG Logger::println("Getting initializer for: %s",
+                                       field->toChars());
+                LOG_SCOPE;
+                varInits[field] = toConstElem(elem, p);
+              }
             }
             ++i;
           }
@@ -612,7 +627,7 @@ public:
       result = constValue;
     }
 
-    if (e->type->ty == Tclass) {
+    if (e->type->ty == TY::Tclass) {
       ClassDeclaration *targetClass = static_cast<TypeClass *>(e->type)->sym;
       if (InterfaceDeclaration *it = targetClass->isInterfaceDeclaration()) {
         assert(it->isBaseOf(origClass, NULL));
@@ -627,7 +642,7 @@ public:
       }
     }
 
-    assert(e->type->ty == Tclass || e->type->ty == Tenum);
+    assert(e->type->ty == TY::Tclass || e->type->ty == TY::Tenum);
     result = DtoBitCast(result, DtoType(e->type));
   }
 
@@ -639,7 +654,7 @@ public:
     LOG_SCOPE;
 
     TypeVector *tv = static_cast<TypeVector *>(e->to->toBasetype());
-    assert(tv->ty == Tvector);
+    assert(tv->ty == TY::Tvector);
 
     const auto elemCount =
         static_cast<TypeSArray *>(tv->basetype)->dim->toInteger();
@@ -650,7 +665,7 @@ public:
       llvm::SmallVector<llvm::Constant *, 16> elements;
       elements.reserve(elemCount);
       for (size_t i = 0; i < elemCount; ++i) {
-        elements.push_back(toConstElem(indexArrayLiteral(ale, i)));
+        elements.push_back(toConstElem(indexArrayLiteral(ale, i), p));
       }
 
       result = llvm::ConstantVector::get(elements);
@@ -673,7 +688,7 @@ public:
       const auto elementCount = elemCount;
 #endif
       result = llvm::ConstantVector::getSplat(
-          elementCount, toConstElem(e->e1->optimize(WANTvalue)));
+          elementCount, toConstElem(e->e1->optimize(WANTvalue), p));
     }
   }
 
@@ -697,10 +712,25 @@ public:
 
   void visit(Expression *e) override {
     e->error("expression `%s` is not a constant", e->toChars());
-    fatalError(e);
+    fatalError();
   }
 };
 
 LLConstant *toConstElem(Expression *e, IRState *p) {
-  return ToConstElemVisitor(p).toConstElem(e);
+  auto ce = ToConstElemVisitor(p).process(e);
+  if (!ce) {
+    // error case; never return null
+    ce = llvm::UndefValue::get(DtoType(e->type));
+  }
+  return ce;
+}
+
+LLConstant *tryToConstElem(Expression *e, IRState *p) {
+  const auto errors = global.startGagging();
+  auto ce = ToConstElemVisitor(p).process(e);
+  if (global.endGagging(errors)) {
+    return nullptr;
+  }
+  assert(ce);
+  return ce;
 }

@@ -52,7 +52,7 @@ void CompoundAsmStatement_toIR(CompoundAsmStatement *stmt, IRState *p);
 namespace {
 bool isAssertFalse(Expression *e) {
   return e ? e->type == Type::tnoreturn &&
-                 (e->op == TOKhalt || e->op == TOKassert)
+                 (e->op == EXP::halt || e->op == EXP::assert_)
            : false;
 }
 
@@ -193,10 +193,11 @@ public:
       if (!stmt->exp) {
         // implicitly return 0 for the main function
         returnValue = LLConstant::getNullValue(funcType->getReturnType());
-      } else if ((rtb->ty == Tvoid || rtb->ty == Tnoreturn) && !isMainFunc) {
+      } else if ((rtb->ty == TY::Tvoid || rtb->ty == TY::Tnoreturn) &&
+                 !isMainFunc) {
         // evaluate expression for side effects
-        assert(stmt->exp->type->toBasetype()->ty == Tvoid ||
-               stmt->exp->type->toBasetype()->ty == Tnoreturn);
+        assert(stmt->exp->type->toBasetype()->ty == TY::Tvoid ||
+               stmt->exp->type->toBasetype()->ty == TY::Tnoreturn);
         toElem(stmt->exp);
       } else if (funcType->getReturnType()->isVoidTy()) {
         // if the IR function's return type is void (but not the D one), it uses
@@ -226,14 +227,14 @@ public:
                   doPostblit = false;
             }
 
-            DtoAssign(stmt->loc, &returnValue, e, TOKblit);
+            DtoAssign(stmt->loc, &returnValue, e, EXP::blit);
             if (doPostblit)
               callPostblit(stmt->loc, stmt->exp, sretPointer);
           }
         }
       } else {
         // the return type is not void, so this is a normal "register" return
-        if (stmt->exp->op == TOKnull) {
+        if (stmt->exp->op == EXP::null_) {
           stmt->exp->type = rt;
         }
         DValue *dval = nullptr;
@@ -255,7 +256,7 @@ public:
         // value is a pointer to a struct or a static array, load from it
         // before returning.
         if (returnValue->getType() != funcType->getReturnType() &&
-            DtoIsInMemoryOnly(rt) && isaPointer(returnValue->getType())) {
+            DtoIsInMemoryOnly(rt) && isaPointer(returnValue)) {
           Logger::println("Loading value for return");
           returnValue = DtoLoad(returnValue);
         }
@@ -346,7 +347,7 @@ public:
       DValue *elem;
       // a cast(void) around the expression is allowed, but doesn't require any
       // code
-      if (e->op == TOKcast && e->type == Type::tvoid) {
+      if (e->op == EXP::cast_ && e->type == Type::tvoid) {
         elem = toElemDtor(static_cast<CastExp *>(e)->e1);
       } else {
         elem = toElemDtor(e);
@@ -933,19 +934,7 @@ public:
     emitCoverageLinecountInc(stmt->loc);
 
     assert(stmt->exp);
-    DValue *e = toElemDtor(stmt->exp);
-
-    llvm::Function *fn =
-        getRuntimeFunction(stmt->loc, irs->module, "_d_throw_exception");
-    LLValue *arg =
-        DtoBitCast(DtoRVal(e), fn->getFunctionType()->getParamType(0));
-
-    irs->CreateCallOrInvoke(fn, arg);
-    irs->ir->CreateUnreachable();
-
-    // TODO: Should not be needed.
-    llvm::BasicBlock *bb = irs->insertBB("afterthrow");
-    irs->ir->SetInsertPoint(bb);
+    DtoThrow(stmt->loc, toElemDtor(stmt->exp));
   }
 
   //////////////////////////////////////////////////////////////////////////
@@ -976,21 +965,13 @@ public:
     bool useSwitchInst = true;
 
     for (auto cs : *cases) {
-      // skip over casts
       auto ce = cs->exp;
-      while (auto next = ce->isCastExp())
-        ce = next->e1;
-
-      if (auto ve = ce->isVarExp()) {
-        const auto vd = ve->var->isVarDeclaration();
-        if (vd && (!vd->_init || !vd->isConst())) {
-          indices.push_back(DtoRVal(toElemDtor(cs->exp)));
-          useSwitchInst = false;
-          continue;
-        }
+      if (auto ceConst = tryToConstElem(ce, irs)) {
+        indices.push_back(ceConst);
+      } else {
+        indices.push_back(DtoRVal(toElemDtor(ce)));
+        useSwitchInst = false;
       }
-
-      indices.push_back(toConstElem(cs->exp, irs));
     }
     assert(indices.size() == caseCount);
 
@@ -1347,7 +1328,7 @@ public:
       }
     }
 
-    if (stmt->op == TOKforeach) {
+    if (stmt->op == TOK::foreach_) {
       new llvm::StoreInst(zerokey, keyvar, irs->scopebb());
     } else {
       new llvm::StoreInst(niters, keyvar, irs->scopebb());
@@ -1365,9 +1346,9 @@ public:
 
     LLValue *done = nullptr;
     LLValue *load = DtoLoad(keyvar);
-    if (stmt->op == TOKforeach) {
+    if (stmt->op == TOK::foreach_) {
       done = irs->ir->CreateICmpULT(load, niters);
-    } else if (stmt->op == TOKforeach_reverse) {
+    } else if (stmt->op == TOK::foreach_reverse_) {
       done = irs->ir->CreateICmpUGT(load, zerokey);
       load = irs->ir->CreateSub(load, LLConstantInt::get(keytype, 1, false));
       DtoStore(load, keyvar);
@@ -1384,14 +1365,14 @@ public:
     PGO.emitCounterIncrement(stmt);
 
     // get value for this iteration
-    LLValue *loadedKey = irs->ir->CreateLoad(keyvar);
+    LLValue *loadedKey = DtoLoad(keyvar);
     LLValue *gep = DtoGEP1(val, loadedKey);
 
     if (!stmt->value->isRef() && !stmt->value->isOut()) {
       // Copy value to local variable, and use it as the value variable.
       DLValue dst(stmt->value->type, valvar);
       DLValue src(stmt->value->type, gep);
-      DtoAssign(stmt->loc, &dst, &src, TOKassign);
+      DtoAssign(stmt->loc, &dst, &src, EXP::assign);
       getIrLocal(stmt->value)->value = valvar;
     } else {
       // Use the GEP as the address of the value variable.
@@ -1411,7 +1392,7 @@ public:
 
     // next
     irs->ir->SetInsertPoint(nextbb);
-    if (stmt->op == TOKforeach) {
+    if (stmt->op == TOK::foreach_) {
       LLValue *load = DtoLoad(keyvar);
       load = irs->ir->CreateAdd(load, LLConstantInt::get(keytype, 1, false));
       DtoStore(load, keyvar);
@@ -1449,7 +1430,7 @@ public:
     LLValue *keyval = DtoRawVarDeclaration(stmt->key);
 
     // store initial value in key
-    if (stmt->op == TOKforeach) {
+    if (stmt->op == TOK::foreach_) {
       DtoStore(lower, keyval);
     } else {
       DtoStore(upper, keyval);
@@ -1472,11 +1453,11 @@ public:
     assert(lower->getType() == upper->getType());
     llvm::ICmpInst::Predicate cmpop;
     if (isLLVMUnsigned(stmt->key->type)) {
-      cmpop = (stmt->op == TOKforeach) ? llvm::ICmpInst::ICMP_ULT
-                                       : llvm::ICmpInst::ICMP_UGT;
+      cmpop = (stmt->op == TOK::foreach_) ? llvm::ICmpInst::ICMP_ULT
+                                          : llvm::ICmpInst::ICMP_UGT;
     } else {
-      cmpop = (stmt->op == TOKforeach) ? llvm::ICmpInst::ICMP_SLT
-                                       : llvm::ICmpInst::ICMP_SGT;
+      cmpop = (stmt->op == TOK::foreach_) ? llvm::ICmpInst::ICMP_SLT
+                                          : llvm::ICmpInst::ICMP_SGT;
     }
     LLValue *cond = irs->ir->CreateICmp(cmpop, lower, upper);
 
@@ -1493,7 +1474,7 @@ public:
     PGO.emitCounterIncrement(stmt);
 
     // reverse foreach decrements here
-    if (stmt->op == TOKforeach_reverse) {
+    if (stmt->op == TOK::foreach_reverse_) {
       LLValue *v = DtoLoad(keyval);
       LLValue *one = LLConstantInt::get(v->getType(), 1, false);
       v = irs->ir->CreateSub(v, one);
@@ -1516,7 +1497,7 @@ public:
     irs->ir->SetInsertPoint(nextbb);
 
     // forward foreach increments here
-    if (stmt->op == TOKforeach) {
+    if (stmt->op == TOK::foreach_) {
       LLValue *v = DtoLoad(keyval);
       LLValue *one = LLConstantInt::get(v->getType(), 1, false);
       v = irs->ir->CreateAdd(v, one);

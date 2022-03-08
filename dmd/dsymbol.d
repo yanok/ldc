@@ -1,9 +1,9 @@
 /**
  * The base class for a D symbol, which can be a module, variable, function, enum, etc.
  *
- * Copyright:   Copyright (C) 1999-2021 by The D Language Foundation, All Rights Reserved
- * Authors:     $(LINK2 http://www.digitalmars.com, Walter Bright)
- * License:     $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Copyright:   Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
+ * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/dsymbol.d, _dsymbol.d)
  * Documentation:  https://dlang.org/phobos/dmd_dsymbol.html
  * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/dsymbol.d
@@ -20,6 +20,7 @@ import dmd.aggregate;
 import dmd.aliasthis;
 import dmd.arraytypes;
 import dmd.attrib;
+import dmd.astenums;
 import dmd.ast_node;
 import dmd.gluelayer;
 import dmd.dclass;
@@ -193,7 +194,7 @@ struct Visibility
     }
 }
 
-enum PASS : int
+enum PASS : ubyte
 {
     init,           // initial state
     semantic,       // semantic() started
@@ -221,6 +222,24 @@ enum : int
                                     // because qualified module searches search
                                     // their imports
     IgnoreSymbolVisibility  = 0x80, // also find private and package protected symbols
+    TagNameSpace            = 0x100, // search ImportC tag symbol table
+}
+
+/***********************************************************
+ * Struct/Class/Union field state.
+ * Used for transitory information when setting field offsets, such
+ * as bit fields.
+ */
+struct FieldState
+{
+    uint offset;        /// byte offset for next field
+
+    uint fieldOffset;   /// byte offset for the start of the bit field
+    uint fieldSize;     /// byte size of field
+    uint fieldAlign;    /// byte alignment of field
+    uint bitOffset;     /// bit offset for field
+
+    bool inFlight;      /// bit field is in flight
 }
 
 /***********************************************************
@@ -477,6 +496,21 @@ version (IN_LLVM)
             s = s.parent;
         }
         return null;
+    }
+
+    /**************************************
+     * Does this Dsymbol come from a C file?
+     * Returns:
+     *  true if it does
+     */
+     final bool isCsymbol()
+     {
+        if (Module m = getModule())
+        {
+            if (m.isCFile)
+                return true;
+        }
+        return false;
     }
 
     /**********************************
@@ -810,6 +844,20 @@ version (IN_LLVM)
             if (isAliasDeclaration() && !_scope)
                 setScope(sc);
             Dsymbol s2 = sds.symtabLookup(this,ident);
+
+            // If using C tag/prototype/forward declaration rules
+            if (sc.flags & SCOPE.Cfile)
+            {
+                if (handleTagSymbols(*sc, this, s2, sds))
+                    return;
+                if (handleSymbolRedeclarations(*sc, this, s2, sds))
+                    return;
+
+                sds.multiplyDefined(Loc.initial, this, s2);  // ImportC doesn't allow overloading
+                errors = true;
+                return;
+            }
+
             if (!s2.overloadInsert(this))
             {
                 sds.multiplyDefined(Loc.initial, this, s2);
@@ -1164,7 +1212,7 @@ version (IN_LLVM)
         return true;
     }
 
-    void setFieldOffset(AggregateDeclaration ad, uint* poffset, bool isunion)
+    void setFieldOffset(AggregateDeclaration ad, ref FieldState fieldState, bool isunion)
     {
     }
 
@@ -1257,6 +1305,7 @@ version (IN_LLVM)
     inout(ExpressionDsymbol)           isExpressionDsymbol()           inout { return null; }
     inout(AliasAssign)                 isAliasAssign()                 inout { return null; }
     inout(ThisDeclaration)             isThisDeclaration()             inout { return null; }
+    inout(BitFieldDeclaration)         isBitFieldDeclaration()         inout { return null; }
     inout(TypeInfoDeclaration)         isTypeInfoDeclaration()         inout { return null; }
     inout(TupleDeclaration)            isTupleDeclaration()            inout { return null; }
     inout(AliasDeclaration)            isAliasDeclaration()            inout { return null; }
@@ -1669,6 +1718,13 @@ public:
         return fdx;
     }
 
+    /********************************
+     * Insert Dsymbol in table.
+     * Params:
+     *   s = symbol to add
+     * Returns:
+     *   null if already in table, `s` if inserted
+     */
     Dsymbol symtabInsert(Dsymbol s)
     {
         return symtab.insert(s);
@@ -1676,8 +1732,12 @@ public:
 
     /****************************************
      * Look up identifier in symbol table.
+     * Params:
+     *  s = symbol
+     *  id = identifier to look up
+     * Returns:
+     *   Dsymbol if found, null if not
      */
-
     Dsymbol symtabLookup(Dsymbol s, Identifier id)
     {
         return symtab.lookup(id);
@@ -1774,13 +1834,13 @@ extern (C++) final class WithScopeSymbol : ScopeDsymbol
         // Acts as proxy to the with class declaration
         Dsymbol s = null;
         Expression eold = null;
-        for (Expression e = withstate.exp; e != eold; e = resolveAliasThis(_scope, e))
+        for (Expression e = withstate.exp; e && e != eold; e = resolveAliasThis(_scope, e, true))
         {
-            if (e.op == TOK.scope_)
+            if (e.op == EXP.scope_)
             {
                 s = (cast(ScopeExp)e).sds;
             }
-            else if (e.op == TOK.type)
+            else if (e.op == EXP.type)
             {
                 s = e.type.toDsymbol(null);
             }
@@ -1817,14 +1877,14 @@ extern (C++) final class WithScopeSymbol : ScopeDsymbol
 extern (C++) final class ArrayScopeSymbol : ScopeDsymbol
 {
     // either a SliceExp, an IndexExp, an ArrayExp, a TypeTuple or a TupleDeclaration.
-    // Discriminated using DYNCAST and, for expressions, also TOK
+    // Discriminated using DYNCAST and, for expressions, also EXP
     private RootObject arrayContent;
     Scope* sc;
 
     extern (D) this(Scope* sc, Expression exp)
     {
         super(exp.loc, null);
-        assert(exp.op == TOK.index || exp.op == TOK.slice || exp.op == TOK.array);
+        assert(exp.op == EXP.index || exp.op == EXP.slice || exp.op == EXP.array);
         this.sc = sc;
         this.arrayContent = exp;
     }
@@ -1941,7 +2001,7 @@ extern (C++) final class ArrayScopeSymbol : ScopeDsymbol
             else if (ce.type && (t = ce.type.toBasetype()) !is null && (t.ty == Tstruct || t.ty == Tclass))
             {
                 // Look for opDollar
-                assert(exp.op == TOK.array || exp.op == TOK.slice);
+                assert(exp.op == EXP.array || exp.op == EXP.slice);
                 AggregateDeclaration ad = isAggregate(t);
                 assert(ad);
                 Dsymbol s = ad.search(loc, Id.opDollar);
@@ -1953,11 +2013,11 @@ extern (C++) final class ArrayScopeSymbol : ScopeDsymbol
                 if (TemplateDeclaration td = s.isTemplateDeclaration())
                 {
                     dinteger_t dim = 0;
-                    if (exp.op == TOK.array)
+                    if (exp.op == EXP.array)
                     {
                         dim = (cast(ArrayExp)exp).currentDimension;
                     }
-                    else if (exp.op == TOK.slice)
+                    else if (exp.op == EXP.slice)
                     {
                         dim = 0; // slices are currently always one-dimensional
                     }
@@ -1978,7 +2038,7 @@ extern (C++) final class ArrayScopeSymbol : ScopeDsymbol
                      * Note that it's impossible to have both template & function opDollar,
                      * because both take no arguments.
                      */
-                    if (exp.op == TOK.array && (cast(ArrayExp)exp).arguments.dim != 1)
+                    if (exp.op == EXP.array && (cast(ArrayExp)exp).arguments.dim != 1)
                     {
                         exp.error("`%s` only defines opDollar for one dimension", ad.toChars());
                         return null;
@@ -2222,33 +2282,53 @@ extern (C++) final class DsymbolTable : RootObject
 {
     AssocArray!(Identifier, Dsymbol) tab;
 
-    // Look up Identifier. Return Dsymbol if found, NULL if not.
+   /***************************
+    * Look up Identifier in symbol table
+    * Params:
+    *   ident = identifer to look up
+    * Returns:
+    *   Dsymbol if found, null if not
+    */
     Dsymbol lookup(const Identifier ident)
     {
         //printf("DsymbolTable::lookup(%s)\n", ident.toChars());
         return tab[ident];
     }
 
-    // Look for Dsymbol in table. If there, return it. If not, insert s and return that.
-    Dsymbol update(Dsymbol s)
+    /**********
+     * Replace existing symbol in symbol table with `s`.
+     * If it's not there, add it.
+     * Params:
+     *   s = replacement symbol with same identifier
+     */
+    void update(Dsymbol s)
     {
-        const ident = s.ident;
-        Dsymbol* ps = tab.getLvalue(ident);
-        *ps = s;
-        return s;
+        *tab.getLvalue(s.ident) = s;
     }
 
-    // Insert Dsymbol in table. Return NULL if already there.
+    /**************************
+     * Insert Dsymbol in table.
+     * Params:
+     *   s = symbol to add
+     * Returns:
+     *   null if already in table, `s` if inserted
+     */
     Dsymbol insert(Dsymbol s)
     {
-        //printf("DsymbolTable::insert(this = %p, '%s')\n", this, s.ident.toChars());
         return insert(s.ident, s);
     }
 
-    // when ident and s are not the same
+    /**************************
+     * Insert Dsymbol in table.
+     * Params:
+     *   ident = identifier to serve as index
+     *   s = symbol to add
+     * Returns:
+     *   null if already in table, `s` if inserted
+     */
     Dsymbol insert(const Identifier ident, Dsymbol s)
     {
-        //printf("DsymbolTable::insert()\n");
+        //printf("DsymbolTable.insert(this = %p, '%s')\n", this, s.ident.toChars());
         Dsymbol* ps = tab.getLvalue(ident);
         if (*ps)
             return null; // already in table
@@ -2256,7 +2336,7 @@ extern (C++) final class DsymbolTable : RootObject
         return s;
     }
 
-    /*****
+    /*****************
      * Returns:
      *  number of symbols in symbol table
      */
@@ -2264,4 +2344,219 @@ extern (C++) final class DsymbolTable : RootObject
     {
         return tab.length;
     }
+}
+
+/**********************************************
+ * ImportC tag symbols sit in a parallel symbol table,
+ * so that this C code works:
+ * ---
+ * struct S { a; };
+ * int S;
+ * struct S s;
+ * ---
+ * But there are relatively few such tag symbols, so that would be
+ * a waste of memory and complexity. An additional problem is we'd like the D side
+ * to find the tag symbols with ordinary lookup, not lookup in both
+ * tables, if the tag symbol is not conflicting with an ordinary symbol.
+ * The solution is to put the tag symbols that conflict into an associative
+ * array, indexed by the address of the ordinary symbol that conflicts with it.
+ * C has no modules, so this associative array is tagSymTab[] in ModuleDeclaration.
+ * A side effect of our approach is that D code cannot access a tag symbol that is
+ * hidden by an ordinary symbol. This is more of a theoretical problem, as nobody
+ * has mentioned it when importing C headers. If someone wants to do it,
+ * too bad so sad. Change the C code.
+ * This function fixes up the symbol table when faced with adding a new symbol
+ * `s` when there is an existing symbol `s2` with the same name.
+ * C also allows forward and prototype declarations of tag symbols,
+ * this function merges those.
+ * Params:
+ *      sc = context
+ *      s = symbol to add to symbol table
+ *      s2 = existing declaration
+ *      sds = symbol table
+ * Returns:
+ *      if s and s2 are successfully put in symbol table then return the merged symbol,
+ *      null if they conflict
+ */
+Dsymbol handleTagSymbols(ref Scope sc, Dsymbol s, Dsymbol s2, ScopeDsymbol sds)
+{
+    enum log = false;
+    if (log) printf("handleTagSymbols('%s') add %p existing %p\n", s.toChars(), s, s2);
+    auto sd = s.isScopeDsymbol(); // new declaration
+    auto sd2 = s2.isScopeDsymbol(); // existing declaration
+
+    if (!sd2)
+    {
+        /* Look in tag table
+         */
+        if (log) printf(" look in tag table\n");
+        if (auto p = cast(void*)s2 in sc._module.tagSymTab)
+        {
+            Dsymbol s2tag = *p;
+            sd2 = s2tag.isScopeDsymbol();
+            assert(sd2);        // only tags allowed in tag symbol table
+        }
+    }
+
+    if (sd && sd2) // `s` is a tag, `sd2` is the same tag
+    {
+        if (log) printf(" tag is already defined\n");
+
+        if (sd.kind() != sd2.kind())  // being enum/struct/union must match
+            return null;              // conflict
+
+        /* Not a redeclaration if one is a forward declaration.
+         * Move members to the first declared type, which is sd2.
+         */
+        if (sd2.members)
+        {
+            if (!sd.members)
+                return sd2;  // ignore the sd redeclaration
+        }
+        else if (sd.members)
+        {
+            sd2.members = sd.members; // transfer definition to sd2
+            sd.members = null;
+            return sd2;
+        }
+        else
+            return sd2; // ignore redeclaration
+    }
+    else if (sd) // `s` is a tag, `s2` is not
+    {
+        if (log) printf(" s is tag, s2 is not\n");
+        /* add `s` as tag indexed by s2
+         */
+        sc._module.tagSymTab[cast(void*)s2] = s;
+        return s;
+    }
+    else if (s2 is sd2) // `s2` is a tag, `s` is not
+    {
+        if (log) printf(" s2 is tag, s is not\n");
+        /* replace `s2` in symbol table with `s`,
+         * then add `s2` as tag indexed by `s`
+         */
+        sds.symtab.update(s);
+        sc._module.tagSymTab[cast(void*)s] = s2;
+        return s;
+    }
+    if (log) printf(" collision\n");
+    return null;
+}
+
+
+/**********************************************
+ * ImportC allows redeclarations of C variables, functions and typedefs.
+ *    extern int x;
+ *    int x = 3;
+ * and:
+ *    extern void f();
+ *    void f() { }
+ * Attempt to merge them.
+ * Params:
+ *      sc = context
+ *      s = symbol to add to symbol table
+ *      s2 = existing declaration
+ *      sds = symbol table
+ * Returns:
+ *      if s and s2 are successfully put in symbol table then return the merged symbol,
+ *      null if they conflict
+ */
+Dsymbol handleSymbolRedeclarations(ref Scope sc, Dsymbol s, Dsymbol s2, ScopeDsymbol sds)
+{
+    enum log = false;
+    if (log) printf("handleSymbolRedeclarations('%s')\n", s.toChars());
+
+    static Dsymbol collision()
+    {
+        if (log) printf(" collision\n");
+        return null;
+    }
+
+    auto vd = s.isVarDeclaration(); // new declaration
+    auto vd2 = s2.isVarDeclaration(); // existing declaration
+    if (vd && vd2)
+    {
+        /* if one is `static` and the other isn't, the result is undefined
+         * behavior, C11 6.2.2.7
+         */
+        if ((vd.storage_class ^ vd2.storage_class) & STC.static_)
+            return collision();
+
+        const i1 =  vd._init && ! vd._init.isVoidInitializer();
+        const i2 = vd2._init && !vd2._init.isVoidInitializer();
+
+        if (i1 && i2)
+            return collision();         // can't both have initializers
+
+        if (i1)                         // vd is the definition
+        {
+            sds.symtab.update(vd);      // replace vd2 with the definition
+            return vd;
+        }
+
+        /* BUG: the types should match, which needs semantic() to be run on it
+         *    extern int x;
+         *    int x;  // match
+         *    typedef int INT;
+         *    INT x;  // match
+         *    long x; // collision
+         * We incorrectly ignore these collisions
+         */
+        return vd2;
+    }
+
+    auto fd = s.isFuncDeclaration(); // new declaration
+    auto fd2 = s2.isFuncDeclaration(); // existing declaration
+    if (fd && fd2)
+    {
+        /* if one is `static` and the other isn't, the result is undefined
+         * behavior, C11 6.2.2.7
+         * However, match what gcc allows:
+         *    static int sun1(); int sun1() { return 0; }
+         * and:
+         *    static int sun2() { return 0; } int sun2();
+         * Both produce a static function.
+         *
+         * Both of these should fail:
+         *    int sun3(); static int sun3() { return 0; }
+         * and:
+         *    int sun4() { return 0; } static int sun4();
+         */
+        // if adding `static`
+        if (   fd.storage_class & STC.static_ &&
+            !(fd2.storage_class & STC.static_))
+        {
+            return collision();
+        }
+
+        if (fd.fbody && fd2.fbody)
+            return collision();         // can't both have bodies
+
+        if (fd.fbody)                   // fd is the definition
+        {
+            sds.symtab.update(fd);      // replace fd2 in symbol table with fd
+            fd.overnext = fd2;
+            return fd;
+        }
+
+        /* Just like with VarDeclaration, the types should match, which needs semantic() to be run on it.
+         * FuncDeclaration::semantic() detects this, but it relies on .overnext being set.
+         */
+        fd2.overloadInsert(fd);
+
+        return fd2;
+    }
+
+    auto td  = s.isAliasDeclaration();  // new declaration
+    auto td2 = s2.isAliasDeclaration(); // existing declaration
+    if (td && td2)
+    {
+        /* BUG: just like with variables and functions, the types should match, which needs semantic() to be run on it.
+         * FuncDeclaration::semantic2() can detect this, but it relies overnext being set.
+         */
+        return td2;
+    }
+
+    return collision();
 }

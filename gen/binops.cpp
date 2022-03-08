@@ -22,7 +22,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 dinteger_t undoStrideMul(const Loc &loc, Type *t, dinteger_t offset) {
-  assert(t->ty == Tpointer);
+  assert(t->ty == TY::Tpointer);
   d_uns64 elemSize = t->nextOf()->size(loc);
   assert((offset % elemSize) == 0 &&
          "Expected offset by an integer amount of elements");
@@ -127,7 +127,7 @@ DValue *emitPointerOffset(Loc loc, DValue *base, Expression *offset,
 // a null constant and returns the other operand (AA) as new DImValue.
 // Returns null if type is not an AA.
 DValue *isAssociativeArrayAndNull(Type *type, LLValue *lhs, LLValue *rhs) {
-  if (type->ty != Taarray)
+  if (type->ty != TY::Taarray)
     return nullptr;
 
   if (auto constantL = isaConstant(lhs)) {
@@ -151,14 +151,15 @@ DValue *binAdd(const Loc &loc, Type *type, DValue *lhs, Expression *rhs,
   Type *lhsType = lhs->type->toBasetype();
   Type *rhsType = rhs->type->toBasetype();
 
-  if (lhsType != rhsType && lhsType->ty == Tpointer && rhsType->isintegral()) {
+  if (lhsType != rhsType && lhsType->ty == TY::Tpointer &&
+      rhsType->isintegral()) {
     Logger::println("Adding integer to pointer");
     return emitPointerOffset(loc, lhs, rhs, false, type, loadLhsAfterRhs);
   }
 
   auto rvals = evalSides(lhs, rhs, loadLhsAfterRhs);
 
-  if (type->ty == Tnull)
+  if (type->ty == TY::Tnull)
     return DtoNullValue(type, loc);
   if (type->iscomplex())
     return DtoComplexAdd(loc, type, rvals.lhs, rvals.rhs);
@@ -182,14 +183,15 @@ DValue *binMin(const Loc &loc, Type *type, DValue *lhs, Expression *rhs,
   Type *lhsType = lhs->type->toBasetype();
   Type *rhsType = rhs->type->toBasetype();
 
-  if (lhsType != rhsType && lhsType->ty == Tpointer && rhsType->isintegral()) {
+  if (lhsType != rhsType && lhsType->ty == TY::Tpointer &&
+      rhsType->isintegral()) {
     Logger::println("Subtracting integer from pointer");
     return emitPointerOffset(loc, lhs, rhs, true, type, loadLhsAfterRhs);
   }
 
   auto rvals = evalSides(lhs, rhs, loadLhsAfterRhs);
 
-  if (lhsType->ty == Tpointer && rhsType->ty == Tpointer) {
+  if (lhsType->ty == TY::Tpointer && rhsType->ty == TY::Tpointer) {
     LLValue *l = DtoRVal(rvals.lhs);
     LLValue *r = DtoRVal(rvals.rhs);
     LLType *llSizeT = DtoSize_t();
@@ -202,7 +204,7 @@ DValue *binMin(const Loc &loc, Type *type, DValue *lhs, Expression *rhs,
     return new DImValue(type, diff);
   }
 
-  if (type->ty == Tnull)
+  if (type->ty == TY::Tnull)
     return DtoNullValue(type, loc);
   if (type->iscomplex())
     return DtoComplexMin(loc, type, rvals.lhs, rvals.rhs);
@@ -337,9 +339,9 @@ DValue *binUshr(const Loc &loc, Type *type, DValue *lhs, Expression *rhs,
 
 //////////////////////////////////////////////////////////////////////////////
 
-LLValue *DtoBinNumericEquals(const Loc &loc, DValue *lhs, DValue *rhs, TOK op) {
-  assert(op == TOKequal || op == TOKnotequal || op == TOKidentity ||
-         op == TOKnotidentity);
+LLValue *DtoBinNumericEquals(const Loc &loc, DValue *lhs, DValue *rhs, EXP op) {
+  assert(op == EXP::equal || op == EXP::notEqual || op == EXP::identity ||
+         op == EXP::notIdentity);
   Type *t = lhs->type->toBasetype();
   assert(t->isfloating());
   Logger::println("numeric equality");
@@ -359,19 +361,19 @@ LLValue *DtoBinNumericEquals(const Loc &loc, DValue *lhs, DValue *rhs, TOK op) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-LLValue *DtoBinFloatsEquals(const Loc &loc, DValue *lhs, DValue *rhs, TOK op) {
+LLValue *DtoBinFloatsEquals(const Loc &loc, DValue *lhs, DValue *rhs, EXP op) {
   LLValue *res = nullptr;
-  if (op == TOKequal || op == TOKnotequal) {
+  if (op == EXP::equal || op == EXP::notEqual) {
     LLValue *l = DtoRVal(lhs);
     LLValue *r = DtoRVal(rhs);
-    res = (op == TOKequal ? gIR->ir->CreateFCmpOEQ(l, r)
-                          : gIR->ir->CreateFCmpUNE(l, r));
-    if (lhs->type->toBasetype()->ty == Tvector) {
+    res = (op == EXP::equal ? gIR->ir->CreateFCmpOEQ(l, r)
+                            : gIR->ir->CreateFCmpUNE(l, r));
+    if (lhs->type->toBasetype()->ty == TY::Tvector) {
       res = mergeVectorEquals(res, op);
     }
   } else {
     const auto cmpop =
-        op == TOKidentity ? llvm::ICmpInst::ICMP_EQ : llvm::ICmpInst::ICMP_NE;
+        op == EXP::identity ? llvm::ICmpInst::ICMP_EQ : llvm::ICmpInst::ICMP_NE;
     LLValue *sz = DtoConstSize_t(getTypeStoreSize(DtoType(lhs->type)));
     LLValue *val = DtoMemCmp(makeLValue(loc, lhs), makeLValue(loc, rhs), sz);
     res = gIR->ir->CreateICmp(cmpop, val,
@@ -383,7 +385,7 @@ LLValue *DtoBinFloatsEquals(const Loc &loc, DValue *lhs, DValue *rhs, TOK op) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-LLValue *mergeVectorEquals(LLValue *resultsVector, TOK op) {
+LLValue *mergeVectorEquals(LLValue *resultsVector, EXP op) {
   // `resultsVector` is a vector of i1 values, the pair-wise results.
   // Bitcast to an integer and check the bits via additional integer
   // comparison.
@@ -391,11 +393,11 @@ LLValue *mergeVectorEquals(LLValue *resultsVector, TOK op) {
   LLType *integerType = LLType::getIntNTy(gIR->context(), sizeInBits);
   LLValue *v = DtoBitCast(resultsVector, integerType);
 
-  if (op == TOKequal) {
+  if (op == EXP::equal) {
     // all pairs must be equal for the vectors to be equal
     LLConstant *allEqual = LLConstant::getAllOnesValue(integerType);
     return gIR->ir->CreateICmpEQ(v, allEqual);
-  } else if (op == TOKnotequal) {
+  } else if (op == EXP::notEqual) {
     // any not-equal pair suffices for the vectors to be not-equal
     LLConstant *noneNotEqual = LLConstantInt::get(integerType, 0);
     return gIR->ir->CreateICmpNE(v, noneNotEqual);
