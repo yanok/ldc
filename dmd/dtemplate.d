@@ -6321,15 +6321,6 @@ version (IN_LLVM)
              *    which doesn't import any root modules.
              */
 
-// JOHAN TODO: This check is old, perhaps now it works for Weka linking?
-// This breaks compiling wekanode. The issue is that while it looks like 'tnext'
-// is going to be codegen'd elsewhere from the point of this compilation, when
-// it is actually compiled there might be another root module that creates an
-// instance pointing back to 'this', so there the symbol corresponding to 'tnext'
-// would again not be emitted. By commenting out this block, we are always
-// emitting non-speculative instantiations directly from root nodes.
-if(true || !IN_WEKA)
-{
             // If the ancestor isn't speculative,
             // 1. do codegen if the ancestor needs it
             // 2. elide codegen if the ancestor doesn't need it (non-root instantiation of ancestor incl. subtree)
@@ -6353,6 +6344,17 @@ if(true || !IN_WEKA)
                 const needsCodegen = tnext.needsCodegen(); // sets tnext.minst
                 if (tnext.minst) // not speculative
                 {
+                    minst = tnext.minst; // cache result
+
+// JOHAN TODO: This check is old, perhaps now it works for Weka linking?
+// This breaks compiling wekanode. The issue is that while it looks like 'tnext'
+// is going to be codegen'd elsewhere from the point of this compilation, when
+// it is actually compiled there might be another root module that creates an
+// instance pointing back to 'this', so there the symbol corresponding to 'tnext'
+// would again not be emitted. By commenting out this block, we are always
+// emitting non-speculative instantiations directly from root nodes.
+if(!IN_WEKA)
+{
                     if (!needsCodegen)
                     {
                         minst = tnext.minst; // cache result
@@ -6364,9 +6366,9 @@ if(true || !IN_WEKA)
                         minst = tnext.minst; // cache result from non-speculative sibling
                         return true;
                     }
+}
                 }
             }
-}
 
             // Unless `this` is still speculative (=> all further siblings speculative too),
             // do codegen because we found no guaranteed-codegen'd non-root instantiation.
