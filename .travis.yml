@@ -6,8 +6,8 @@ d: ldc-1.27.1
 
 env:
   global:
-    - LLVM_VERSION: 13.0.1
-    - CLANG_VERSION: 12.0.1
+    - LLVM_VERSION: 14.0.3
+    - CLANG_VERSION: 14.0.0
     - OPTS: '"-DBUILD_LTO_LIBS=ON -DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -DJITRT_EXTRA_LDFLAGS=-static-libstdc++ -DLDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH=aarch64"'
     - secure: "WfMv0kOqVU8+SgZUrwgzvzGvFbZvPmeIqrDJ+sotbzEtDeCcMuZmj/+8VuysXzpShXx/FxCoopWpAz30pedES8anGR3ciZruVPPsi22rOR5IBHuSnbamkmF11eQgRaDcj6GvZL7QeWLHBx6EN+C+mQFEVqRrD5avCO/K0RqWTD4="
 
@@ -69,6 +69,7 @@ script:
       -DCOMPILE_D_MODULES_SEPARATELY=ON \
       -DCOMPILE_ALL_D_FILES_AT_ONCE=OFF \
       -DLDC_LINK_MANUALLY=OFF \
+      -DBUILD_LTO_LIBS=ON \
       || travis_terminate 1
   - ninja -j8
   - bin/ldc2 -version || travis_terminate 1
@@ -97,6 +98,8 @@ script:
       -DINCLUDE_INSTALL_DIR="$installDir/import" \
       -DLDC_LINK_MANUALLY=OFF \
       -DALTERNATIVE_MALLOC_O="$PWD/../build-mimalloc/CMakeFiles/mimalloc-obj.dir/src/static.c.o" \
+      -DD_COMPILER_FLAGS="-O -flto=full -defaultlib=phobos2-ldc-lto,druntime-ldc-lto" \
+      -DEXTRA_CXXFLAGS=-flto=full \
       $OPTS \
       || travis_terminate 1
     set +x

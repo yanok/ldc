@@ -866,12 +866,10 @@ void registerPredefinedTargetVersions() {
     VersionCondition::addPredefinedGlobalIdent("Posix");
     VersionCondition::addPredefinedGlobalIdent("CppRuntime_Clang");
     break;
-#if LDC_LLVM_VER >= 800
   case llvm::Triple::WASI:
     VersionCondition::addPredefinedGlobalIdent("WASI");
     VersionCondition::addPredefinedGlobalIdent("CRuntime_WASI");
     break;
-#endif
   default:
     if (triple.getEnvironment() == llvm::Triple::Android) {
       VersionCondition::addPredefinedGlobalIdent("Android");
@@ -930,6 +928,10 @@ void registerPredefinedVersions() {
 
   if (global.params.useOut == CHECKENABLEon) {
     VersionCondition::addPredefinedGlobalIdent("D_PostConditions");
+  }
+
+  if (global.params.useInvariants == CHECKENABLEon) {
+    VersionCondition::addPredefinedGlobalIdent("D_Invariants");
   }
 
   if (global.params.useArrayBounds == CHECKENABLEoff) {
@@ -1190,7 +1192,7 @@ void codegenModules(Modules &modules) {
     for (d_size_t i = modules.length; i-- > 0;) {
       Module *const m = modules[i];
 
-      if (m->isHdrFile)
+      if (m->filetype == FileType::dhdr)
         continue;
 
       if (global.params.verbose)

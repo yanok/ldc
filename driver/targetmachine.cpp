@@ -40,9 +40,7 @@
 #include "llvm/Support/ARMTargetParser.h"
 #endif
 
-#if LDC_LLVM_VER >= 700
 #include "gen/optimizer.h"
-#endif
 
 #ifdef LDC_LLVM_SUPPORTS_MACHO_DWARF_LINE_AS_REGULAR_SECTION
 // LDC-LLVM >= 6.0.1:
@@ -353,7 +351,8 @@ createTargetMachine(const std::string targetTriple, const std::string arch,
   // the one set at LLVM configure time.
   llvm::Triple triple;
   if (targetTriple.empty()) {
-    triple = llvm::Triple(llvm::sys::getDefaultTargetTriple());
+    triple = llvm::Triple(
+        llvm::Triple::normalize(llvm::sys::getDefaultTargetTriple()));
 
     // We only support OSX, so darwin should really be macosx.
     if (triple.getOS() == llvm::Triple::Darwin) {
@@ -418,14 +417,6 @@ createTargetMachine(const std::string targetTriple, const std::string arch,
   if (cpu == "x86-64" && !hasFeature("cx16")) {
     features.push_back("+cx16");
   }
-
-#if LDC_LLVM_VER >= 700 && LDC_LLVM_VER < 800
-  // https://bugs.llvm.org/show_bug.cgi?id=38289
-  if (isOptimizationEnabled() && (cpu == "x86-64" || cpu == "i686") &&
-      !hasFeature("ssse3")) {
-    features.push_back("+ssse3");
-  }
-#endif
 
   // Handle cases where LLVM picks wrong default relocModel
   if (!relocModel.hasValue()) {
@@ -500,14 +491,12 @@ createTargetMachine(const std::string targetTriple, const std::string arch,
     targetOptions.DataSections = true;
   }
 
-#if LDC_LLVM_VER >= 700
   // On Android, we depend on a custom TLS emulation scheme implemented in our
   // LLVM fork. LLVM 7+ enables regular emutls by default; prevent that.
   if (triple.getEnvironment() == llvm::Triple::Android) {
     targetOptions.EmulatedTLS = false;
     targetOptions.ExplicitEmulatedTLS = true;
   }
-#endif
 
   const std::string finalFeaturesString =
       llvm::join(features.begin(), features.end(), ",");

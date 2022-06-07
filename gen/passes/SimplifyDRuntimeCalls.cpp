@@ -15,9 +15,6 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "simplify-drtcalls"
-#if LDC_LLVM_VER < 700
-#define LLVM_DEBUG DEBUG
-#endif
 
 #include "gen/passes/Passes.h"
 #include "gen/tollvm.h"
@@ -99,14 +96,9 @@ Value *LibCallOptimization::CastToCStr(Value *V, IRBuilder<> &B) {
 /// expects that the size has type 'intptr_t' and Dst/Src are pointers.
 Value *LibCallOptimization::EmitMemCpy(Value *Dst, Value *Src, Value *Len,
                                        unsigned Align, IRBuilder<> &B) {
-#if LDC_LLVM_VER >= 700
   auto A = LLMaybeAlign(Align);
   return B.CreateMemCpy(CastToCStr(Dst, B), A, CastToCStr(Src, B), A, Len,
                         false);
-#else
-  return B.CreateMemCpy(CastToCStr(Dst, B), CastToCStr(Src, B), Len, Align,
-                        false);
-#endif
 }
 
 //===----------------------------------------------------------------------===//
@@ -290,7 +282,7 @@ struct LLVM_LIBRARY_VISIBILITY ArraySliceCopyOpt : public LibCallOptimization {
 namespace {
 /// This pass optimizes library functions from the D runtime as used by LDC.
 ///
-class LLVM_LIBRARY_VISIBILITY SimplifyDRuntimeCalls : public FunctionPass {
+struct LLVM_LIBRARY_VISIBILITY SimplifyDRuntimeCalls {
   StringMap<LibCallOptimization *> Optimizations;
 
   // Array operations
@@ -300,28 +292,37 @@ class LLVM_LIBRARY_VISIBILITY SimplifyDRuntimeCalls : public FunctionPass {
   // GC allocations
   AllocationOpt Allocation;
 
-public:
-  static char ID; // Pass identification
-  SimplifyDRuntimeCalls() : FunctionPass(ID) {}
-
   void InitOptimizations();
-  bool runOnFunction(Function &F) override;
+  bool run(Function &F, AAResultsWrapperPass &AA);
 
   bool runOnce(Function &F, const DataLayout *DL, AAResultsWrapperPass &AA);
+};
+
+class LLVM_LIBRARY_VISIBILITY SimplifyDRuntimeCallsLegacyPass : public FunctionPass {
+  SimplifyDRuntimeCalls pass;
+
+public:
+  static char ID; // Pass identification
+  SimplifyDRuntimeCallsLegacyPass() : FunctionPass(ID) {}
+
+  bool runOnFunction(Function &F) override {
+    AAResultsWrapperPass &AA = getAnalysis<AAResultsWrapperPass>();
+    return pass.run(F, AA);
+  }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<AAResultsWrapperPass>();
   }
 };
-char SimplifyDRuntimeCalls::ID = 0;
+char SimplifyDRuntimeCallsLegacyPass::ID = 0;
 } // end anonymous namespace.
 
-static RegisterPass<SimplifyDRuntimeCalls> X("simplify-drtcalls",
-                                             "Simplify calls to D runtime");
+static RegisterPass<SimplifyDRuntimeCallsLegacyPass>
+    X("simplify-drtcalls","Simplify calls to D runtime");
 
 // Public interface to the pass.
 FunctionPass *createSimplifyDRuntimeCalls() {
-  return new SimplifyDRuntimeCalls();
+  return new SimplifyDRuntimeCallsLegacyPass();
 }
 
 /// Optimizations - Populate the Optimizations map with all the optimizations
@@ -354,13 +355,12 @@ void SimplifyDRuntimeCalls::InitOptimizations() {
 
 /// runOnFunction - Top level algorithm.
 ///
-bool SimplifyDRuntimeCalls::runOnFunction(Function &F) {
+bool SimplifyDRuntimeCalls::run(Function &F,  AAResultsWrapperPass &AA) {
   if (Optimizations.empty()) {
     InitOptimizations();
   }
 
   const DataLayout *DL = &F.getParent()->getDataLayout();
-  AAResultsWrapperPass &AA = getAnalysis<AAResultsWrapperPass>();
 
   // Iterate to catch opportunities opened up by other optimizations,
   // such as calls that are only used as arguments to unused calls:

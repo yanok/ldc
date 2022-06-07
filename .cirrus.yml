@@ -50,8 +50,7 @@ common_steps_template: &COMMON_STEPS_TEMPLATE
       ctest -j$PARALLELISM --output-on-failure -E "$excludes"
 
 # Installs Ubuntu 18.04+ prerequisites.
-# Requires env variables HOST_LDC_VERSION and LIBCLANG_COMMON_VERSION and
-# supports optional EXTRA_APT_PACKAGES.
+# Requires env variables HOST_LDC_VERSION and EXTRA_APT_PACKAGES.
 install_ubuntu_prerequisites_template: &INSTALL_UBUNTU_PREREQUISITES_TEMPLATE
   install_prerequisites_script: |
     cd $CIRRUS_WORKING_DIR/..
@@ -68,8 +67,7 @@ install_ubuntu_prerequisites_template: &INSTALL_UBUNTU_PREREQUISITES_TEMPLATE
     apt-get -q update
     apt-get -yq install \
       git-core cmake ninja-build $gcc_pkg \
-      llvm-dev zlib1g-dev libclang-common-$LIBCLANG_COMMON_VERSION-dev \
-      $libcurl_pkg curl gdb python3 python3-pip tzdata unzip zip \
+      zlib1g-dev $libcurl_pkg curl gdb python3 python3-pip tzdata unzip zip \
       $EXTRA_APT_PACKAGES
     python3 --version
     # Download & extract host LDC
@@ -121,7 +119,7 @@ task:
   timeout_in: 60m
   environment:
     CI_OS: linux
-    LIBCLANG_COMMON_VERSION: "6.0"
+    EXTRA_APT_PACKAGES: "llvm-9-dev libclang-common-9-dev"
     EXTRA_CMAKE_FLAGS: "-DMULTILIB=ON -DRT_SUPPORT_SANITIZERS=ON -DBUILD_LTO_LIBS=ON"
     PARALLELISM: 8
   << : *INSTALL_UBUNTU_PREREQUISITES_TEMPLATE
@@ -138,8 +136,7 @@ task:
   timeout_in: 60m
   environment:
     CI_OS: linux
-    LIBCLANG_COMMON_VERSION: "12"
-    EXTRA_APT_PACKAGES: "gdmd"
+    EXTRA_APT_PACKAGES: "gdmd llvm-dev libclang-common-12-dev"
     EXTRA_CMAKE_FLAGS: "-DBUILD_SHARED_LIBS=ON -DBUILD_LTO_LIBS=ON -DD_COMPILER=gdmd -DLDC_LINK_MANUALLY=ON"
     PARALLELISM: 8
     # for gdmd:
@@ -147,56 +144,20 @@ task:
   << : *INSTALL_UBUNTU_PREREQUISITES_TEMPLATE
   << : *COMMON_STEPS_TEMPLATE
 
-# LDC v0.17.6: C parts of Phobos not compiled with -fPIC, needs Ubuntu 16.04
 task:
-  name: Ubuntu 16.04 x64 ltsmaster
+  name: Ubuntu 18.04 x64 bootstrap
   container:
-    image: ubuntu:16.04
+    image: ubuntu:18.04
     cpu: 8
     memory: 16G
   timeout_in: 60m
   environment:
     CI_OS: linux
-    EXTRA_CMAKE_FLAGS: "-DBUILD_LTO_LIBS=ON -DLDC_LINK_MANUALLY=ON -DLLVM_ROOT_DIR=$CIRRUS_WORKING_DIR/../llvm"
+    HOST_LDC_VERSION: 1.9.0
+    EXTRA_APT_PACKAGES: "llvm-9-dev libclang-common-9-dev"
+    EXTRA_CMAKE_FLAGS: "-DBUILD_LTO_LIBS=ON"
     PARALLELISM: 8
-    # for pip:
-    LANG: C.UTF-8
-  install_prerequisites_script: |
-    cd $CIRRUS_WORKING_DIR/..
-    nproc
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get -q update
-    apt-get -yq install \
-      git-core cmake ninja-build g++ \
-      zlib1g-dev \
-      libcurl3 curl gdb python3 python3-pip tzdata unzip zip
-    python3 --version
-    # Download & extract host LDC
-    curl -fL --retry 3 --max-time 300 -o ldc2.tar.xz https://github.com/ldc-developers/ldc/releases/download/v0.17.6/ldc2-0.17.6-linux-x86_64.tar.xz
-    mkdir host-ldc
-    tar -xf ldc2.tar.xz --strip 1 -C host-ldc
-    rm ldc2.tar.xz
-    # Download & extract vanilla LLVM
-    curl -fL --retry 3 --max-time 300 -o llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-12.0.1/clang+llvm-12.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz
-    mkdir -p llvm
-    tar -xf llvm.tar.xz --strip 1 -C llvm
-    rm llvm.tar.xz
-  clone_submodules_early_script: |
-    cd $CIRRUS_WORKING_DIR
-    # remove --depth from following command because of
-    # https://github.com/ldc-developers/ldc/pull/3835#issuecomment-928517319
-    git submodule update --init # --depth $CIRRUS_CLONE_DEPTH
-  remove_some_tests_script: |
-    cd $CIRRUS_WORKING_DIR/tests/d2/dmd-testsuite
-    # The -lowmem tests don't work with an ltsmaster host compiler
-    rm runnable/{testptrref,xtest46}_gc.d
-    rm fail_compilation/mixin_gc.d
-    # The @live tests neither (LDC segfaults)
-    rm compilable/ob{1,2}.d
-    rm fail_compilation/fob{1,2}.d
-    rm fail_compilation/failob2.d
-    # Some __traits(getOverloads) tests neither
-    rm compilable/{test21050,test21743}.d
+  << : *INSTALL_UBUNTU_PREREQUISITES_TEMPLATE
   << : *COMMON_STEPS_TEMPLATE
 
 task:
@@ -206,7 +167,7 @@ task:
   timeout_in: 60m
   environment:
     CI_OS: osx
-    LLVM_VERSION: 14.0.0
+    LLVM_VERSION: 14.0.3
     # OS is preset to `darwin`
     OS: osx
     PATH: ${CIRRUS_WORKING_DIR}/../cmake/bin:${CIRRUS_WORKING_DIR}/../ninja:${CIRRUS_WORKING_DIR}/../llvm/bin:${PATH}
@@ -230,7 +191,7 @@ task:
   timeout_in: 60m
   environment:
     CI_OS: freebsd
-    EXTRA_CMAKE_FLAGS: -DBUILD_LTO_LIBS=ON -DD_COMPILER_FLAGS="-flto=full -defaultlib=phobos2-ldc-lto,druntime-ldc-lto" -DEXTRA_CXXFLAGS=-flto=full
+    EXTRA_CMAKE_FLAGS: -DBUILD_LTO_LIBS=ON -DD_COMPILER_FLAGS="-O -flto=full -defaultlib=phobos2-ldc-lto,druntime-ldc-lto" -DEXTRA_CXXFLAGS=-flto=full
     PARALLELISM: 4
     GITHUB_TOKEN: ENCRYPTED[0955bd48c8d4e5391446fc0149d0719ad0b63df27ec9e6c180a5730a5b10dc7f28f09d1383423db158d21380ee2b022a]
     # use clang from the `llvm` ports package to be installed, incl. lld support for .deplibs (`pragma(lib, "execinfo")`)

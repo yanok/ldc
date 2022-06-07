@@ -1,8 +1,21 @@
 # LDC master
 
 #### Big news
+- Frontend, druntime and Phobos are at version [2.100.0](https://dlang.org/changelog/2.100.0.html). (#3970)
+- LLVM for prebuilt packages bumped to v14.0.3. (#3952, #3979)
+  - All LLVM targets are enabled now (=> more targets for cross-compilation).
+  - For the Mac package, the minimum supported macOS version has been raised to v10.12.
+- The minimum D version for bootstrapping has been raised to v2.079 (for GDC: v9.4), in line with DMD. (#3956)
+- The minimum LLVM version has been raised to v9.0. (#3960)
+- New prebuilt *universal* macOS package, runnable on both x86_64 and arm64, and enabling x86_64/arm64 macOS/iOS cross-compilation targets out of the box (`-mtriple={x86_64,arm64}-apple-{macos,ios12.0}`). The x86_64 package doesn't bundle any arm64 libs anymore; the arm64 package newly bundles iOS libs (arm64). (#3958)
+
+#### Platform support
+- Supports LLVM 9.0 - 14.0.
 
 #### Bug fixes
+
+#### Internals
+- Main CI was moved from Azure Pipelines to GitHub Actions. Any fork on GitHub can trivially reuse the fully automated prebuilt packages generation & upload to a GitHub release. (#3978)
 
 # LDC 1.29.0 (2022-04-08)
 

@@ -424,12 +424,8 @@ void DtoMemCpy(LLValue *dst, LLValue *src, LLValue *nbytes, unsigned align) {
   dst = DtoBitCast(dst, VoidPtrTy);
   src = DtoBitCast(src, VoidPtrTy);
 
-#if LDC_LLVM_VER >= 700
   auto A = LLMaybeAlign(align);
   gIR->ir->CreateMemCpy(dst, A, src, A, nbytes, false /*isVolatile*/);
-#else
-  gIR->ir->CreateMemCpy(dst, src, nbytes, align, false /*isVolatile*/);
-#endif
 }
 
 void DtoMemCpy(LLValue *dst, LLValue *src, bool withPadding, unsigned align) {
@@ -514,11 +510,7 @@ LLConstant *DtoConstString(const char *str) {
 
 namespace {
 llvm::LoadInst *DtoLoadImpl(LLValue *src, const char *name) {
-  return gIR->ir->CreateLoad(
-#if LDC_LLVM_VER >= 800
-      getPointeeType(src),
-#endif
-      src, name);
+  return gIR->ir->CreateLoad(getPointeeType(src), src, name);
 }
 }
 
@@ -543,19 +535,19 @@ LLValue *DtoVolatileLoad(LLValue *src, const char *name) {
 }
 
 void DtoStore(LLValue *src, LLValue *dst) {
-  assert(src->getType() != llvm::Type::getInt1Ty(gIR->context()) &&
+  assert(!src->getType()->isIntegerTy(1) &&
          "Should store bools as i8 instead of i1.");
   gIR->ir->CreateStore(src, dst);
 }
 
 void DtoVolatileStore(LLValue *src, LLValue *dst) {
-  assert(src->getType() != llvm::Type::getInt1Ty(gIR->context()) &&
+  assert(!src->getType()->isIntegerTy(1) &&
          "Should store bools as i8 instead of i1.");
   gIR->ir->CreateStore(src, dst)->setVolatile(true);
 }
 
 void DtoStoreZextI8(LLValue *src, LLValue *dst) {
-  if (src->getType() == llvm::Type::getInt1Ty(gIR->context())) {
+  if (src->getType()->isIntegerTy(1)) {
     llvm::Type *i8 = llvm::Type::getInt8Ty(gIR->context());
     assert(dst->getType()->getContainedType(0) == i8);
     src = gIR->ir->CreateZExt(src, i8);
@@ -566,7 +558,7 @@ void DtoStoreZextI8(LLValue *src, LLValue *dst) {
 // Like DtoStore, but the pointer is guaranteed to be aligned appropriately for
 // the type.
 void DtoAlignedStore(LLValue *src, LLValue *dst) {
-  assert(src->getType() != llvm::Type::getInt1Ty(gIR->context()) &&
+  assert(!src->getType()->isIntegerTy(1) &&
          "Should store bools as i8 instead of i1.");
   llvm::StoreInst *st = gIR->ir->CreateStore(src, dst);
   if (auto alignment = getABITypeAlign(src->getType())) {

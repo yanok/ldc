@@ -28,7 +28,7 @@ endfunction()
 # Locate LLVM.
 #
 
-find_package(LLVM 6.0 REQUIRED
+find_package(LLVM 9.0 REQUIRED
     all-targets analysis asmparser asmprinter bitreader bitwriter codegen core
     debuginfodwarf debuginfomsf debuginfopdb demangle
     instcombine ipo instrumentation irreader libdriver linker lto mc
@@ -108,16 +108,12 @@ include(GetLinuxDistribution)
 #
 
 # Version information
-set(LDC_VERSION "1.29.0") # May be overridden by git hash tag
+set(LDC_VERSION "1.30.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
-set(DMDFE_MINOR_VERSION   0)
-set(DMDFE_PATCH_VERSION   99)
-set(DMDFE_FIX_LEVEL       1)
+set(DMDFE_MINOR_VERSION   100)
+set(DMDFE_PATCH_VERSION   0)
 
-set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}${DMDFE_PATCH_VERSION})
-if(DEFINED DMDFE_FIX_LEVEL)
-    set(DMD_VERSION ${DMD_VERSION}.${DMDFE_FIX_LEVEL})
-endif()
+set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}.${DMDFE_PATCH_VERSION})
 
 # Generally, we want to install everything into CMAKE_INSTALL_PREFIX, but when
 # it is /usr, put the config files into /etc to meet common practice.
@@ -444,7 +440,6 @@ endif()
 #
 # Configure the build system to use LTO and/or PGO while building LDC
 #
-set(DFLAGS_LDC "")
 include(HandleLTOPGOBuildOptions)
 
 #
@@ -631,9 +626,6 @@ if(LDC_WITH_LLD)
         endif()
     endif()
     if(APPLE)
-        if(LDC_LLVM_VER LESS 700) # LLVM 6.0.0 bug, should be fixed in 6.0.1
-            list(APPEND LDC_LINKERFLAG_LIST -lxml2)
-        endif()
         if(NOT (LDC_LLVM_VER LESS 1300)) # LLD 13.0.0 on Mac needs libxar
             list(APPEND LDC_LINKERFLAG_LIST -lxar)
         endif()
@@ -802,11 +794,9 @@ if (LDC_INSTALL_LLVM_RUNTIME_LIBS)
         copy_compilerrt_lib("darwin/libclang_rt.profile_osx.a"          "libldc_rt.profile.a"  FALSE)
         copy_compilerrt_lib("darwin/libclang_rt.fuzzer_osx.a"           "libldc_rt.fuzzer.a"   FALSE)
         copy_compilerrt_lib("darwin/libclang_rt.xray_osx.a"             "libldc_rt.xray.a"     FALSE)
-        if(NOT (LDC_LLVM_VER LESS 700))
-            copy_compilerrt_lib("darwin/libclang_rt.xray-basic_osx.a"      "libldc_rt.xray-basic.a"     FALSE)
-            copy_compilerrt_lib("darwin/libclang_rt.xray-fdr_osx.a"        "libldc_rt.xray-fdr.a"       FALSE)
-            copy_compilerrt_lib("darwin/libclang_rt.xray-profiling_osx.a"  "libldc_rt.xray-profiling.a" FALSE)
-        endif()
+        copy_compilerrt_lib("darwin/libclang_rt.xray-basic_osx.a"      "libldc_rt.xray-basic.a"     FALSE)
+        copy_compilerrt_lib("darwin/libclang_rt.xray-fdr_osx.a"        "libldc_rt.xray-fdr.a"       FALSE)
+        copy_compilerrt_lib("darwin/libclang_rt.xray-profiling_osx.a"  "libldc_rt.xray-profiling.a" FALSE)
     elseif(UNIX)
         set(LDC_INSTALL_LLVM_RUNTIME_LIBS_OS   "linux"  CACHE STRING "Non-Mac Posix: OS used as directory name for the compiler-rt source libraries, e.g., 'freebsd'.")
         set(LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH "x86_64" CACHE STRING "Non-Mac Posix: architecture used as libname suffix for the compiler-rt source libraries, e.g., 'aarch64'.")
@@ -823,11 +813,9 @@ if (LDC_INSTALL_LLVM_RUNTIME_LIBS)
         copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.profile${compilerrt_suffix}.a"    "libldc_rt.profile.a"  FALSE)
         copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray${compilerrt_suffix}.a"       "libldc_rt.xray.a"     FALSE)
         copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.fuzzer${compilerrt_suffix}.a"     "libldc_rt.fuzzer.a"   FALSE)
-        if(NOT (LDC_LLVM_VER LESS 700))
-            copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray-basic${compilerrt_suffix}.a"      "libldc_rt.xray-basic.a"     FALSE)
-            copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray-fdr${compilerrt_suffix}.a"        "libldc_rt.xray-fdr.a"       FALSE)
-            copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray-profiling${compilerrt_suffix}.a"  "libldc_rt.xray-profiling.a" FALSE)
-        endif()
+        copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray-basic${compilerrt_suffix}.a"      "libldc_rt.xray-basic.a"     FALSE)
+        copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray-fdr${compilerrt_suffix}.a"        "libldc_rt.xray-fdr.a"       FALSE)
+        copy_compilerrt_lib("${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS}/libclang_rt.xray-profiling${compilerrt_suffix}.a"  "libldc_rt.xray-profiling.a" FALSE)
     elseif(WIN32)
         set(compilerrt_arch_suffix "x86_64")
         if(CMAKE_SIZEOF_VOID_P EQUAL 4)

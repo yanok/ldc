@@ -18,15 +18,14 @@ import core.stdc.errno : errno;
 import core.stdc.stdio : fprintf, remove, rename, stderr;
 import core.stdc.stdlib : exit;
 import core.stdc.string : strerror;
-version (Windows) // IN_LLVM: ltsmaster...
-{
-    import core.sys.windows.winbase;
-    import core.sys.windows.winnt;
-}
+import core.sys.windows.winbase;
+import core.sys.windows.winnt;
 import core.sys.posix.fcntl;
 import core.sys.posix.unistd;
 
 import dmd.common.string;
+
+nothrow:
 
 /**
 Encapsulated management of a memory-mapped file.
@@ -54,6 +53,8 @@ struct FileMapping(Datum)
     /// Name of underlying file, zero-terminated
     private const(char)* name;
     // state }
+
+  nothrow:
 
     /**
     Open `filename` and map it in memory. If `Datum` is `const`, opens for

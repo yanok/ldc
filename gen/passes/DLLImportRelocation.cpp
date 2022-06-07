@@ -16,9 +16,6 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "dllimport-relocation"
-#if LDC_LLVM_VER < 700
-#define LLVM_DEBUG DEBUG
-#endif
 
 #include "gen/passes/Passes.h"
 #include "llvm/ADT/Statistic.h"
@@ -37,12 +34,19 @@ STATISTIC(NumRelocations,
           "Total number of patched references to dllimported globals");
 
 namespace {
-struct LLVM_LIBRARY_VISIBILITY DLLImportRelocation : public ModulePass {
-  static char ID; // Pass identification, replacement for typeid
-  DLLImportRelocation() : ModulePass(ID) {}
+struct LLVM_LIBRARY_VISIBILITY DLLImportRelocation {
 
   // Returns true if the module has been changed.
-  bool runOnModule(Module &m) override;
+  bool run(Module &m);
+};
+
+struct LLVM_LIBRARY_VISIBILITY DLLImportRelocationLegacyPass : public ModulePass {
+  static char ID; // Pass identification, replacement for typeid
+  DLLImportRelocationLegacyPass() : ModulePass(ID) {}
+
+  DLLImportRelocation pass;
+  // Returns true if the module has been changed.
+  bool runOnModule(Module &m) override { return pass.run(m); };
 };
 
 struct Impl {
@@ -190,11 +194,7 @@ private:
         address = b.CreateConstInBoundsGEP2_32(t, address, 0,
                                                static_cast<unsigned>(i));
       } else {
-        address = b.CreateConstInBoundsGEP2_64(
-#if LDC_LLVM_VER >= 800
-            t,
-#endif
-            address, 0, i);
+        address = b.CreateConstInBoundsGEP2_64(t, address, 0, i);
       }
     }
 
@@ -224,13 +224,9 @@ private:
     auto ifbb = BasicBlock::Create(m.getContext(), "if", ctor);
     auto endbb = BasicBlock::Create(m.getContext(), "endif", ctor);
 
-    auto isStillNull = b.CreateICmp(CmpInst::ICMP_EQ,
-                                    b.CreateLoad(
-#if LDC_LLVM_VER >= 800
-                                        t,
-#endif
-                                        address, false),
-                                    Constant::getNullValue(t));
+    auto isStillNull =
+        b.CreateICmp(CmpInst::ICMP_EQ, b.CreateLoad(t, address, false),
+                     Constant::getNullValue(t));
     b.CreateCondBr(isStillNull, ifbb, endbb);
 
     b.SetInsertPoint(ifbb);
@@ -262,16 +258,16 @@ private:
 };
 }
 
-char DLLImportRelocation::ID = 0;
-static RegisterPass<DLLImportRelocation>
+char DLLImportRelocationLegacyPass::ID = 0;
+static RegisterPass<DLLImportRelocationLegacyPass>
     X("dllimport-relocation",
       "Patch references to dllimported globals in static initializers");
 
 ModulePass *createDLLImportRelocationPass() {
-  return new DLLImportRelocation();
+  return new DLLImportRelocationLegacyPass();
 }
 
-bool DLLImportRelocation::runOnModule(Module &m) {
+bool DLLImportRelocation::run(Module &m) {
   Impl impl(m);
   bool hasChanged = false;
 

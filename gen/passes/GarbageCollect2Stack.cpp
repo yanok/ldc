@@ -38,9 +38,6 @@
 #include <algorithm>
 
 #define DEBUG_TYPE "dgc2stack"
-#if LDC_LLVM_VER < 700
-#define LLVM_DEBUG DEBUG
-#endif
 
 using namespace llvm;
 
@@ -372,7 +369,7 @@ public:
 namespace {
 /// This pass replaces GC calls with alloca's
 ///
-class LLVM_LIBRARY_VISIBILITY GarbageCollect2Stack : public FunctionPass {
+struct GarbageCollect2Stack {
   StringMap<FunctionInfo *> KnownFunctions;
   Module *M;
 
@@ -382,35 +379,52 @@ class LLVM_LIBRARY_VISIBILITY GarbageCollect2Stack : public FunctionPass {
   AllocClassFI AllocClass;
   UntypedMemoryFI AllocMemory;
 
-public:
-  static char ID; // Pass identification
   GarbageCollect2Stack();
 
+  bool run(llvm::Function& function,
+           DominatorTree &DT,
+           CallGraphWrapperPass *CGPass);
+
+  static StringRef getPassName() { return "GarbageCollect2Stack"; }
+};
+
+class LLVM_LIBRARY_VISIBILITY GarbageCollect2StackLegacyPass : public FunctionPass {
+
   bool doInitialization(Module &M) override {
-    this->M = &M;
+    this->pass.M = &M;
     return false;
   }
-
-  bool runOnFunction(Function &F) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addPreserved<CallGraphWrapperPass>();
   }
+  bool runOnFunction(Function &F) override {
+    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    CallGraphWrapperPass *CGPass = getAnalysisIfAvailable<CallGraphWrapperPass>();
+    return pass.run(F, DT, CGPass);
+  }
+  StringRef getPassName() const override { return GarbageCollect2Stack::getPassName(); }
+
+public:
+  GarbageCollect2StackLegacyPass() :
+      FunctionPass(ID), pass() {}
+  static char ID; // Pass identification
+  GarbageCollect2Stack pass;
 };
-char GarbageCollect2Stack::ID = 0;
+char GarbageCollect2StackLegacyPass::ID = 0;
 } // end anonymous namespace.
 
-static RegisterPass<GarbageCollect2Stack>
+static RegisterPass<GarbageCollect2StackLegacyPass>
     X("dgc2stack", "Promote (GC'ed) heap allocations to stack");
 
 // Public interface to the pass.
 FunctionPass *createGarbageCollect2Stack() {
-  return new GarbageCollect2Stack();
+  return new GarbageCollect2StackLegacyPass();
 }
 
 GarbageCollect2Stack::GarbageCollect2Stack()
-    : FunctionPass(ID), AllocMemoryT(ReturnType::Pointer, 0),
+    : AllocMemoryT(ReturnType::Pointer, 0),
       NewArrayU(ReturnType::Array, 0, 1, false),
       NewArrayT(ReturnType::Array, 0, 1, true), AllocMemory(0) {
   KnownFunctions["_d_allocmemoryT"] = &AllocMemoryT;
@@ -431,13 +445,7 @@ static void RemoveCall(LLCallBasePtr CB, const Analysis &A) {
 
   // Remove the runtime call.
   if (A.CGNode) {
-#if LDC_LLVM_VER >= 900
     A.CGNode->removeCallEdgeFor(*CB);
-#elif LDC_LLVM_VER >= 800
-    A.CGNode->removeCallEdgeFor(llvm::CallSite(CB));
-#else
-    A.CGNode->removeCallEdgeFor(CB);
-#endif
   }
   static_cast<Instruction *>(CB)->eraseFromParent();
 }
@@ -451,12 +459,10 @@ isSafeToStackAllocate(BasicBlock::iterator Alloc, Value *V, DominatorTree &DT,
 
 /// runOnFunction - Top level algorithm.
 ///
-bool GarbageCollect2Stack::runOnFunction(Function &F) {
+bool GarbageCollect2Stack::run(Function &F, DominatorTree &DT, CallGraphWrapperPass *CGPass) {
   LLVM_DEBUG(errs() << "\nRunning -dgc2stack on function " << F.getName() << '\n');
 
   const DataLayout &DL = F.getParent()->getDataLayout();
-  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  CallGraphWrapperPass *CGPass = getAnalysisIfAvailable<CallGraphWrapperPass>();
   CallGraph *CG = CGPass ? &CGPass->getCallGraph() : nullptr;
   CallGraphNode *CGNode = CG ? (*CG)[&F] : nullptr;
 
@@ -473,17 +479,10 @@ bool GarbageCollect2Stack::runOnFunction(Function &F) {
 
       // Ignore non-calls.
       Instruction *Inst = &(*(I++));
-#if LDC_LLVM_VER >= 800
       auto CB = dyn_cast<CallBase>(Inst);
       if (!CB) {
         continue;
       }
-#else
-      LLCallBasePtr CB(Inst);
-      if (!CB->getInstruction()) {
-        continue;
-      }
-#endif
 
       // Ignore indirect calls and calls to non-external functions.
       Function *Callee = CB->getCalledFunction();
@@ -799,11 +798,7 @@ bool isSafeToStackAllocate(BasicBlock::iterator Alloc, Value *V,
     switch (I->getOpcode()) {
     case Instruction::Call:
     case Instruction::Invoke: {
-#if LDC_LLVM_VER >= 800
       auto CB = llvm::cast<CallBase>(I);
-#else
-      LLCallBasePtr CB(I);
-#endif
       // Not captured if the callee is readonly, doesn't return a copy through
       // its return value and doesn't unwind (a readonly function can leak bits
       // by throwing an exception or not depending on the input value).

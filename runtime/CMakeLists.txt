@@ -11,8 +11,8 @@ if(NOT LDC_EXE)
     if(NOT LDC_EXE_FULL)
         message(FATAL_ERROR "Please define the path to the LDC executable via -DLDC_EXE_FULL=...")
     endif()
-    if(NOT DEFINED D_VERSION OR NOT DEFINED DMDFE_MINOR_VERSION OR NOT DEFINED DMDFE_PATCH_VERSION)
-        message(FATAL_ERROR "Please define the CMake variables D_VERSION, DMDFE_MINOR_VERSION and DMDFE_PATCH_VERSION.")
+    if(NOT DEFINED DMDFE_MINOR_VERSION OR NOT DEFINED DMDFE_PATCH_VERSION)
+        message(FATAL_ERROR "Please define the CMake variables DMDFE_MINOR_VERSION and DMDFE_PATCH_VERSION.")
     endif()
 
     # Helper function
@@ -30,8 +30,6 @@ endif()
 #
 # Main configuration.
 #
-
-set(DMDFE_VERSION         ${D_VERSION}.${DMDFE_MINOR_VERSION}.${DMDFE_PATCH_VERSION})
 
 set(MULTILIB              OFF                                 CACHE BOOL   "Build both 32/64 bit runtime libraries")
 set(BUILD_LTO_LIBS        OFF                                 CACHE BOOL   "Also build the runtime as LLVM bitcode libraries for LTO")
@@ -264,9 +262,7 @@ if(LDC_WITH_LLD)
     set(WASM_DEFAULT_LDC_SWITCHES "${WASM_DEFAULT_LDC_SWITCHES}\n        \"-link-internally\",")
 endif()
 # LLD 8+ requires (new) `--export-dynamic` for WebAssembly (https://github.com/ldc-developers/ldc/issues/3023).
-if(NOT (LDC_LLVM_VER LESS 800))
-    set(WASM_DEFAULT_LDC_SWITCHES "${WASM_DEFAULT_LDC_SWITCHES}\n        \"-L--export-dynamic\",")
-endif()
+set(WASM_DEFAULT_LDC_SWITCHES "${WASM_DEFAULT_LDC_SWITCHES}\n        \"-L--export-dynamic\",")
 
 # Directory filled with auto-generated import files
 set(LDC_BUILD_IMPORT_DIR "${PROJECT_BINARY_DIR}/import")
@@ -525,40 +521,7 @@ macro(compile_phobos2 d_flags lib_suffix path_suffix emit_bc all_at_once single_
     else()
         set(single_obj_name "")
     endif()
-
-    # Special case for Windows and emit_bc=ON:
-    # LLVM before v9.0 doesn't support naked DMD-style asm when generating bitcode.
-    # For 1 (Win64) / 3 (Win32) remaining modules, compile separately without generating
-    # the bitcode file (and adding the binary object file to outlist_bc instead).
-    set(phobos_src_files ${PHOBOS2_D})
-    if(${emit_bc} AND (LDC_LLVM_VER LESS 900 AND "${TARGET_SYSTEM}" MATCHES "Windows"))
-        set(naked_asm_src_files "${PHOBOS2_DIR}/std/internal/digest/sha_SSSE3.d")
-        if(CMAKE_SIZEOF_VOID_P EQUAL 4)
-            list(APPEND naked_asm_src_files
-                "${PHOBOS2_DIR}/std/internal/math/biguintx86.d"
-                "${PHOBOS2_DIR}/std/internal/math/biguintcore.d"
-            )
-        endif()
-
-        list(REMOVE_ITEM phobos_src_files ${naked_asm_src_files})
-
-        set(naked_asm_o "")
-        dc("${naked_asm_src_files}"
-           "${PHOBOS2_DIR}"
-           "-conf=;${d_flags};${PHOBOS2_EXTRA_FLAGS};-I${RUNTIME_DIR}/src;-I${PHOBOS2_DIR}"
-           "${PROJECT_BINARY_DIR}/objects${target_suffix}"
-           "OFF" # emit_bc
-           "${all_at_once}"
-           ""    # single_obj_name
-           naked_asm_o
-           naked_asm_o
-        )
-
-        list(APPEND ${outlist_o} ${naked_asm_o})
-        list(APPEND ${outlist_bc} ${naked_asm_o})
-    endif()
-
-    dc("${phobos_src_files}"
+    dc("${PHOBOS2_D}"
        "${PHOBOS2_DIR}"
        "-conf=;${d_flags};${PHOBOS2_EXTRA_FLAGS};-I${RUNTIME_DIR}/src;-I${PHOBOS2_DIR}"
        "${PROJECT_BINARY_DIR}/objects${target_suffix}"
@@ -594,8 +557,8 @@ function(set_common_library_properties target name output_dir c_flags ld_flags i
         COMPILE_DEFINITIONS         "LDC=1"
         COMPILE_FLAGS               "${c_flags}"
         LINK_FLAGS                  "${full_ldflags}"
-        VERSION                     ${DMDFE_VERSION}
-        SOVERSION                   ${DMDFE_PATCH_VERSION}
+        VERSION                     ${DMDFE_MINOR_VERSION}.${DMDFE_PATCH_VERSION}
+        SOVERSION                   ${DMDFE_MINOR_VERSION}
         LINKER_LANGUAGE             C
         MACOSX_RPATH                ON
     )
@@ -822,139 +785,55 @@ include(jit-rt/DefineBuildJitRT.cmake)
 # Set up build and install targets
 #
 
-if(MULTILIB AND "${TARGET_SYSTEM}" MATCHES "APPLE")
-    # On OS X, build "fat" libraries containing code for both architectures.
-
-    # Some suffix for the target/file names of the host-native arch so
-    # that they don't collide with the final combined ones.
-    set(hostsuffix "${LIB_SUFFIX}${HOST_BITNESS}")
-
-    set(libtargets)
-    build_runtime_variants("" "${RT_CFLAGS}" "${LD_FLAGS}" "${hostsuffix}" libtargets)
-    build_runtime_variants("-m${MULTILIB_SUFFIX}" "-m${MULTILIB_SUFFIX} ${RT_CFLAGS}" "-m${MULTILIB_SUFFIX} ${LD_FLAGS}" "${MULTILIB_SUFFIX}" libtargets)
-
-    # Only build the host version of the jit runtime due to LLVM dependency.
-    set(libtargets_jit)
-    build_jit_runtime("${D_FLAGS};${D_FLAGS_RELEASE}" "${RT_CFLAGS}" "${LD_FLAGS}" "${LIB_SUFFIX}" libtargets_jit)
-    # Install separately; also manually copy libldc-jit-rt.a to prevent ranlib from
-    # potentially corrupting the file during installation.
-    if(LDC_DYNAMIC_COMPILE)
-        install(FILES       $<TARGET_FILE:ldc-jit-rt>
-                DESTINATION ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
-        list(REMOVE_ITEM libtargets_jit ldc-jit-rt)
-    endif()
-    install(TARGETS     ${libtargets_jit}
-            DESTINATION ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
-
-    # KLUDGE: Cannot use `$<TARGET_LINKER_FILE:target>` in custom command.
-    # Set up the list of generated libs (without 'lib' prefix) to be merged manually.
-    set(libs_to_merge)
-    if(NOT ${BUILD_SHARED_LIBS} STREQUAL "ON")
-        list(APPEND libs_to_merge druntime-ldc.a druntime-ldc-debug.a
-                                  phobos2-ldc.a  phobos2-ldc-debug.a
-        )
-        if(BUILD_LTO_LIBS)
-            list(APPEND libs_to_merge druntime-ldc-lto.a phobos2-ldc-lto.a)
-        endif()
-    endif()
-    if(NOT ${BUILD_SHARED_LIBS} STREQUAL "OFF")
-        set(suffix ${SHARED_LIB_SUFFIX}.dylib)
-        list(APPEND libs_to_merge druntime-ldc${suffix} druntime-ldc-debug${suffix}
-                                  phobos2-ldc${suffix}  phobos2-ldc-debug${suffix}
-        )
-    endif()
-
-    foreach(lib ${libs_to_merge})
-        set(target_name "")
-        set(lib_extension "")
-        get_filename_component(target_name ${lib} NAME_WE)
-        get_filename_component(lib_extension ${lib} EXT)
-
-        set(host_path  ${CMAKE_BINARY_DIR}/lib${hostsuffix}/lib${lib})
-        set(multi_path ${CMAKE_BINARY_DIR}/lib${MULTILIB_SUFFIX}/lib${lib})
-
-        # Create (& later install) symbolic links for merged dylibs.
-        set(final_files_to_install)
-        if(${lib_extension} STREQUAL ".dylib")
-            set(final_path     ${CMAKE_BINARY_DIR}/lib${LIB_SUFFIX}/lib${target_name}.${DMDFE_VERSION}.dylib)
-            set(dylib_symlink1 ${CMAKE_BINARY_DIR}/lib${LIB_SUFFIX}/lib${target_name}.${DMDFE_PATCH_VERSION}.dylib)
-            set(dylib_symlink2 ${CMAKE_BINARY_DIR}/lib${LIB_SUFFIX}/lib${target_name}.dylib)
-            set(final_files_to_install ${final_path} ${dylib_symlink1} ${dylib_symlink2})
-            add_custom_command(
-                OUTPUT  ${final_files_to_install}
-                COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/lib${LIB_SUFFIX}
-                COMMAND lipo ${multi_path} ${host_path} -create -output ${final_path}
-                COMMAND ln -s lib${target_name}.${DMDFE_VERSION}.dylib ${dylib_symlink1}
-                COMMAND ln -s lib${target_name}.${DMDFE_PATCH_VERSION}.dylib ${dylib_symlink2}
-                DEPENDS ${libtargets}
-            )
-        else()
-            set(final_path ${CMAKE_BINARY_DIR}/lib${LIB_SUFFIX}/lib${lib})
-            set(final_files_to_install ${final_path})
-            add_custom_command(
-                OUTPUT  ${final_path}
-                COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/lib${LIB_SUFFIX}
-                COMMAND lipo ${multi_path} ${host_path} -create -output ${final_path}
-                DEPENDS ${libtargets}
-            )
-        endif()
-
-        add_custom_target(${target_name} ALL DEPENDS ${final_files_to_install})
-
-        install(FILES       ${final_files_to_install}
-                DESTINATION ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
-    endforeach()
-else()
-    set(libs_to_install)
-    # build host versions
-    build_runtime_variants("" "${RT_CFLAGS}" "${LD_FLAGS}" "${LIB_SUFFIX}" libs_to_install)
-    if(MULTILIB)
-        # build multi versions
-        build_runtime_variants("-m${MULTILIB_SUFFIX}" "-m${MULTILIB_SUFFIX} ${RT_CFLAGS}" "-m${MULTILIB_SUFFIX} ${LD_FLAGS}" "${MULTILIB_SUFFIX}" libs_to_install)
-    endif()
-
-    # Only build the host version of the jit runtime due to LLVM dependency.
-    build_jit_runtime("${D_FLAGS};${D_FLAGS_RELEASE}" "${RT_CFLAGS}" "${LD_FLAGS}" "${LIB_SUFFIX}" libs_to_install)
-
-    # Add the (static- and release-only) bitcode libraries.
-    if(BUILD_LTO_LIBS AND (NOT ${BUILD_SHARED_LIBS} STREQUAL "ON"))
-        list(APPEND libs_to_install druntime-ldc-lto phobos2-ldc-lto)
-    endif()
-
-    foreach(libname ${libs_to_install})
-        set(target_type)
-        get_target_property(target_type ${libname} TYPE)
-
-        set(destination_dir ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
-        if(${libname} MATCHES "_${MULTILIB_SUFFIX}$")
-            set(destination_dir ${CMAKE_INSTALL_PREFIX}/lib${MULTILIB_SUFFIX})
-        endif()
-
-        # On Mac, manually copy static libraries to prevent ranlib from
-        # potentially corrupting the file during installation.
-        # See https://bugs.llvm.org/show_bug.cgi?id=34808.
-        if("${TARGET_SYSTEM}" MATCHES "APPLE" AND "${target_type}" STREQUAL "STATIC_LIBRARY")
-            install(FILES       $<TARGET_FILE:${libname}>
-                    DESTINATION ${destination_dir})
-        # Windows DLLs:
-        elseif("${TARGET_SYSTEM}" MATCHES "MSVC" AND "${target_type}" STREQUAL "SHARED_LIBRARY")
-            # import .lib in regular lib dir
-            install(FILES       $<TARGET_LINKER_FILE:${libname}>
-                    DESTINATION ${destination_dir})
-            # .dll in bin dir
-            install(FILES       $<TARGET_FILE:${libname}>
-                    DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
-            # .pdb of debug DLLs in bin dir
-            if(${libname} MATCHES "-debug")
-                install(FILES       $<TARGET_PDB_FILE:${libname}>
-                        DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
-            endif()
-        else()
-            install(TARGETS     ${libname}
-                    DESTINATION ${destination_dir})
-        endif()
-    endforeach()
+set(libs_to_install)
+# build host versions
+build_runtime_variants("" "${RT_CFLAGS}" "${LD_FLAGS}" "${LIB_SUFFIX}" libs_to_install)
+if(MULTILIB)
+    # build multi versions
+    build_runtime_variants("-m${MULTILIB_SUFFIX}" "-m${MULTILIB_SUFFIX} ${RT_CFLAGS}" "-m${MULTILIB_SUFFIX} ${LD_FLAGS}" "${MULTILIB_SUFFIX}" libs_to_install)
 endif()
+
+# Only build the host version of the jit runtime due to LLVM dependency.
+build_jit_runtime("${D_FLAGS};${D_FLAGS_RELEASE}" "${RT_CFLAGS}" "${LD_FLAGS}" "${LIB_SUFFIX}" libs_to_install)
+
+# Add the (static- and release-only) bitcode libraries.
+if(BUILD_LTO_LIBS AND (NOT ${BUILD_SHARED_LIBS} STREQUAL "ON"))
+    list(APPEND libs_to_install druntime-ldc-lto phobos2-ldc-lto)
+endif()
+
+foreach(libname ${libs_to_install})
+    set(target_type)
+    get_target_property(target_type ${libname} TYPE)
+
+    set(destination_dir ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
+    if(${libname} MATCHES "_${MULTILIB_SUFFIX}$")
+        set(destination_dir ${CMAKE_INSTALL_PREFIX}/lib${MULTILIB_SUFFIX})
+    endif()
+
+    # On Mac, manually copy static libraries to prevent ranlib from
+    # potentially corrupting the file during installation.
+    # See https://bugs.llvm.org/show_bug.cgi?id=34808.
+    if("${TARGET_SYSTEM}" MATCHES "APPLE" AND "${target_type}" STREQUAL "STATIC_LIBRARY")
+        install(FILES       $<TARGET_FILE:${libname}>
+                DESTINATION ${destination_dir})
+    # Windows DLLs:
+    elseif("${TARGET_SYSTEM}" MATCHES "MSVC" AND "${target_type}" STREQUAL "SHARED_LIBRARY")
+        # import .lib in regular lib dir
+        install(FILES       $<TARGET_LINKER_FILE:${libname}>
+                DESTINATION ${destination_dir})
+        # .dll in bin dir
+        install(FILES       $<TARGET_FILE:${libname}>
+                DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+        # .pdb of debug DLLs in bin dir
+        if(${libname} MATCHES "-debug")
+            install(FILES       $<TARGET_PDB_FILE:${libname}>
+                    DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+        endif()
+    else()
+        install(TARGETS     ${libname}
+                DESTINATION ${destination_dir})
+    endif()
+endforeach()
 
 set(DRUNTIME_PACKAGES core etc ldc)
 
