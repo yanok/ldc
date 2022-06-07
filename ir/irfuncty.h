@@ -76,7 +76,8 @@ struct IrFuncTyArg {
    *  @param byref Initial value for the 'byref' field. If true the initial
    *               LLVM Type will be of DtoType(type->pointerTo()), instead
    *               of just DtoType(type) */
-  IrFuncTyArg(Type *t, bool byref, llvm::AttrBuilder attrs = {});
+  IrFuncTyArg(Type *t, bool byref);
+  IrFuncTyArg(Type *t, bool byref, llvm::AttrBuilder);
   IrFuncTyArg(const IrFuncTyArg &) = delete;
 
   ~IrFuncTyArg();
@@ -104,9 +105,6 @@ struct IrFuncTy {
   //    typedef llvm::SmallVector<IrFuncTyArg*, 4> ArgList;
   using ArgList = std::vector<IrFuncTyArg *>;
   ArgList args;
-
-  // range of normal parameters to reverse
-  bool reverseParams = false;
 
   // reserved for ABI-specific data
   void *tag = nullptr;

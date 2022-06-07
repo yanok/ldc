@@ -689,7 +689,14 @@ version (IN_LLVM)
     }
 
     if (params.addMain && !global.hasMainFunction)
-        modules.push(moduleWithEmptyMain());
+    {
+        auto mainModule = moduleWithEmptyMain();
+        modules.push(mainModule);
+        if (IN_LLVM && params.oneobj && modules.length == 1)
+            params.objfiles.insert(0, mainModule.objfile.toChars()); // must be *first* objfile for LDC's oneobj
+        else if (!params.oneobj || modules.length == 1)
+            params.objfiles.push(mainModule.objfile.toChars());
+    }
 
 version (IN_LLVM)
 {

@@ -96,11 +96,19 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
   } else {
     Type *rt = f->next;
     const bool byref = f->isref() && rt->toBasetype()->ty != TY::Tvoid;
+#if LDC_LLVM_VER >= 1400
+      llvm::AttrBuilder attrs(getGlobalContext());
+#else
     llvm::AttrBuilder attrs;
+#endif
 
     if (abi->returnInArg(f, fd && fd->needThis())) {
       // sret return
+#if LDC_LLVM_VER >= 1400
+      llvm::AttrBuilder sretAttrs(getGlobalContext());
+#else
       llvm::AttrBuilder sretAttrs;
+#endif
 #if LDC_LLVM_VER >= 1200
       sretAttrs.addStructRetAttr(DtoType(rt));
 #else
@@ -109,32 +117,40 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
       sretAttrs.addAttribute(LLAttribute::NoAlias);
       if (unsigned alignment = DtoAlignment(rt))
         sretAttrs.addAlignmentAttr(alignment);
-      newIrFty.arg_sret = new IrFuncTyArg(rt, true, sretAttrs);
+      newIrFty.arg_sret = new IrFuncTyArg(rt, true, std::move(sretAttrs));
       rt = Type::tvoid;
       ++nextLLArgIdx;
     } else {
       // sext/zext return
       DtoAddExtendAttr(byref ? rt->pointerTo() : rt, attrs);
     }
-    newIrFty.ret = new IrFuncTyArg(rt, byref, attrs);
+    newIrFty.ret = new IrFuncTyArg(rt, byref, std::move(attrs));
   }
   ++nextLLArgIdx;
 
   if (thistype) {
     // Add the this pointer for member functions
+#if LDC_LLVM_VER >= 1400
+    llvm::AttrBuilder attrs(getGlobalContext());
+#else
     llvm::AttrBuilder attrs;
+#endif
     attrs.addAttribute(LLAttribute::NonNull);
     if (fd && fd->isCtorDeclaration()) {
       attrs.addAttribute(LLAttribute::Returned);
     }
     newIrFty.arg_this = new IrFuncTyArg(
-        thistype, thistype->toBasetype()->ty == TY::Tstruct, attrs);
+        thistype, thistype->toBasetype()->ty == TY::Tstruct, std::move(attrs));
     ++nextLLArgIdx;
   } else if (nesttype) {
     // Add the context pointer for nested functions
+#if LDC_LLVM_VER >= 1400
+    llvm::AttrBuilder attrs(getGlobalContext());
+#else
     llvm::AttrBuilder attrs;
+#endif
     attrs.addAttribute(LLAttribute::NonNull);
-    newIrFty.arg_nest = new IrFuncTyArg(nesttype, false, attrs);
+    newIrFty.arg_nest = new IrFuncTyArg(nesttype, false, std::move(attrs));
     ++nextLLArgIdx;
   }
 
@@ -179,7 +195,11 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
     bool passPointer = arg->storageClass & (STCref | STCout);
 
     Type *loweredDType = arg->type;
+#if LDC_LLVM_VER >= 1400
+    llvm::AttrBuilder attrs(getGlobalContext());
+#else
     llvm::AttrBuilder attrs;
+#endif
     if (arg->storageClass & STClazy) {
       // Lazy arguments are lowered to delegates.
       Logger::println("lazy param");
@@ -217,12 +237,10 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
       }
     }
 
-    newIrFty.args.push_back(new IrFuncTyArg(loweredDType, passPointer, attrs));
+    newIrFty.args.push_back(new IrFuncTyArg(loweredDType, passPointer, std::move(attrs)));
     newIrFty.args.back()->parametersIdx = i;
     ++nextLLArgIdx;
   }
-
-  newIrFty.reverseParams = abi->reverseExplicitParams(f);
 
   // let the ABI rewrite the types as necessary
   abi->rewriteFunctionType(newIrFty);
@@ -254,15 +272,9 @@ llvm::FunctionType *DtoFunctionType(Type *type, IrFuncTy &irFty, Type *thistype,
     std::swap(argtypes[0], argtypes[1]);
   }
 
-  const size_t firstExplicitArg = argtypes.size();
   const size_t numExplicitLLArgs = irFty.args.size();
   for (size_t i = 0; i < numExplicitLLArgs; i++) {
     argtypes.push_back(irFty.args[i]->ltype);
-  }
-
-  // reverse params?
-  if (irFty.reverseParams && numExplicitLLArgs > 1) {
-    std::reverse(argtypes.begin() + firstExplicitArg, argtypes.end());
   }
 
   irFty.funcType =
@@ -791,9 +803,7 @@ void DtoDeclareFunction(FuncDeclaration *fdecl, const bool willDefine) {
 
   unsigned int k = 0;
   for (; iarg != func->arg_end(); ++iarg) {
-    size_t llExplicitIdx = irFty.reverseParams ? irFty.args.size() - k - 1 : k;
-    ++k;
-    IrFuncTyArg *arg = irFty.args[llExplicitIdx];
+    IrFuncTyArg *arg = irFty.args[k++];
 
     if (!fdecl->parameters || arg->parametersIdx >= fdecl->parameters->length) {
       iarg->setName("unnamed");

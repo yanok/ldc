@@ -191,14 +191,14 @@ void applyAttrAllocSize(StructLiteralExp *sle, IrFunction *irFunc) {
   unsigned offset = llvmNumParams - numUserParams;
 
   // Calculate the param indices for the function as defined in LLVM IR
-  auto llvmSizeIdx =
-      irFunc->irFty.reverseParams ? numUserParams - sizeArgIdx - 1 : sizeArgIdx;
-  auto llvmNumIdx =
-      irFunc->irFty.reverseParams ? numUserParams - numArgIdx - 1 : numArgIdx;
-  llvmSizeIdx += offset;
-  llvmNumIdx += offset;
+  const auto llvmSizeIdx = sizeArgIdx + offset;
+  const auto llvmNumIdx = numArgIdx + offset;
 
+#if LDC_LLVM_VER >= 1400
+  llvm::AttrBuilder builder(getGlobalContext());
+#else
   llvm::AttrBuilder builder;
+#endif
   if (numArgIdx >= 0) {
     builder.addAllocSizeAttr(llvmSizeIdx, llvmNumIdx);
   } else {
@@ -429,7 +429,11 @@ void applyFuncDeclUDAs(FuncDeclaration *decl, IrFunction *irFunc) {
       if (ident == Id::udaAllocSize) {
         applyAttrAllocSize(sle, irFunc);
       } else if (ident == Id::udaLLVMAttr) {
+#if LDC_LLVM_VER >= 1400
+        llvm::AttrBuilder attrs(getGlobalContext());
+#else
         llvm::AttrBuilder attrs;
+#endif
         applyAttrLLVMAttr(sle, attrs);
 #if LDC_LLVM_VER >= 1400
         func->addFnAttrs(attrs);

@@ -39,7 +39,7 @@ void copyFnAttributes(llvm::Function *wannabe, llvm::Function *idol) {
   auto attrSet = idol->getAttributes();
 #if LDC_LLVM_VER >= 1400
   auto fnAttrSet = attrSet.getFnAttrs();
-  wannabe->addFnAttrs(fnAttrSet);
+  wannabe->addFnAttrs(llvm::AttrBuilder(getGlobalContext(), fnAttrSet));
 #else
   auto fnAttrSet = attrSet.getFnAttributes();
   wannabe->addAttributes(LLAttributeList::FunctionIndex, fnAttrSet);

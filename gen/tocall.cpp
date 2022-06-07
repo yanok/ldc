@@ -98,7 +98,7 @@ LLFunctionType *DtoExtractFunctionType(LLType *type) {
     return fty;
   }
   if (LLPointerType *pty = isaPointer(type)) {
-    if (LLFunctionType *fty = isaFunction(pty->getElementType())) {
+    if (LLFunctionType *fty = isaFunction(pty->getPointerElementType())) {
       return fty;
     }
   }
@@ -131,7 +131,11 @@ static void addExplicitArguments(std::vector<LLValue *> &args, AttrSet &attrs,
     Type *argType = argexps[i]->type;
     bool passByVal = gABI->passByVal(irFty.type, argType);
 
+#if LDC_LLVM_VER >= 1400
+    llvm::AttrBuilder initialAttrs(getGlobalContext());
+#else
     llvm::AttrBuilder initialAttrs;
+#endif
     if (passByVal) {
 #if LDC_LLVM_VER >= 1200
       initialAttrs.addByValAttr(DtoType(argType));
@@ -144,7 +148,7 @@ static void addExplicitArguments(std::vector<LLValue *> &args, AttrSet &attrs,
       DtoAddExtendAttr(argType, initialAttrs);
     }
 
-    optionalIrArgs.push_back(new IrFuncTyArg(argType, passByVal, initialAttrs));
+    optionalIrArgs.push_back(new IrFuncTyArg(argType, passByVal, std::move(initialAttrs)));
     optionalIrArgs.back()->parametersIdx = i;
   }
 
@@ -155,8 +159,6 @@ static void addExplicitArguments(std::vector<LLValue *> &args, AttrSet &attrs,
   args.resize(implicitLLArgCount + explicitLLArgCount,
               static_cast<llvm::Value *>(nullptr));
 
-  // Iterate the explicit arguments from left to right in the D source,
-  // which is the reverse of the LLVM order if irFty.reverseParams is true.
   size_t dArgIndex = 0;
   for (size_t i = 0; i < explicitLLArgCount; ++i, ++dArgIndex) {
     const bool isVararg = (i >= formalLLArgCount);
@@ -199,9 +201,7 @@ static void addExplicitArguments(std::vector<LLValue *> &args, AttrSet &attrs,
     llvm::Value *llVal = irFty.putArg(*irArg, dval, isLValueExp,
                                       dArgIndex == explicitDArgCount - 1);
 
-    const size_t llArgIdx =
-        implicitLLArgCount +
-        (irFty.reverseParams ? explicitLLArgCount - i - 1 : i);
+    const size_t llArgIdx = implicitLLArgCount + i;
     llvm::Type *const paramType =
         (isVararg ? nullptr : calleeType->getParamType(llArgIdx));
 
@@ -1053,9 +1053,9 @@ DValue *DtoCallFunction(const Loc &loc, Type *resulttype, DValue *fnval,
   }
   // merge in function attributes set in callOrInvoke
 #if LDC_LLVM_VER >= 1400
+  auto attrbuildattribs = call->getAttributes().getFnAttrs();
   attrlist = attrlist.addFnAttributes(
-      gIR->context(),
-      llvm::AttrBuilder(call->getAttributes(), LLAttributeList::FunctionIndex));
+      gIR->context(), llvm::AttrBuilder(gIR->context(), attrbuildattribs));
 #else
   attrlist = attrlist.addAttributes(
       gIR->context(), LLAttributeList::FunctionIndex,

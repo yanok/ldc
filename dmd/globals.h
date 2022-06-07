@@ -284,6 +284,7 @@ struct Param
 
     const llvm::Triple *targetTriple;
     bool isUClibcEnvironment; // not directly supported by LLVM
+    bool isNewlibEnvironment; // not directly supported by LLVM
 
     // Codegen cl options
     bool disableRedZone;
@@ -332,6 +333,8 @@ const DString dd_ext   = "dd";       // for Ddoc source files
 const DString hdr_ext  = "di";       // for D 'header' import files
 const DString json_ext = "json";     // for JSON files
 const DString map_ext  = "map";      // for .map files
+const DString c_ext    = "c";        // for C source files
+const DString i_ext    = "i";        // for preprocessed C source file
 #if IN_LLVM
 const DString ll_ext = "ll";
 const DString mlir_ext = "mlir";

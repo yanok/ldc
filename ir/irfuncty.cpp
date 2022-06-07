@@ -17,10 +17,21 @@
 #include "gen/logger.h"
 #include "gen/tollvm.h"
 
+IrFuncTyArg::IrFuncTyArg(Type *t, bool bref)
+    : type(t),
+      ltype(t != Type::tvoid && bref ? DtoType(t->pointerTo()) : DtoType(t)),
+#if LDC_LLVM_VER >= 1400
+      attrs(getGlobalContext()),
+#endif
+      byref(bref) {
+  mem.addRange(&type, sizeof(type));
+}
+
 IrFuncTyArg::IrFuncTyArg(Type *t, bool bref, llvm::AttrBuilder a)
     : type(t),
       ltype(t != Type::tvoid && bref ? DtoType(t->pointerTo()) : DtoType(t)),
       attrs(std::move(a)), byref(bref) {
+
   mem.addRange(&type, sizeof(type));
 }
 
@@ -143,8 +154,7 @@ AttrSet IrFuncTy::getParamAttrs(bool passThisBeforeSret) {
   // Set attributes on the explicit parameters.
   const size_t n = args.size();
   for (size_t k = 0; k < n; k++) {
-    const size_t i = idx + (reverseParams ? (n - k - 1) : k);
-    newAttrs.addToParam(i, args[k]->attrs);
+    newAttrs.addToParam(idx + k, args[k]->attrs);
   }
 
   return newAttrs;
