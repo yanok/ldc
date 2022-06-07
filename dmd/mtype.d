@@ -333,8 +333,6 @@ extern (C++) abstract class Type : ASTNode
     TY ty;
     MOD mod; // modifiers MODxxxx
     char* deco;
-    alias UniqueId = ulong;
-    UniqueId uniqueId;             // incremented by 1 in each construction
 
     static struct Mcache
     {
@@ -461,14 +459,9 @@ version (IN_LLVM)
             return sizeTy;
         }();
 
-    static __gshared UniqueId nextUniqueId = 0x100000;
-
     final extern (D) this(TY ty)
     {
         this.ty = ty;
-        if(!__ctfe) {
-            this.uniqueId = nextUniqueId++;
-        }
     }
 
     const(char)* kind() const nothrow pure @nogc @safe
@@ -480,7 +473,6 @@ version (IN_LLVM)
     {
         Type t = cast(Type)mem.xmalloc(sizeTy[ty]);
         memcpy(cast(void*)t, cast(void*)this, sizeTy[ty]);
-        t.uniqueId = nextUniqueId++;
         return t;
     }
 
@@ -1130,7 +1122,6 @@ version (IN_LLVM)
             (cast(TypeStruct)t).att = AliasThisRec.fwdref;
         if (t.ty == Tclass)
             (cast(TypeClass)t).att = AliasThisRec.fwdref;
-        t.uniqueId = nextUniqueId++;
         return t;
     }
 

@@ -144,7 +144,6 @@ public:
     TY ty;
     MOD mod;  // modifiers MODxxxx
     char *deco;
-    d_uns64 uniqueId;             // incremented by 1 in each construction
 
 private:
     void* mcache;
