@@ -211,7 +211,6 @@ jobs:
       - build-native
       - build-cross
       - merge-macos
-      - merge-windows
     permissions:
       contents: write
     steps:
