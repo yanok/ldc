@@ -2347,7 +2347,9 @@ version (IN_LLVM)
             if (ed && ss.cases.length < ed.members.length)
             {
                 int missingMembers = 0;
-                const maxShown = !global.params.verbose ? 6 : int.max;
+                const maxShown = !global.params.verbose ?
+                                    (global.params.errorSupplementLimit ? global.params.errorSupplementLimit : int.max)
+                                    : int.max;
             Lmembers:
                 foreach (es; *ed.members)
                 {
