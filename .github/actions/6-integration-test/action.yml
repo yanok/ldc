@@ -18,10 +18,6 @@ runs:
         fi
         installed/bin/ldc2 hello.d -link-defaultlib-shared
         ./hello
-        if [[ '${{ runner.os }}' == Linux ]]; then
-          installed/bin/ldc2 hello.d -m32 -link-defaultlib-shared
-          ./hello
-        fi
 
     - name: Run hello-world integration test with LTO
       shell: bash
