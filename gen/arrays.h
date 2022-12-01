@@ -53,11 +53,12 @@ llvm::Constant *arrayLiteralToConst(IRState *p, ArrayLiteralExp *ale);
 /// Initializes a chunk of memory with the contents of an array literal.
 ///
 /// dstMem is expected to be a pointer to the array allocation.
-void initializeArrayLiteral(IRState *p, ArrayLiteralExp *ale, LLValue *dstMem);
+void initializeArrayLiteral(IRState *p, ArrayLiteralExp *ale,
+                            LLValue *dstMem, LLType *dstType);
 
 void DtoArrayAssign(const Loc &loc, DValue *lhs, DValue *rhs, EXP op,
                     bool canSkipPostblit);
-void DtoSetArrayToNull(LLValue *v);
+void DtoSetArrayToNull(DValue *v);
 
 DSliceValue *DtoNewDynArray(const Loc &loc, Type *arrayType, DValue *dim,
                             bool defaultInit = true);
@@ -66,8 +67,6 @@ DSliceValue *DtoNewMulDimDynArray(const Loc &loc, Type *arrayType,
 DSliceValue *DtoResizeDynArray(const Loc &loc, Type *arrayType, DValue *array,
                                llvm::Value *newdim);
 
-void DtoCatAssignElement(const Loc &loc, DValue *arr, Expression *exp);
-DSliceValue *DtoCatAssignArray(const Loc &loc, DValue *arr, Expression *exp);
 DSliceValue *DtoCatArrays(const Loc &loc, Type *type, Expression *e1,
                           Expression *e2);
 DSliceValue *DtoAppendDCharToString(const Loc &loc, DValue *arr,

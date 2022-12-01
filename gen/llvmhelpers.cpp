@@ -17,9 +17,8 @@
 #include "dmd/init.h"
 #include "dmd/module.h"
 #include "dmd/template.h"
-#include "gen/abi.h"
+#include "gen/abi/abi.h"
 #include "gen/arrays.h"
-#include "gen/cl_helpers.h"
 #include "gen/classes.h"
 #include "gen/complex.h"
 #include "gen/dvalue.h"
@@ -237,7 +236,7 @@ LLValue *DtoAllocaDump(DValue *val, LLType *asType, int alignment,
     LLType *asMemType = i1ToI8(voidToI8(asType));
     LLValue *copy = DtoRawAlloca(asMemType, alignment, name);
     const auto minSize =
-        std::min(getTypeAllocSize(lval->getType()->getPointerElementType()),
+        std::min(getTypeAllocSize(DtoType(val->type)),
                  getTypeAllocSize(asMemType));
     const auto minAlignment =
         std::min(DtoAlignment(val->type), static_cast<unsigned>(alignment));
@@ -397,6 +396,11 @@ void DtoAssign(const Loc &loc, DValue *lhs, DValue *rhs, EXP op,
     return;
   }
 
+  if (auto bfLVal = lhs->isBitFieldLVal()) {
+    bfLVal->store(DtoRVal(rhs));
+    return;
+  }
+
   if (t->ty == TY::Tbool) {
     DtoStoreZextI8(DtoRVal(rhs), DtoLVal(lhs));
   } else if (t->ty == TY::Tstruct) {
@@ -409,7 +413,7 @@ void DtoAssign(const Loc &loc, DValue *lhs, DValue *rhs, EXP op,
       // time as to not emit an invalid (overlapping) memcpy on trivial
       // struct self-assignments like 'A a; a = a;'.
       if (src != dst)
-        DtoMemCpy(dst, src);
+        DtoMemCpy(DtoType(lhs->type), dst, src);
     }
   } else if (t->ty == TY::Tarray || t->ty == TY::Tsarray) {
     DtoArrayAssign(loc, lhs, rhs, op, canSkipPostblit);
@@ -429,7 +433,7 @@ void DtoAssign(const Loc &loc, DValue *lhs, DValue *rhs, EXP op,
       Logger::cout() << "l : " << *l << '\n';
       Logger::cout() << "r : " << *r << '\n';
     }
-    r = DtoBitCast(r, l->getType()->getContainedType(0));
+    r = DtoBitCast(r, DtoType(lhs->type));
     DtoStore(r, l);
   } else if (t->iscomplex()) {
     LLValue *dst = DtoLVal(lhs);
@@ -442,7 +446,7 @@ void DtoAssign(const Loc &loc, DValue *lhs, DValue *rhs, EXP op,
       Logger::cout() << "lhs: " << *l << '\n';
       Logger::cout() << "rhs: " << *r << '\n';
     }
-    LLType *lit = l->getType()->getContainedType(0);
+    LLType *lit = DtoType(lhs->type);
     if (r->getType() != lit) {
       r = DtoRVal(DtoCast(loc, rhs, lhs->type));
       IF_LOG {
@@ -1321,24 +1325,6 @@ void DtoSetFuncDeclIntrinsicName(TemplateInstance *ti, TemplateDeclaration *td,
 
 ////////////////////////////////////////////////////////////////////////////////
 
-size_t getMemberSize(Type *type) {
-  const dinteger_t dSize = type->size();
-  llvm::Type *const llType = DtoType(type);
-  if (!llType->isSized()) {
-    // Forward reference in a cycle or similar, we need to trust the D type.
-    return dSize;
-  }
-
-  const uint64_t llSize = gDataLayout->getTypeAllocSize(llType);
-  assert(llSize <= dSize &&
-         "LLVM type is bigger than the corresponding D type, "
-         "might lead to aggregate layout mismatch.");
-
-  return llSize;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
 Type *stripModifiers(Type *type, bool transitive) {
   if (type->ty == TY::Tfunction) {
     return type;
@@ -1610,14 +1596,14 @@ DValue *DtoSymbolAddress(const Loc &loc, Type *type, Declaration *decl) {
       assert(tb->ty == TY::Tarray && tb->nextOf()->ty == TY::Tvoid);
       const auto size = DtoConstSize_t(ad->structsize);
       llvm::Constant *ptr =
-          sd && sd->zeroInit
+          sd && sd->zeroInit()
               ? getNullValue(getVoidPtrType())
               : DtoBitCast(getIrAggr(ad)->getInitSymbol(), getVoidPtrType());
       return new DSliceValue(type, size, ptr);
     }
 
     assert(sd);
-    if (sd->zeroInit) {
+    if (sd->zeroInit()) {
       error(loc, "no init symbol for zero-initialized struct");
       fatal();
     }
@@ -1668,30 +1654,31 @@ llvm::Constant *DtoConstSymbolAddress(const Loc &loc, Declaration *decl) {
   llvm_unreachable("Taking constant address not implemented.");
 }
 
-llvm::Constant *buildStringLiteralConstant(StringExp *se, bool zeroTerm) {
-  if (se->sz == 1) {
+llvm::Constant *buildStringLiteralConstant(StringExp *se,
+                                           uint64_t bufferLength) {
+  const auto stringLength = se->numberOfCodeUnits();
+  assert(bufferLength >= stringLength);
+
+  if (se->sz == 1 && bufferLength <= stringLength + 1) {
     const DString data = se->peekString();
+    const bool nullTerminate = (bufferLength == stringLength + 1);
     return llvm::ConstantDataArray::getString(
-        gIR->context(), {data.ptr, data.length}, zeroTerm);
+        gIR->context(), {data.ptr, data.length}, nullTerminate);
   }
 
   Type *dtype = se->type->toBasetype();
   Type *cty = dtype->nextOf()->toBasetype();
-
   LLType *ct = DtoMemType(cty);
-  auto len = se->numberOfCodeUnits();
-  if (zeroTerm) {
-    len += 1;
-  }
-  LLArrayType *at = LLArrayType::get(ct, len);
+  LLArrayType *at = LLArrayType::get(ct, bufferLength);
 
   std::vector<LLConstant *> vals;
-  vals.reserve(len);
-  for (size_t i = 0; i < se->numberOfCodeUnits(); ++i) {
+  vals.reserve(bufferLength);
+  for (uint64_t i = 0; i < stringLength; ++i) {
     vals.push_back(LLConstantInt::get(ct, se->getCodeUnit(i), false));
   }
-  if (zeroTerm) {
-    vals.push_back(LLConstantInt::get(ct, 0, false));
+  const auto nullChar = LLConstantInt::get(ct, 0, false);
+  for (uint64_t i = stringLength; i < bufferLength; ++i) {
+    vals.push_back(nullChar);
   }
   return LLConstantArray::get(at, vals);
 }
@@ -1878,7 +1865,7 @@ FuncDeclaration *getParentFunc(Dsymbol *sym) {
   return nullptr;
 }
 
-LLValue *DtoIndexAggregate(LLValue *src, AggregateDeclaration *ad,
+DLValue *DtoIndexAggregate(LLValue *src, AggregateDeclaration *ad,
                            VarDeclaration *vd) {
   IF_LOG Logger::println("Indexing aggregate field %s:", vd->toPrettyChars());
   LOG_SCOPE;
@@ -1889,48 +1876,58 @@ LLValue *DtoIndexAggregate(LLValue *src, AggregateDeclaration *ad,
   DtoResolveDsymbol(ad);
 
   // Look up field to index or offset to apply.
-  unsigned fieldIndex;
-  unsigned byteOffset;
   auto irTypeAggr = getIrType(ad->type)->isAggr();
   assert(irTypeAggr);
-  irTypeAggr->getMemberLocation(vd, fieldIndex, byteOffset);
+  bool isFieldIdx;
+  unsigned off = irTypeAggr->getMemberLocation(vd, isFieldIdx);
 
-  LLValue *val = src;
-  if (byteOffset) {
-    assert(fieldIndex == 0);
+  LLValue *ptr = src;
+  LLType * ty = nullptr;
+  if (!isFieldIdx) {
     // Cast to void* to apply byte-wise offset from object start.
-    val = DtoBitCast(val, getVoidPtrType());
-    val = DtoGEP1(val, byteOffset);
+    ptr = DtoBitCast(ptr, getVoidPtrType());
+    ptr = DtoGEP1(llvm::Type::getInt8Ty(gIR->context()), ptr, off);
+    ty = DtoType(vd->type);
   } else {
     if (ad->structsize == 0) { // can happen for extern(C) structs
-      assert(fieldIndex == 0);
+      assert(off == 0);
     } else {
       // Cast the pointer we got to the canonical struct type the indices are
       // based on.
-      LLType *st = DtoType(ad->type);
-      if (ad->isStructDeclaration()) {
-        st = getPtrToType(st);
+      LLType *st = nullptr;
+      LLType *pst = nullptr;
+      if (ad->isClassDeclaration()) {
+        st = getIrAggr(ad)->getLLStructType();
+        pst = DtoType(ad->type);
       }
-      val = DtoBitCast(val, st);
-      val = DtoGEP(val, 0, fieldIndex);
+      else {
+        st = DtoType(ad->type);
+        pst = getPtrToType(st);
+      }
+      ptr = DtoBitCast(ptr, pst);
+      ptr = DtoGEP(st, ptr, 0, off);
+      ty = isaStruct(st)->getElementType(off);
     }
   }
 
   // Cast the (possibly void*) pointer to the canonical variable type.
-  val = DtoBitCast(val, DtoPtrToType(vd->type));
+  ptr = DtoBitCast(ptr, DtoPtrToType(vd->type));
 
-  IF_LOG Logger::cout() << "Value: " << *val << '\n';
-  return val;
+  IF_LOG Logger::cout() << "Pointer: " << *ptr << '\n';
+  if (auto p = isaPointer(ty)) {
+    if (p->getAddressSpace())
+      return new DDcomputeLValue(vd->type, p, ptr);
+  }
+  return new DLValue(vd->type, ptr);
 }
 
 unsigned getFieldGEPIndex(AggregateDeclaration *ad, VarDeclaration *vd) {
-  unsigned fieldIndex;
-  unsigned byteOffset;
   auto irTypeAggr = getIrType(ad->type)->isAggr();
   assert(irTypeAggr);
-  irTypeAggr->getMemberLocation(vd, fieldIndex, byteOffset);
-  assert(byteOffset == 0 && "Cannot address field by a simple GEP.");
-  return fieldIndex;
+  bool isFieldIdx;
+  unsigned off = irTypeAggr->getMemberLocation(vd, isFieldIdx);
+  assert(isFieldIdx && "Cannot address field by a simple GEP.");
+  return off;
 }
 
 DValue *makeVarDValue(Type *type, VarDeclaration *vd, llvm::Value *storage) {
@@ -1947,6 +1944,7 @@ DValue *makeVarDValue(Type *type, VarDeclaration *vd, llvm::Value *storage) {
     expectedType = expectedType->getPointerTo();
 
   if (val->getType() != expectedType) {
+#if LDC_LLVM_VER < 1500
     // The type of globals is determined by their initializer, and the front-end
     // may inject implicit casts for class references and static arrays.
     assert(vd->isDataseg() || (vd->storage_class & STCextern) ||
@@ -1959,6 +1957,7 @@ DValue *makeVarDValue(Type *type, VarDeclaration *vd, llvm::Value *storage) {
     // work as well.
     assert(getTypeStoreSize(DtoType(type)) <= getTypeStoreSize(pointeeType) &&
            "LValue type mismatch, encountered type too small.");
+#endif
     val = DtoBitCast(val, expectedType);
   }
 

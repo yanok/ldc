@@ -23,6 +23,7 @@
 #include "dmd/target.h"
 #include "driver/args.h"
 #include "driver/cache.h"
+#include "driver/cl_helpers.h"
 #include "driver/cl_options.h"
 #include "driver/cl_options_instrumentation.h"
 #include "driver/cl_options_sanitizers.h"
@@ -35,8 +36,7 @@
 #include "driver/plugins.h"
 #include "driver/targetmachine.h"
 #include "driver/timetrace.h"
-#include "gen/abi.h"
-#include "gen/cl_helpers.h"
+#include "gen/abi/abi.h"
 #include "gen/irstate.h"
 #include "gen/ldctraits.h"
 #include "gen/linkage.h"
@@ -99,6 +99,9 @@ static cl::opt<bool> enableGC(
     "lowmem", cl::ZeroOrMore,
     cl::desc("Enable the garbage collector for the LDC front-end. This reduces "
              "the compiler memory requirements but increases compile times."));
+
+// Deprecated options
+extern llvm::cl::opt<bool> checkPrintf;
 
 namespace {
 
@@ -342,40 +345,40 @@ void parseCommandLine(Strings &sourceFiles) {
   global.params.objname = opts::fromPathString(objectFile);
   global.params.objdir = opts::fromPathString(objectDir);
 
-  global.params.docdir = opts::fromPathString(ddocDir);
-  global.params.docname = opts::fromPathString(ddocFile);
-  global.params.doDocComments |=
-      global.params.docdir.length || global.params.docname.length;
+  global.params.ddoc.dir = opts::fromPathString(ddocDir);
+  global.params.ddoc.name = opts::fromPathString(ddocFile);
+  global.params.ddoc.doOutput |=
+      global.params.ddoc.dir.length || global.params.ddoc.name.length;
 
-  global.params.jsonfilename = opts::fromPathString(jsonFile);
-  if (global.params.jsonfilename.length || !jsonFields.empty()) {
-    global.params.doJsonGeneration = true;
+  global.params.json.name = opts::fromPathString(jsonFile);
+  if (global.params.json.name.length || !jsonFields.empty()) {
+    global.params.json.doOutput = true;
   }
 
-  global.params.hdrdir = opts::fromPathString(hdrDir);
-  global.params.hdrname = opts::fromPathString(hdrFile);
-  global.params.doHdrGeneration |=
-      global.params.hdrdir.length || global.params.hdrname.length;
+  global.params.dihdr.dir = opts::fromPathString(hdrDir);
+  global.params.dihdr.name = opts::fromPathString(hdrFile);
+  global.params.dihdr.doOutput |=
+      global.params.dihdr.dir.length || global.params.dihdr.name.length;
 
-  global.params.cxxhdrdir = opts::fromPathString(cxxHdrDir);
-  global.params.cxxhdrname = opts::fromPathString(cxxHdrFile);
-  if (global.params.doCxxHdrGeneration == CxxHeaderMode::none &&
-      (global.params.cxxhdrdir.length || global.params.cxxhdrname.length)) {
-    global.params.doCxxHdrGeneration = CxxHeaderMode::silent;
-  }
+  global.params.cxxhdr.dir = opts::fromPathString(cxxHdrDir);
+  global.params.cxxhdr.name = opts::fromPathString(cxxHdrFile);
+  global.params.cxxhdr.doOutput |=
+      global.params.cxxhdr.dir.length || global.params.cxxhdr.name.length;
 
-  global.params.mixinFile = opts::fromPathString(mixinFile).ptr;
+  global.params.mixinOut.name = opts::fromPathString(mixinFile);
+  global.params.mixinOut.doOutput |= global.params.mixinOut.name.length;
 
   if (moduleDeps.getNumOccurrences() != 0) {
-    global.params.moduleDeps = createOutBuffer();
+    global.params.moduleDeps.doOutput = true;
+    global.params.moduleDeps.buffer = createOutBuffer();
     if (!moduleDeps.empty())
-      global.params.moduleDepsFile = opts::dupPathString(moduleDeps);
+      global.params.moduleDeps.name = opts::dupPathString(moduleDeps);
   }
 
   if (makeDeps.getNumOccurrences() != 0) {
-    global.params.emitMakeDeps = true;
+    global.params.makeDeps.doOutput = true;
     if (!makeDeps.empty())
-      global.params.makeDepsFile = opts::dupPathString(makeDeps);
+      global.params.makeDeps.name = opts::dupPathString(makeDeps);
   }
 
 #if _WIN32
@@ -544,8 +547,22 @@ void parseCommandLine(Strings &sourceFiles) {
     error(Loc(), "-soname can be used only when building a shared library");
   }
 
-  global.params.hdrStripPlainFunctions = !opts::hdrKeepAllBodies;
+  global.params.dihdr.fullOutput = opts::hdrKeepAllBodies;
   global.params.disableRedZone = opts::disableRedZone();
+
+  // Passmanager selection options depend on LLVM version
+#if LDC_LLVM_VER < 1400
+  // LLVM < 14 only supports the legacy passmanager
+  if (!opts::isUsingLegacyPassManager()) {
+    error(Loc(), "LLVM version 13 or below only supports --passmanager=legacy");
+  }
+#endif
+#if LDC_LLVM_VER >= 1500
+  // LLVM >= 15 only supports the new passmanager
+  if (opts::isUsingLegacyPassManager()) {
+    error(Loc(), "LLVM version 15 or above only supports --passmanager=new");
+  }
+#endif
 }
 
 void initializePasses() {
@@ -555,11 +572,16 @@ void initializePasses() {
   initializeCore(Registry);
   initializeTransformUtils(Registry);
   initializeScalarOpts(Registry);
+#if LDC_LLVM_VER < 1600
   initializeObjCARCOpts(Registry);
+#endif
   initializeVectorization(Registry);
   initializeInstCombine(Registry);
+  initializeAggressiveInstCombine(Registry);
   initializeIPO(Registry);
+#if LDC_LLVM_VER < 1600
   initializeInstrumentation(Registry);
+#endif
   initializeAnalysis(Registry);
   initializeCodeGen(Registry);
   initializeGlobalISel(Registry);
@@ -886,6 +908,11 @@ void registerPredefinedTargetVersions() {
     }
     break;
   }
+
+  //Issue deprecations for deprecated arguments
+  // N.B `-nodefaultlib` is checked in `getDefaultLibNames`
+  if (checkPrintf)
+    deprecation(Loc(), "'-check-printf-calls' is deprecated, use `pragma(printf)` instead.");
 }
 
 } // anonymous namespace
@@ -906,7 +933,7 @@ void registerPredefinedVersions() {
   }
 #endif
 
-  if (global.params.doDocComments) {
+  if (global.params.ddoc.doOutput) {
     VersionCondition::addPredefinedGlobalIdent("D_Ddoc");
   }
 
@@ -971,6 +998,13 @@ void registerPredefinedVersions() {
   if (opts::isSanitizerEnabled(opts::ThreadSanitizer)) {
     VersionCondition::addPredefinedGlobalIdent("LDC_ThreadSanitizer");
   }
+
+#if LDC_LLVM_VER >= 1400
+  // A version identifier for whether opaque pointers are enabled or not. (needed e.g. for intrinsic mangling)
+  if (!getGlobalContext().supportsTypedPointers()) {
+    VersionCondition::addPredefinedGlobalIdent("LDC_LLVM_OpaquePointers");
+  }
+#endif
 
 // Expose LLVM version to runtime
 #define STR(x) #x
@@ -1096,9 +1130,15 @@ int cppmain() {
   }
 
   auto relocModel = getRelocModel();
+#if LDC_LLVM_VER >= 1600
+  if (global.params.dll && !relocModel.has_value()) {
+    relocModel = llvm::Reloc::PIC_;
+  }
+#else
   if (global.params.dll && !relocModel.hasValue()) {
     relocModel = llvm::Reloc::PIC_;
   }
+#endif
 
   fixupTripleEnv(mTargetTriple);
 

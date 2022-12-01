@@ -132,7 +132,7 @@ void findDefaultTarget();
 /// Returns a pointer to the given member field of an aggregate.
 ///
 /// 'src' is a pointer to the start of the memory of an 'ad' instance.
-LLValue *DtoIndexAggregate(LLValue *src, AggregateDeclaration *ad,
+DLValue *DtoIndexAggregate(LLValue *src, AggregateDeclaration *ad,
                            VarDeclaration *vd);
 
 /// Returns the index of a given member variable in the resulting LLVM type of
@@ -150,11 +150,8 @@ DValue *DtoInlineAsmExpr(const Loc &loc, FuncDeclaration *fd,
 llvm::CallInst *DtoInlineAsmExpr(const Loc &loc, llvm::StringRef code,
                                  llvm::StringRef constraints,
                                  llvm::ArrayRef<llvm::Value *> operands,
+                                 llvm::ArrayRef<llvm::Type *> indirectTypes,
                                  llvm::Type *returnType);
-
-/// Returns the size the LLVM type for a member variable of the given type will
-/// take up in a struct (in bytes). This does not include padding in any way.
-size_t getMemberSize(Type *type);
 
 /// Returns the llvm::Value of the passed DValue, making sure that it is an
 /// lvalue (has a memory address), so it can be passed to the D runtime
@@ -201,12 +198,6 @@ IrFuncTy &DtoIrTypeFunction(DValue *fnval);
 ///
 TypeFunction *DtoTypeFunction(DValue *fnval);
 
-///
-LLValue *DtoCallableValue(DValue *fn);
-
-///
-LLFunctionType *DtoExtractFunctionType(LLType *type);
-
 /// Checks whether fndecl is an intrinsic that requires special lowering. If so,
 /// emits the code for it and returns true, settings result to the resulting
 /// DValue (if any). If the call does not correspond to a "magic" intrinsic,
@@ -241,7 +232,8 @@ LLConstant *toConstantArray(LLType *ct, LLArrayType *at, T *str, size_t len,
   return LLConstantArray::get(at, vals);
 }
 
-llvm::Constant *buildStringLiteralConstant(StringExp *se, bool zeroTerm);
+llvm::Constant *buildStringLiteralConstant(StringExp *se,
+                                           uint64_t bufferLength);
 
 /// Returns true if the specified symbol is to be defined on declaration,
 /// primarily for -linkonce-templates.

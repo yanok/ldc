@@ -1,4 +1,4 @@
-//===-- gen/cl_helpers.h - Complex number code generation -------*- C++ -*-===//
+//===-- gen/complex.h - Complex number code generation ----------*- C++ -*-===//
 //
 //                         LDC – the LLVM D compiler
 //
@@ -34,7 +34,7 @@ llvm::Constant *DtoComplexShuffleMask(unsigned a, unsigned b);
 
 DValue *DtoComplex(const Loc &loc, Type *to, DValue *val);
 
-void DtoComplexSet(llvm::Value *c, llvm::Value *re, llvm::Value *im);
+void DtoComplexSet(llvm::Type*, llvm::Value *c, llvm::Value *re, llvm::Value *im);
 
 void DtoGetComplexParts(const Loc &loc, Type *to, DValue *c, DValue *&re,
                         DValue *&im);

@@ -25,8 +25,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gen/abi-x86-64.h"
-
 #include "dmd/aggregate.h"
 #include "dmd/declaration.h"
 #include "dmd/enum.h"
@@ -34,9 +32,8 @@
 #include "dmd/identifier.h"
 #include "dmd/mtype.h"
 #include "dmd/target.h"
-#include "gen/abi.h"
-#include "gen/abi-generic.h"
-#include "gen/abi-x86-64.h"
+#include "gen/abi/abi.h"
+#include "gen/abi/generic.h"
 #include "gen/dvalue.h"
 #include "gen/irstate.h"
 #include "gen/llvm.h"
@@ -364,7 +361,7 @@ void X86_64TargetABI::vaCopy(DLValue *dest, DValue *src) {
            DtoBitCast(DtoLVal(dest), getPtrToType(valistmem->getType())));
   // Then fill the new struct with a bitcopy of the source struct.
   // `src` is a __va_list_tag* pointer to the source struct.
-  DtoMemCpy(valistmem, DtoRVal(src));
+  DtoMemCpy(getValistType(), valistmem, DtoRVal(src));
 }
 
 LLValue *X86_64TargetABI::prepareVaArg(DLValue *ap) {

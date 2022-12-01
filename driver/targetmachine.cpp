@@ -102,6 +102,8 @@ static const char *getABI(const llvm::Triple &triple) {
     return "elfv1";
   case llvm::Triple::ppc64le:
     return "elfv2";
+  case llvm::Triple::riscv64:
+    return "lp64d";
   default:
     return "";
   }
@@ -418,8 +420,18 @@ createTargetMachine(const std::string targetTriple, const std::string arch,
     features.push_back("+cx16");
   }
 
+  if (triple.getArch() == llvm::Triple::riscv64 && !hasFeature("d")) {
+    // Support Double-Precision Floating-Point by default.
+    features.push_back("+d");
+  }
+
   // Handle cases where LLVM picks wrong default relocModel
-  if (!relocModel.hasValue()) {
+#if LDC_LLVM_VER >= 1600
+  if (relocModel.has_value()) {}
+#else
+  if (relocModel.hasValue()) {}
+#endif
+  else {
     if (triple.isOSDarwin()) {
       // Darwin defaults to PIC (and as of 10.7.5/LLVM 3.1-3.3, TLS use leads
       // to crashes for non-PIC code). LLVM doesn't handle this.

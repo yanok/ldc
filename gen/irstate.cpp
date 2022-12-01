@@ -136,7 +136,7 @@ LLConstant *
 IRState::setGlobalVarInitializer(LLGlobalVariable *&globalVar,
                                  LLConstant *initializer,
                                  Dsymbol *symbolForLinkageAndVisibility) {
-  if (initializer->getType() == globalVar->getType()->getContainedType(0)) {
+  if (initializer->getType() == globalVar->getValueType()) {
     defineGlobal(globalVar, initializer, symbolForLinkageAndVisibility);
     return globalVar;
   }
@@ -235,7 +235,8 @@ LLGlobalVariable *IRState::getCachedStringLiteral(StringExp *se) {
                             keyData.length);
 
   return getCachedStringLiteralImpl(module, *cache, key, [se]() {
-    return buildStringLiteralConstant(se, true);
+    // null-terminate
+    return buildStringLiteralConstant(se, se->numberOfCodeUnits() + 1);
   });
 }
 
@@ -264,7 +265,8 @@ void IRState::addLinkerDependentLib(llvm::StringRef libraryName) {
 
 llvm::CallInst *
 IRState::createInlineAsmCall(const Loc &loc, llvm::InlineAsm *ia,
-                             llvm::ArrayRef<llvm::Value *> args) {
+                             llvm::ArrayRef<llvm::Value *> args,
+                             llvm::ArrayRef<llvm::Type *> indirectTypes) {
   llvm::CallInst *call = ir->CreateCall(ia, args);
   addInlineAsmSrcLoc(loc, call);
 
@@ -272,11 +274,15 @@ IRState::createInlineAsmCall(const Loc &loc, llvm::InlineAsm *ia,
   // a non-indirect output constraint (=> return value of call) shifts the
   // constraint/argument index mapping
   ptrdiff_t i = call->getType()->isVoidTy() ? 0 : -1;
+  size_t indirectIdx = 0;
+    
   for (const auto &constraintInfo : ia->ParseConstraints()) {
     if (constraintInfo.isIndirect) {
-      call->addParamAttr(i, llvm::Attribute::get(context(),
-                                                 llvm::Attribute::ElementType,
-                                                 getPointeeType(args[i])));
+      call->addParamAttr(i, llvm::Attribute::get(
+                                context(),
+                                llvm::Attribute::ElementType,
+                                indirectTypes[indirectIdx]));
+      ++indirectIdx;
     }
     ++i;
   }

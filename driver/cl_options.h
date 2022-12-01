@@ -14,9 +14,9 @@
 
 #pragma once
 
+#include "driver/cl_helpers.h"
 #include "driver/cl_options-llvm.h"
 #include "driver/targetmachine.h"
-#include "gen/cl_helpers.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
@@ -90,10 +90,14 @@ extern cl::opt<bool> noPLT;
 extern cl::opt<bool> useDIP25;
 extern cl::opt<bool> useDIP1000;
 
+bool isUsingLegacyPassManager();
+
 // Math options
 extern bool fFastMath;
 extern llvm::FastMathFlags defaultFMF;
 void setDefaultMathOptions(llvm::TargetOptions &targetOptions);
+
+extern cl::opt<bool> fNoDiscardValueNames;
 
 // Arguments to -d-debug
 extern std::vector<std::string> debugArgs;

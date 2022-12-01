@@ -35,7 +35,9 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/IR/Module.h"
 #ifdef LDC_LLVM_SUPPORTED_TARGET_SPIRV
+#if LDC_LLVM_VER < 1600
 #include "LLVMSPIRVLib/LLVMSPIRVLib.h"
+#endif
 #endif
 #include <cstddef>
 #include <fstream>
@@ -65,15 +67,17 @@ void codegenModule(llvm::TargetMachine &Target, llvm::Module &m,
 
   if (cb == ComputeBackend::SPIRV) {
 #ifdef LDC_LLVM_SUPPORTED_TARGET_SPIRV
+#if LDC_LLVM_VER < 1600
     IF_LOG Logger::println("running createSPIRVWriterPass()");
     std::ofstream out(filename, std::ofstream::binary);
     llvm::createSPIRVWriterPass(out)->runOnModule(m);
     IF_LOG Logger::println("Success.");
+    return;
+#endif
 #else
     error(Loc(), "Trying to target SPIRV, but LDC is not built to do so!");
-#endif
-
     return;
+#endif
   }
 
   std::error_code errinfo;
@@ -185,9 +189,9 @@ public:
         // from being repeated in its parameters. Might need to be
         // extended, but GEPs/PHIs are the most common ones.
         os << ", type = " << *val.getType();
-      } else if (isa<AllocaInst>(&val)) {
+      } else if (auto ai = dyn_cast<AllocaInst>(&val)) {
         os << ", size/byte = "
-           << DL.getTypeAllocSize(val.getType()->getContainedType(0));
+           << DL.getTypeAllocSize(ai->getAllocatedType());
       }
       os << ']';
     }

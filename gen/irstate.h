@@ -77,10 +77,12 @@ struct IRAsmStmt {
   IRAsmStmt() : isBranchToLabel(nullptr) {}
 
   std::string code;
-  std::string out_c;
-  std::string in_c;
-  std::vector<LLValue *> out;
-  std::vector<LLValue *> in;
+  struct Operands {
+    std::string c; // contraint
+    std::vector<LLValue *> ops;
+    std::vector<Type *> dTypes;
+  };
+  Operands out, in;
 
   // if this is nonzero, it contains the target label
   LabelDsymbol *isBranchToLabel;
@@ -267,7 +269,8 @@ public:
   void addLinkerDependentLib(llvm::StringRef libraryName);
 
   llvm::CallInst *createInlineAsmCall(const Loc &loc, llvm::InlineAsm *ia,
-                                      llvm::ArrayRef<llvm::Value *> args);
+                                      llvm::ArrayRef<llvm::Value *> args,
+                                      llvm::ArrayRef<llvm::Type *> indirectTypes);
   void addInlineAsmSrcLoc(const Loc &loc, llvm::CallInst *inlineAsmCall);
   const Loc &getInlineAsmSrcLoc(unsigned srcLocCookie) const;
 

@@ -18,7 +18,7 @@
 #include "dmd/module.h"
 #include "dmd/target.h"
 #include "driver/cl_options.h"
-#include "gen/abi.h"
+#include "gen/abi/abi.h"
 #include "gen/arrays.h"
 #include "gen/classes.h"
 #include "gen/complex.h"
@@ -178,7 +178,7 @@ LLType *DtoType(Type *t) {
       // This is an enum forward reference that is only legal when referenced
       // through an indirection (e.g. "enum E; void foo(E* p);"). For lack of a
       // better choice, make the outer indirection a void pointer.
-      return getVoidPtrType()->getContainedType(0);
+      return getI8Type();
     }
     return DtoType(bt);
   }
@@ -351,47 +351,43 @@ LLIntegerType *DtoSize_t() {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-LLType *getPointeeType(LLValue *pointer) {
-  return pointer->getType()->getPointerElementType();
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
 namespace {
-llvm::GetElementPtrInst *DtoGEP(LLValue *ptr, llvm::ArrayRef<LLValue *> indices,
+llvm::GetElementPtrInst *DtoGEP(LLType *pointeeTy, LLValue *ptr,
+                                llvm::ArrayRef<LLValue *> indices,
                                 const char *name, llvm::BasicBlock *bb) {
-  auto gep = llvm::GetElementPtrInst::Create(getPointeeType(ptr), ptr, indices,
-                                             name, bb ? bb : gIR->scopebb());
+  auto gep = llvm::GetElementPtrInst::Create(pointeeTy, ptr, indices, name,
+                                             bb ? bb : gIR->scopebb());
   gep->setIsInBounds(true);
   return gep;
 }
 }
 
-LLValue *DtoGEP1(LLValue *ptr, LLValue *i0, const char *name,
+LLValue *DtoGEP1(LLType *pointeeTy, LLValue *ptr, LLValue *i0, const char *name,
                  llvm::BasicBlock *bb) {
-  return DtoGEP(ptr, i0, name, bb);
+  return DtoGEP(pointeeTy, ptr, i0, name, bb);
 }
 
-LLValue *DtoGEP(LLValue *ptr, LLValue *i0, LLValue *i1, const char *name,
-                llvm::BasicBlock *bb) {
+LLValue *DtoGEP(LLType *pointeeTy, LLValue *ptr, LLValue *i0, LLValue *i1,
+                const char *name, llvm::BasicBlock *bb) {
   LLValue *indices[] = {i0, i1};
-  return DtoGEP(ptr, indices, name, bb);
+  return DtoGEP(pointeeTy, ptr, indices, name, bb);
 }
 
-LLValue *DtoGEP1(LLValue *ptr, unsigned i0, const char *name,
+LLValue *DtoGEP1(LLType *pointeeTy, LLValue *ptr, unsigned i0, const char *name,
                  llvm::BasicBlock *bb) {
-  return DtoGEP(ptr, DtoConstUint(i0), name, bb);
+  return DtoGEP(pointeeTy, ptr, DtoConstUint(i0), name, bb);
 }
 
-LLValue *DtoGEP(LLValue *ptr, unsigned i0, unsigned i1, const char *name,
-                llvm::BasicBlock *bb) {
+LLValue *DtoGEP(LLType *pointeeTy, LLValue *ptr, unsigned i0, unsigned i1,
+                const char *name, llvm::BasicBlock *bb) {
   LLValue *indices[] = {DtoConstUint(i0), DtoConstUint(i1)};
-  return DtoGEP(ptr, indices, name, bb);
+  return DtoGEP(pointeeTy, ptr, indices, name, bb);
 }
 
-LLConstant *DtoGEP(LLConstant *ptr, unsigned i0, unsigned i1) {
+LLConstant *DtoGEP(LLType *pointeeTy, LLConstant *ptr, unsigned i0,
+                   unsigned i1) {
   LLValue *indices[] = {DtoConstUint(i0), DtoConstUint(i1)};
-  return llvm::ConstantExpr::getGetElementPtr(getPointeeType(ptr), ptr, indices,
+  return llvm::ConstantExpr::getGetElementPtr(pointeeTy, ptr, indices,
                                               /* InBounds = */ true);
 }
 
@@ -407,13 +403,13 @@ void DtoMemSet(LLValue *dst, LLValue *val, LLValue *nbytes, unsigned align) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void DtoMemSetZero(LLValue *dst, LLValue *nbytes, unsigned align) {
+void DtoMemSetZero(LLType *type, LLValue *dst, LLValue *nbytes, unsigned align) {
   DtoMemSet(dst, DtoConstUbyte(0), nbytes, align);
 }
 
-void DtoMemSetZero(LLValue *dst, unsigned align) {
-  uint64_t n = getTypeStoreSize(dst->getType()->getContainedType(0));
-  DtoMemSetZero(dst, DtoConstSize_t(n), align);
+void DtoMemSetZero(LLType *type, LLValue *dst, unsigned align) {
+  uint64_t n = getTypeStoreSize(type);
+  DtoMemSetZero(type, dst, DtoConstSize_t(n), align);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -428,10 +424,9 @@ void DtoMemCpy(LLValue *dst, LLValue *src, LLValue *nbytes, unsigned align) {
   gIR->ir->CreateMemCpy(dst, A, src, A, nbytes, false /*isVolatile*/);
 }
 
-void DtoMemCpy(LLValue *dst, LLValue *src, bool withPadding, unsigned align) {
-  LLType *pointee = dst->getType()->getContainedType(0);
+void DtoMemCpy(LLType *type, LLValue *dst, LLValue *src, bool withPadding, unsigned align) {
   uint64_t n =
-      withPadding ? getTypeAllocSize(pointee) : getTypeStoreSize(pointee);
+      withPadding ? getTypeAllocSize(type) : getTypeStoreSize(type);
   DtoMemCpy(dst, src, DtoConstSize_t(n), align);
 }
 
@@ -497,7 +492,7 @@ LLConstant *DtoConstFP(Type *t, const real_t value) {
 LLConstant *DtoConstCString(const char *str) {
   llvm::StringRef s(str ? str : "");
   LLGlobalVariable *gvar = gIR->getCachedStringLiteral(s);
-  return DtoGEP(gvar, 0u, 0u);
+  return DtoGEP(gvar->getValueType(), gvar, 0u, 0u);
 }
 
 LLConstant *DtoConstString(const char *str) {
@@ -509,27 +504,31 @@ LLConstant *DtoConstString(const char *str) {
 ////////////////////////////////////////////////////////////////////////////////
 
 namespace {
-llvm::LoadInst *DtoLoadImpl(LLValue *src, const char *name) {
-  return gIR->ir->CreateLoad(getPointeeType(src), src, name);
+llvm::LoadInst *DtoLoadImpl(LLType *type, LLValue *src, const char *name) {
+  return gIR->ir->CreateLoad(type, src, name);
 }
 }
 
-LLValue *DtoLoad(LLValue *src, const char *name) {
-  return DtoLoadImpl(src, name);
+LLValue *DtoLoad(LLType* type, LLValue *src, const char *name) {
+  return DtoLoadImpl(type, src, name);
+}
+
+LLValue *DtoLoad(DLValue *src, const char *name) {
+  return DtoLoadImpl(DtoType(src->type), DtoLVal(src), name);
 }
 
 // Like DtoLoad, but the pointer is guaranteed to be aligned appropriately for
 // the type.
-LLValue *DtoAlignedLoad(LLValue *src, const char *name) {
-  llvm::LoadInst *ld = DtoLoadImpl(src, name);
+LLValue *DtoAlignedLoad(LLType *type, LLValue *src, const char *name) {
+  llvm::LoadInst *ld = DtoLoadImpl(type, src, name);
   if (auto alignment = getABITypeAlign(ld->getType())) {
     ld->setAlignment(LLAlign(alignment));
   }
   return ld;
 }
 
-LLValue *DtoVolatileLoad(LLValue *src, const char *name) {
-  llvm::LoadInst *ld = DtoLoadImpl(src, name);
+LLValue *DtoVolatileLoad(LLType *type, LLValue *src, const char *name) {
+  llvm::LoadInst *ld = DtoLoadImpl(type, src, name);
   ld->setVolatile(true);
   return ld;
 }
@@ -549,7 +548,6 @@ void DtoVolatileStore(LLValue *src, LLValue *dst) {
 void DtoStoreZextI8(LLValue *src, LLValue *dst) {
   if (src->getType()->isIntegerTy(1)) {
     llvm::Type *i8 = llvm::Type::getInt8Ty(gIR->context());
-    assert(dst->getType()->getContainedType(0) == i8);
     src = gIR->ir->CreateZExt(src, i8);
   }
   gIR->ir->CreateStore(src, dst);
@@ -574,15 +572,36 @@ LLType *stripAddrSpaces(LLType *t)
   if(gIR->dcomputetarget == nullptr)
     return t;
 
+  llvm::PointerType *pt = isaPointer(t);
+  if (!pt)
+    return t;
+
+#if LDC_LLVM_VER >= 1600
+  return getVoidPtrType();
+#elif LDC_LLVM_VER >= 1400
+  if (pt->isOpaque())
+    return getVoidPtrType();
+  else {
+    int indirections = 0;
+    while (t->isPointerTy()) {
+      indirections++;
+      t = t->getPointerElementType();
+    }
+    while (indirections-- != 0)
+      t = t->getPointerTo(0);
+  }
+  return t;
+#else
   int indirections = 0;
   while (t->isPointerTy()) {
     indirections++;
     t = t->getPointerElementType();
   }
   while (indirections-- != 0)
-     t = t->getPointerTo(0);
+    t = t->getPointerTo(0);
 
   return t;
+#endif
 }
 
 LLValue *DtoBitCast(LLValue *v, LLType *t, const llvm::Twine &name) {
@@ -686,6 +705,8 @@ llvm::GlobalVariable *isaGlobalVar(LLValue *v) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+LLType *getI8Type() { return LLType::getInt8Ty(gIR->context()); }
+
 LLPointerType *getPtrToType(LLType *t) {
   if (t == LLType::getVoidTy(gIR->context()))
     t = LLType::getInt8Ty(gIR->context());
@@ -750,7 +771,7 @@ LLValue *DtoAggrPair(LLValue *V1, LLValue *V2, const char *name) {
   return DtoAggrPair(t, V1, V2, name);
 }
 
-LLValue *DtoAggrPaint(LLValue *aggr, LLType *as) {
+LLValue *DtoSlicePaint(LLValue *aggr, LLType *as) {
   if (aggr->getType() == as) {
     return aggr;
   }

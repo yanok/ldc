@@ -513,21 +513,37 @@ void DIBuilder::AddStaticMembers(AggregateDeclaration *ad, DIFile file,
         // Also DWARF supports imported declarations, but LLVM
         // currently does nothing with DIImportedEntity except at CU-level.
         visitMembers(tmixin->members);
-      } else if (auto vd = s->isVarDeclaration())
-        if (vd->isDataseg() && !vd->aliassym /* TODO: tuples*/ &&
-            !vd->type->toBasetype()->isTypeNoreturn()) {
-          llvm::MDNode *elem =
-              CreateMemberType(vd->loc.linnum, vd->type, file, vd->toChars(), 0,
-                               vd->visibility.kind,
-                               /*isStatic = */ true, scope);
-          elems.push_back(elem);
-          StaticDataMemberCache[vd].reset(elem);
+      } else if (auto vd = s->isVarDeclaration()) {
+        if (vd->isDataseg()) {
+          if (vd->aliassym) { // ugly kludge for tuples
+            if (auto td = vd->aliassym->isTupleDeclaration()) {
+              if (td->isexp && td->objects) {
+                Dsymbols tupleVars;
+                for (auto o : *td->objects) {
+                  if (auto e = isExpression(o))
+                    if (auto ve = e->isVarExp())
+                      if (auto vd2 = ve->var->isVarDeclaration())
+                        if (vd2->isDataseg())
+                          tupleVars.push(vd2);
+                }
+                visitMembers(&tupleVars);
+              }
+            }
+          } else if (!vd->type->toBasetype()->isTypeNoreturn()) {
+            llvm::MDNode *elem =
+                CreateMemberType(vd->loc.linnum, vd->type, file, vd->toChars(),
+                                 0, vd->visibility.kind,
+                                 /*isStatic = */ true, scope);
+            elems.push_back(elem);
+            StaticDataMemberCache[vd].reset(elem);
+          }
         }
-    } /*else if (auto fd = s->isFuncDeclaration())*/ // Clang also adds static
-                                                     // functions as
-                                                     // declarations, but they
-                                                     // already work without
-                                                     // adding them.
+      } /*else if (auto fd = s->isFuncDeclaration())*/ // Clang also adds static
+                                                       // functions as
+                                                       // declarations, but they
+                                                       // already work without
+                                                       // adding them.
+    }
   };
   visitMembers(members);
 }
@@ -545,10 +561,9 @@ DIType DIBuilder::CreateCompositeType(Type *t) {
 
   // Use the actual type associated with the declaration, ignoring any
   // const/wrappers.
-  LLType *T = DtoType(ad->type);
-  if (t->ty == TY::Tclass)
-    T = T->getPointerElementType();
+  DtoType(ad->type);
   IrAggr *irAggr = getIrAggr(ad, true);
+  LLType *T = irAggr->getLLStructType();
 
   if (irAggr->diCompositeType) {
     return irAggr->diCompositeType;

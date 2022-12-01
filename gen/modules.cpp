@@ -24,7 +24,7 @@
 #include "dmd/template.h"
 #include "driver/cl_options_instrumentation.h"
 #include "driver/timetrace.h"
-#include "gen/abi.h"
+#include "gen/abi/abi.h"
 #include "gen/arrays.h"
 #include "gen/functions.h"
 #include "gen/irstate.h"
@@ -268,7 +268,8 @@ void addCoverageAnalysis(Module *m) {
                                                init, "_d_cover_data");
 
     d_cover_data_slice = DtoConstSlice(DtoConstSize_t(m->numlines),
-                                       DtoGEP(m->d_cover_data, 0, 0));
+                                       DtoGEP(m->d_cover_data->getValueType(),
+                                              m->d_cover_data, 0, 0));
   }
 
   // Create "static constructor" that calls _d_cover_register2(string filename,
@@ -294,6 +295,9 @@ void addCoverageAnalysis(Module *m) {
     // Set function attributes. See functions.cpp:DtoDefineFunction()
     if (global.params.targetTriple->getArch() == llvm::Triple::x86_64) {
       ctor->addFnAttr(LLAttribute::UWTable);
+#if LDC_LLVM_VER >= 1500
+      ctor->setUWTableKind(llvm::UWTableKind::Default);
+#endif
     }
 
     llvm::BasicBlock *bb = llvm::BasicBlock::Create(gIR->context(), "", ctor);

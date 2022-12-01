@@ -1,6 +1,7 @@
 // https://github.com/ldc-developers/ldc/issues/3692
 
 // REQUIRES: target_X86
+// REQUIRES: atmost_llvm1409
 // RUN: %ldc -mtriple=x86_64-linux-gnu -output-ll -of=%t.ll %s
 // RUN: FileCheck %s < %t.ll
 

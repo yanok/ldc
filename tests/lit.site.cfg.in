@@ -50,7 +50,7 @@ config.suffixes = ['.d',
 # directories.
 config.excludes = [
     'inputs',
-    'd2',
+    'dmd',
     'CMakeLists.txt',
     'runlit.py',
 ]
@@ -85,7 +85,7 @@ config.available_features.add("llvm%d" % config.llvm_version)
 plusoneable_llvmversion = config.llvm_version // 10  + config.llvm_version%10
 for version in range(60, plusoneable_llvmversion+1):
     config.available_features.add("atleast_llvm%d0%d" % (version//10, version%10))
-for version in range(plusoneable_llvmversion, 141):
+for version in range(plusoneable_llvmversion, 201):
     config.available_features.add("atmost_llvm%d0%d" % (version//10, version%10))
 
 # Define OS as available feature (Windows, Darwin, Linux, FreeBSD...)
@@ -156,6 +156,7 @@ config.substitutions.append( ('%gnu_make', config.gnu_make_bin) )
 config.substitutions.append( ('%profdata', config.ldcprofdata_bin) )
 config.substitutions.append( ('%prunecache', config.ldcprunecache_bin) )
 config.substitutions.append( ('%llvm-spirv', os.path.join(config.llvm_tools_dir, 'llvm-spirv')) )
+config.substitutions.append( ('%llc', os.path.join(config.llvm_tools_dir, 'llc')) )
 config.substitutions.append( ('%runtimedir', config.ldc2_runtime_dir ) )
 
 # Add platform-dependent file extension substitutions

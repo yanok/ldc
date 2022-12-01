@@ -26,7 +26,7 @@
 #include "driver/cl_options_instrumentation.h"
 #include "driver/cl_options_sanitizers.h"
 #include "driver/timetrace.h"
-#include "gen/abi.h"
+#include "gen/abi/abi.h"
 #include "gen/arrays.h"
 #include "gen/classes.h"
 #include "gen/dcompute/target.h"
@@ -488,7 +488,7 @@ void applyTargetMachineAttributes(llvm::Function &func,
   const auto dcompute = gIR->dcomputetarget;
 
   // TODO: (correctly) apply these for NVPTX (but not for SPIRV).
-  if (dcompute && dcompute->target == DComputeTarget::OpenCL)
+  if (dcompute && dcompute->target == DComputeTarget::ID::OpenCL)
     return;
   const auto cpu = dcompute ? "" : target.getTargetCPU();
   const auto features = dcompute ? "" : target.getTargetFeatureString();
@@ -1221,7 +1221,11 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
 
   // function attributes
   if (gABI->needsUnwindTables()) {
+#if LDC_LLVM_VER >= 1500
+    func->setUWTableKind(llvm::UWTableKind::Default);
+#else
     func->addFnAttr(LLAttribute::UWTable);
+#endif
   }
   if (opts::isAnySanitizerEnabled() &&
       !opts::functionIsInSanitizerBlacklist(fd)) {
@@ -1297,7 +1301,7 @@ void DtoDefineFunction(FuncDeclaration *fd, bool linkageAvailableExternally) {
         LLType *targetThisType = thismem->getType();
         thismem = DtoBitCast(thismem, getVoidPtrType());
         auto off = DtoConstInt(-fd->interfaceVirtual->offset);
-        thismem = DtoGEP1(thismem, off);
+        thismem = DtoGEP1(llvm::Type::getInt8Ty(gIR->context()), thismem, off);
         thismem = DtoBitCast(thismem, targetThisType);
       }
       thismem = DtoAllocaDump(thismem, 0, "this");

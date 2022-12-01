@@ -1,4 +1,4 @@
-//===-- gen/abi-nvptx.cpp ---------------------------------------*- C++ -*-===//
+//===-- gen/abi-spirv.cpp ---------------------------------------*- C++ -*-===//
 //
 //                         LDC – the LLVM D compiler
 //
@@ -7,21 +7,22 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gen/abi.h"
+#include "gen/abi/abi.h"
 #include "gen/dcompute/druntime.h"
 #include "gen/uda.h"
 #include "dmd/declaration.h"
 #include "gen/tollvm.h"
 #include "gen/dcompute/abi-rewrites.h"
 
-struct NVPTXTargetABI : TargetABI {
+struct SPIRVTargetABI : TargetABI {
   DComputePointerRewrite pointerRewite;
-  llvm::CallingConv::ID callingConv(LINK) override {
-    llvm_unreachable("expected FuncDeclaration overload to be used");
+  llvm::CallingConv::ID callingConv(LINK l) override {
+      assert(l == LINK::c);
+      return llvm::CallingConv::SPIR_FUNC;
   }
   llvm::CallingConv::ID callingConv(FuncDeclaration *fdecl) override {
-    return hasKernelAttr(fdecl) ? llvm::CallingConv::PTX_Kernel
-                                : llvm::CallingConv::PTX_Device;
+    return hasKernelAttr(fdecl) ? llvm::CallingConv::SPIR_KERNEL
+                                : llvm::CallingConv::SPIR_FUNC;
   }
   bool passByVal(TypeFunction *, Type *t) override {
     t = t->toBasetype();
@@ -32,9 +33,19 @@ struct NVPTXTargetABI : TargetABI {
       if (!arg->byref)
         rewriteArgument(fty, *arg);
     }
+    if (!skipReturnValueRewrite(fty))
+      rewriteArgument(fty, *fty.ret);
   }
   bool returnInArg(TypeFunction *tf, bool) override {
-    return !tf->isref() && DtoIsInMemoryOnly(tf->next);
+    if (tf->isref())
+      return false;
+    Type *retty = tf->next->toBasetype();
+    if (retty->ty == TY::Tsarray)
+      return true;
+    else if (auto st = retty->isTypeStruct())
+      return !toDcomputePointer(st->sym);
+    else
+      return false;
   }
   void rewriteArgument(IrFuncTy &fty, IrFuncTyArg &arg) override {
     Type *ty = arg.type->toBasetype();
@@ -50,4 +61,4 @@ struct NVPTXTargetABI : TargetABI {
   }
 };
 
-TargetABI *createNVPTXABI() { return new NVPTXTargetABI(); }
+TargetABI *createSPIRVABI() { return new SPIRVTargetABI(); }

@@ -145,13 +145,15 @@ LLValue *DtoUnpaddedStruct(Type *dty, LLValue *v) {
   LLValue *newval = llvm::UndefValue::get(DtoUnpaddedStructType(dty));
 
   for (unsigned i = 0; i < fields.length; i++) {
-    LLValue *fieldptr = DtoIndexAggregate(v, sty->sym, fields[i]);
+    LLValue *fieldptr = DtoLVal(DtoIndexAggregate(v, sty->sym, fields[i]));
     LLValue *fieldval;
     if (fields[i]->type->ty == TY::Tstruct) {
       // Nested structs are the only members that can contain padding
       fieldval = DtoUnpaddedStruct(fields[i]->type, fieldptr);
     } else {
-      fieldval = DtoLoad(fieldptr);
+      assert(!fields[i]->isBitFieldDeclaration());
+      fieldptr = DtoBitCast(fieldptr, DtoPtrToType(fields[i]->type));
+      fieldval = DtoLoad(DtoType(fields[i]->type), fieldptr);
     }
     newval = DtoInsertValue(newval, fieldval, i);
   }
@@ -165,12 +167,14 @@ void DtoPaddedStruct(Type *dty, LLValue *v, LLValue *lval) {
   VarDeclarations &fields = sty->sym->fields;
 
   for (unsigned i = 0; i < fields.length; i++) {
-    LLValue *fieldptr = DtoIndexAggregate(lval, sty->sym, fields[i]);
+    LLValue *fieldptr = DtoLVal(DtoIndexAggregate(lval, sty->sym, fields[i]));
     LLValue *fieldval = DtoExtractValue(v, i);
     if (fields[i]->type->ty == TY::Tstruct) {
       // Nested structs are the only members that can contain padding
       DtoPaddedStruct(fields[i]->type, fieldval, fieldptr);
     } else {
+      assert(!fields[i]->isBitFieldDeclaration());
+      fieldptr = DtoBitCast(fieldptr, DtoPtrToType(fields[i]->type));
       DtoStoreZextI8(fieldval, fieldptr);
     }
   }

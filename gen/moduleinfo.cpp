@@ -12,7 +12,7 @@
 #include "dmd/errors.h"
 #include "dmd/mangle.h"
 #include "dmd/module.h"
-#include "gen/abi.h"
+#include "gen/abi/abi.h"
 #include "gen/classes.h"
 #include "gen/irstate.h"
 #include "gen/llvmhelpers.h"
@@ -85,9 +85,10 @@ llvm::Function *buildForwarderFunction(
 
   // ... incrementing the gate variables.
   for (auto gate : gates) {
-    assert(getIrGlobal(gate));
-    const auto val = getIrGlobal(gate)->value;
-    const auto rval = builder.CreateLoad(getPointeeType(val), val, "vgate");
+    const auto glob = getIrGlobal(gate);
+    assert(glob);
+    const auto val = glob->value;
+    const auto rval = builder.CreateLoad(glob->getType(), val, "vgate");
     const auto res = builder.CreateAdd(rval, DtoConstUint(1), "vgate");
     builder.CreateStore(res, val);
   }

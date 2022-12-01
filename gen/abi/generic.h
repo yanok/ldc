@@ -13,7 +13,7 @@
 
 #pragma once
 
-#include "gen/abi.h"
+#include "gen/abi/abi.h"
 #include "gen/irstate.h"
 #include "gen/llvmhelpers.h"
 #include "gen/logger.h"
@@ -105,7 +105,8 @@ struct RemoveStructPadding : ABIRewrite {
     LLValue *lval = DtoAlloca(dty, ".RemoveStructPadding_dump");
     // Make sure the padding is zero, so struct comparisons work.
     // TODO: Only do this if there's padding, and/or only initialize padding.
-    DtoMemSetZero(lval, DtoConstSize_t(getTypeAllocSize(DtoType(dty))));
+    DtoMemSetZero(DtoType(dty), lval,
+                  DtoConstSize_t(getTypeAllocSize(DtoType(dty))));
     DtoPaddedStruct(dty->toBasetype(), v, lval);
     return lval;
   }
@@ -135,11 +136,11 @@ struct BaseBitcastABIRewrite : ABIRewrite {
     if (!dv->isLVal()) {
       LLValue *dump = DtoAllocaDump(dv, asType, alignment,
                                     ".BaseBitcastABIRewrite_arg_storage");
-      return DtoLoad(dump, name);
+      return DtoLoad(asType, dump, name);
     }
 
     LLValue *address = DtoLVal(dv);
-    LLType *pointeeType = address->getType()->getPointerElementType();
+    LLType *pointeeType = DtoType(dv->type);
 
     if (getTypeStoreSize(asType) > getTypeAllocSize(pointeeType) ||
         alignment > DtoAlignment(dv->type)) {
@@ -148,11 +149,11 @@ struct BaseBitcastABIRewrite : ABIRewrite {
           asType, alignment, ".BaseBitcastABIRewrite_padded_arg_storage");
       DtoMemCpy(paddedDump, address,
                 DtoConstSize_t(getTypeAllocSize(pointeeType)));
-      return DtoLoad(paddedDump, name);
+      return DtoLoad(asType, paddedDump, name);
     }
 
     address = DtoBitCast(address, getPtrToType(asType));
-    return DtoLoad(address, name);
+    return DtoLoad(asType, address, name);
   }
 
   LLValue *getLVal(Type *dty, LLValue *v) override {

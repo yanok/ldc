@@ -18,7 +18,7 @@
 #include "dmd/target.h"
 #include "dmd/tokens.h"
 #include "driver/cl_options_instrumentation.h"
-#include "gen/abi.h"
+#include "gen/abi/abi.h"
 #include "gen/attributes.h"
 #include "gen/functions.h"
 #include "gen/irstate.h"
@@ -32,6 +32,9 @@
 #include "ir/irtypefunction.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Attributes.h"
+#if LDC_LLVM_VER >= 1600
+#include "llvm/IR/ModRef.h"
+#endif
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -272,7 +275,11 @@ struct LazyFunctionDeclarer {
       // FIXME: Move to better place (abi-x86-64.cpp?)
       // NOTE: There are several occurances if this line.
       if (global.params.targetTriple->getArch() == llvm::Triple::x86_64) {
+#if LDC_LLVM_VER >= 1500
+        fn->setUWTableKind(llvm::UWTableKind::Default);
+#else
         fn->addFnAttr(LLAttribute::UWTable);
+#endif
       }
 
       fn->setCallingConv(gABI->callingConv(dty, false));
@@ -464,7 +471,8 @@ static Type *rt_dg2() {
 
 static void buildRuntimeModule() {
   Logger::println("building runtime module");
-  M = new llvm::Module("ldc internal runtime", gIR->context());
+  auto &context = gIR->context();
+  M = new llvm::Module("ldc internal runtime", context);
 
   Type *voidTy = Type::tvoid;
   Type *boolTy = Type::tbool;
@@ -493,8 +501,14 @@ static void buildRuntimeModule() {
   AttrSet NoAttrs,
       Attr_NoUnwind(NoAttrs, LLAttributeList::FunctionIndex,
                     llvm::Attribute::NoUnwind),
+#if LDC_LLVM_VER >= 1600
+      Attr_ReadOnly(llvm::AttributeList().addFnAttribute(
+          context, llvm::Attribute::getWithMemoryEffects(
+                       context, llvm::MemoryEffects::readOnly()))),
+#else
       Attr_ReadOnly(NoAttrs, LLAttributeList::FunctionIndex,
                     llvm::Attribute::ReadOnly),
+#endif
       Attr_Cold(NoAttrs, LLAttributeList::FunctionIndex, llvm::Attribute::Cold),
       Attr_Cold_NoReturn(Attr_Cold, LLAttributeList::FunctionIndex,
                          llvm::Attribute::NoReturn),
@@ -589,14 +603,6 @@ static void buildRuntimeModule() {
   createFwdDecl(LINK::c, voidArrayTy,
                 {"_d_arraysetlengthT", "_d_arraysetlengthiT"},
                 {typeInfoTy, sizeTy, voidArrayPtrTy}, {STCconst, 0, 0});
-
-  // byte[] _d_arrayappendcTX(const TypeInfo ti, ref byte[] px, size_t n)
-  createFwdDecl(LINK::c, voidArrayTy, {"_d_arrayappendcTX"},
-                {typeInfoTy, voidArrayTy, sizeTy}, {STCconst, STCref, 0});
-
-  // void[] _d_arrayappendT(const TypeInfo ti, ref byte[] x, byte[] y)
-  createFwdDecl(LINK::c, voidArrayTy, {"_d_arrayappendT"},
-                {typeInfoTy, voidArrayTy, voidArrayTy}, {STCconst, STCref, 0});
 
   // void[] _d_arrayappendcd(ref byte[] x, dchar c)
   // void[] _d_arrayappendwd(ref byte[] x, dchar c)
@@ -696,13 +702,8 @@ static void buildRuntimeModule() {
   createFwdDecl(LINK::c, voidArrayTy, {"_d_arrayassign_l", "_d_arrayassign_r"},
                 {typeInfoTy, voidArrayTy, voidArrayTy, voidPtrTy});
 
-  // void[] _d_arrayctor(TypeInfo ti, void[] from, void[] to)
-  createFwdDecl(LINK::c, voidArrayTy, {"_d_arrayctor"},
-                {typeInfoTy, voidArrayTy, voidArrayTy});
-
   // void* _d_arraysetassign(void* p, void* value, int count, TypeInfo ti)
-  // void* _d_arraysetctor(void* p, void* value, int count, TypeInfo ti)
-  createFwdDecl(LINK::c, voidPtrTy, {"_d_arraysetassign", "_d_arraysetctor"},
+  createFwdDecl(LINK::c, voidPtrTy, {"_d_arraysetassign"},
                 {voidPtrTy, voidPtrTy, intTy, typeInfoTy});
 
   //////////////////////////////////////////////////////////////////////////////
