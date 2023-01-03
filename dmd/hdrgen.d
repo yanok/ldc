@@ -1836,10 +1836,6 @@ private void expressionPrettyPrint(Expression e, OutBuffer* buf, HdrGenState* hg
                 {
                     TypeEnum te = cast(TypeEnum)t;
                     auto sym = te.sym;
-
-// WEKAMOD: https://github.com/dlang/dmd/pull/11841 changed behavior of stringof for enums. This lead to ABI hash changes.
-// Temporary revert to old behavior.
-if (!IN_WEKA || hgs.fullDump) // old behavior, remove this line completely for new behavior
                     if (sym && sym.members && (!hgs.inEnumDecl || hgs.inEnumDecl != sym))
                     {
                         foreach (em; *sym.members)
