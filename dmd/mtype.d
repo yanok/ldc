@@ -5082,7 +5082,6 @@ extern (C++) final class TypeFunction : TypeNext
     /** Extends TypeNext.constConv by also checking for matching attributes **/
     override MATCH constConv(Type to)
     {
-        if (!IN_WEKA())
         // Attributes need to match exactly, otherwise it's an implicit conversion
         if (this.ty != to.ty || !this.attributesEqual(cast(TypeFunction) to))
             return MATCH.nomatch;
