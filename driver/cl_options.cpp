@@ -545,6 +545,14 @@ void setDefaultMathOptions(llvm::TargetOptions &targetOptions) {
   }
 }
 
+cl::opt<bool> fNullPointerIsValid(
+    "fno-delete-null-pointer-checks", cl::ZeroOrMore,
+    cl::desc(
+        "Treat null pointer dereference as defined behavior when optimizing "
+        "(instead of _un_defined behavior). This prevents the optimizer from "
+        "assuming that any dereferenced pointer must not have been null and "
+        "optimize away the branches accordingly."));
+
 cl::opt<bool, true>
     allinst("allinst", cl::ZeroOrMore, cl::location(global.params.allInst),
             cl::desc("Generate code for all template instantiations"));
