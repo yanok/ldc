@@ -1297,7 +1297,9 @@ extern (C++) /* IN_LLVM abstract */ class Expression : ASTNode
             StructDeclaration sd = (cast(TypeStruct)v.type).sym;
             if (sd.members) // not opaque
             {
-                sd.determineSize(v.loc);
+                if (sd.semanticRun >= PASS.semanticdone)
+                    sd.determineSize(v.loc);
+
                 if (sd.hasNoFields)
                     return false;
             }
