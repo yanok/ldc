@@ -46,7 +46,8 @@ LLValue *loadThisPtr(AggregateDeclaration *ad, IrFunction &irfunc) {
 }
 
 LLValue *indexVThis(AggregateDeclaration *ad,  LLValue* val) {
-  llvm::StructType *st = getIrAggr(ad, true)->getLLStructType();
+  DtoResolveDsymbol(ad);
+  llvm::StructType *st = getIrAggr(ad)->getLLStructType();
   unsigned idx = getVthisIdx(ad);
   return DtoLoad(st->getElementType(idx),
                  DtoGEP(st, val, 0, idx, ".vthis"));
@@ -226,13 +227,9 @@ void DtoResolveNestedContext(const Loc &loc, AggregateDeclaration *decl,
     DtoResolveDsymbol(decl);
 
     unsigned idx = getVthisIdx(decl);
-    llvm::StructType *st = getIrAggr(decl, true)->getLLStructType();
+    llvm::StructType *st = getIrAggr(decl)->getLLStructType();
     LLValue *gep = DtoGEP(st, value, 0, idx, ".vthis");
-#if LDC_LLVM_VER >= 1500
-    DtoStore(nest, gep);
-#else
-    DtoStore(DtoBitCast(nest, gep->getType()->getContainedType(0)), gep);
-#endif
+    DtoStore(DtoBitCast(nest, st->getElementType(idx)), gep);
   }
 }
 
