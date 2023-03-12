@@ -105,6 +105,7 @@ enum BUILTIN : ubyte
     toPrecFloat,
     toPrecDouble,
     toPrecReal,
+    ctfeWrite,
 
     // IN_LLVM:
     llvm_sin,
