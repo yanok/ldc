@@ -2041,7 +2041,8 @@ else
                         errorSupplemental(ps.loc, "while evaluating `pragma(msg, %s)`", arg.toChars());
                         return setError();
                     }
-                    if (auto se = e.toStringExp())
+                    import dmd.ctfeexpr: resolveSlice;
+                    if (auto se = resolveSlice(e).toStringExp())
                     {
                         const slice = se.toUTF8(sc).peekString();
                         fprintf(stderr, "%.*s", cast(int)slice.length, slice.ptr);
