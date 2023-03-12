@@ -129,6 +129,13 @@ version (IN_LLVM)
         return BUILTIN.unimp;
     const md = m.md;
 
+    if (md.packages.length == 1 && md.packages[0] == Id.core &&
+        md.id == Id.builtinsModuleName &&
+        fd.ident == Id.ctfeWrite)
+    {
+        return BUILTIN.ctfeWrite;
+    }
+
     // Look for core.math, core.bitop, std.math, and std.math.<package>
     const id2 = (md.packages.length == 2) ? md.packages[1] : md.id;
     if (id2 != Id.math && id2 != Id.bitop)
@@ -220,6 +227,23 @@ else
 Expression eval_unimp(Loc loc, FuncDeclaration fd, Expressions* arguments)
 {
     return null;
+}
+
+Expression eval_ctfeWrite(Loc loc, FuncDeclaration fd, Expressions* arguments)
+{
+    import core.stdc.stdio: fprintf, stderr;
+    import dmd.ctfeexpr: CTFEExp, resolveSlice;
+
+    Expression e = (*arguments)[0];
+    if (auto se = resolveSlice(e).toStringExp())
+    {
+        const slice = se.peekString();
+        fprintf(stderr, "%.*s\n", cast(int)slice.length, slice.ptr);
+    }
+    else
+        fprintf(stderr, "%s\n", e.toChars());
+
+    return CTFEExp.voidexp;
 }
 
 Expression eval_sin(Loc loc, FuncDeclaration fd, Expressions* arguments)
