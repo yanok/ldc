@@ -1,6 +1,34 @@
 # LDC master
 
 #### Big news
+- The prebuilt Linux packages are now generated on a Ubuntu 20.04 box, so the min required `glibc` version has been raised from 2.26 to 2.31. (#4367)
+
+#### Platform support
+
+#### Bug fixes
+
+# LDC 1.32.0 (2023-03-12)
+
+#### Big news
+- Frontend, druntime and Phobos are at version [2.102.2](https://dlang.org/changelog/2.102.0.html). (#4323, #4341)
+- LLVM for prebuilt packages bumped to v15.0.7. (#4311)
+- Linker-level dead code elimination is enabled by default for Apple, wasm and *all* ELF targets too now. (#4320)
+- Vector comparisons (==, !=, <, <=, >, >=) now yield a vector mask. Identity comparisons (`is`, `!is`) still yield a scalar `bool`. (3a59ee81)
+- New `timetrace2txt` tool for easier inspection of `--ftime-trace` output. (#4335)
+- `--ftime-trace` now also traces CTFE execution: the start expression of CTFE and function calls during CTFE. (#4339)
+
+#### Platform support
+- Supports LLVM 9.0 - 15.0.
+- Now supports `-mabi` for RISC-V targets. (#4322)
+
+#### Bug fixes
+- GC closures including variables with alignment > 16 bytes are now properly aligned. (ef8ba481)
+- Fix regression with LLVM 13+: some errors in inline assembly don't stop compilation. (#4293, #4331)
+
+# LDC 1.31.0 (2022-02-11)
+
+#### Big news
+- Frontend, druntime and Phobos are at version [2.101.2](https://dlang.org/changelog/2.101.0.html). (#4141, #4279)
 - Bit fields support. (#4015)
 - macOS on Apple M1: linking with `-g` is working again without unaligned pointer warnings/errors. This fixes file:line debug information in exception backtraces (requiring `atos`, a macOS development tool installed with Xcode), without the need to set MACOSX_DEPLOYMENT_TARGET=11 and using a modified LLVM. (#4291)
 - New commandline option `-fno-delete-null-pointer-checks`, mimicking the same commandline option of GCC and Clang. (#4297)
