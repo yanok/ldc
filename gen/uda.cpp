@@ -391,7 +391,7 @@ void applyVarDeclUDAs(VarDeclaration *decl, llvm::GlobalVariable *gvar) {
           ident->toChars());
     } else if (ident == Id::udaAssumeUsed) {
       applyAttrAssumeUsed(*gIR, sle, gvar);
-    } else if (ident == Id::udaWeak) {
+    } else if (ident == Id::udaWeak || ident == Id::udaNoSplitStack) {
       // @weak is applied elsewhere
     } else if (ident == Id::udaDynamicCompile ||
                ident == Id::udaDynamicCompileEmit) {
@@ -540,6 +540,12 @@ bool hasKernelAttr(Dsymbol *sym) {
   }
 
   return true;
+}
+
+/// Check whether `fd` has the `@ldc.attributes.noSplitStack` UDA applied.
+bool hasNoSplitStackUDA(FuncDeclaration *fd) {
+  auto sle = getMagicAttribute(fd, Id::udaNoSplitStack, Id::attributes);
+  return sle != nullptr;
 }
 
 /// Creates a mask (for &) of @ldc.attributes.noSanitize UDA applied to the

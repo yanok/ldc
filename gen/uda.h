@@ -35,5 +35,6 @@ enum class DComputeCompileFor : int
   hostAndDevice = 2
 };
 extern "C" DComputeCompileFor hasComputeAttr(Dsymbol *sym);
+bool hasNoSplitStackUDA(FuncDeclaration *fd);
 
 unsigned getMaskFromNoSanitizeUDA(FuncDeclaration &fd);
