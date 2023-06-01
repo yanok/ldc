@@ -2,7 +2,7 @@
  * Builds struct member functions if needed and not defined by the user.
  * Includes `opEquals`, `opAssign`, post blit, copy constructor and destructor.
  *
- * Copyright:   Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2023 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/clone.d, _clone.d)
@@ -31,6 +31,7 @@ import dmd.globals;
 import dmd.id;
 import dmd.identifier;
 import dmd.init;
+import dmd.location;
 import dmd.mtype;
 import dmd.opover;
 import dmd.semantic2;
@@ -112,11 +113,11 @@ FuncDeclaration hasIdentityOpAssign(AggregateDeclaration ad, Scope* sc)
         sc.minst = null;
 
         a[0] = er;
-        auto f = resolveFuncCall(ad.loc, sc, assign, null, ad.type, &a, FuncResolveFlag.quiet);
+        auto f = resolveFuncCall(ad.loc, sc, assign, null, ad.type, ArgumentList(&a), FuncResolveFlag.quiet);
         if (!f)
         {
             a[0] = el;
-            f = resolveFuncCall(ad.loc, sc, assign, null, ad.type, &a, FuncResolveFlag.quiet);
+            f = resolveFuncCall(ad.loc, sc, assign, null, ad.type, ArgumentList(&a), FuncResolveFlag.quiet);
         }
 
         sc = sc.pop();
@@ -477,7 +478,7 @@ private FuncDeclaration hasIdentityOpEquals(AggregateDeclaration ad, Scope* sc)
             {
                 a[0] = e;
                 a[0].type = tthis;
-                return resolveFuncCall(ad.loc, sc, eq, null, tthis, &a, FuncResolveFlag.quiet);
+                return resolveFuncCall(ad.loc, sc, eq, null, tthis, ArgumentList(&a), FuncResolveFlag.quiet);
             }
 
             f = rfc(er);
@@ -870,17 +871,17 @@ void buildDtors(AggregateDeclaration ad, Scope* sc)
         return;                    // unions don't have destructors
 
     StorageClass stc = STC.safe | STC.nothrow_ | STC.pure_ | STC.nogc;
-    Loc declLoc = ad.userDtors.dim ? ad.userDtors[0].loc : ad.loc;
+    Loc declLoc = ad.userDtors.length ? ad.userDtors[0].loc : ad.loc;
     Loc loc; // internal code should have no loc to prevent coverage
     FuncDeclaration xdtor_fwd = null;
 
     // Build the field destructor (`ad.fieldDtor`), if needed.
     // If the user dtor is an extern(C++) prototype, then we expect it performs a full-destruction and skip building.
-    const bool dtorIsCppPrototype = ad.userDtors.dim && ad.userDtors[0]._linkage == LINK.cpp && !ad.userDtors[0].fbody;
+    const bool dtorIsCppPrototype = ad.userDtors.length && ad.userDtors[0]._linkage == LINK.cpp && !ad.userDtors[0].fbody;
     if (!dtorIsCppPrototype)
     {
         Expression e = null;
-        for (size_t i = 0; i < ad.fields.dim; i++)
+        for (size_t i = 0; i < ad.fields.length; i++)
         {
             auto v = ad.fields[i];
             if (v.storage_class & STC.ref_)
@@ -985,7 +986,7 @@ void buildDtors(AggregateDeclaration ad, Scope* sc)
     }
 
     // Set/build `ad.aggrDtor`
-    switch (dtors.dim)
+    switch (dtors.length)
     {
     case 0:
         break;
@@ -1064,7 +1065,7 @@ private DtorDeclaration buildWindowsCppDtor(AggregateDeclaration ad, DtorDeclara
 {
     auto cldec = ad.isClassDeclaration();
     if (!cldec || cldec.cppDtorVtblIndex == -1) // scalar deleting dtor not built for non-virtual dtors
-        return dtor;
+        return dtor;    // perhaps also do this if STC.scope_ is set
 
     // generate deleting C++ destructor corresponding to:
     // void* C::~C(int del)
@@ -1076,8 +1077,9 @@ private DtorDeclaration buildWindowsCppDtor(AggregateDeclaration ad, DtorDeclara
     Parameter delparam = new Parameter(STC.undefined_, Type.tuns32, Identifier.idPool("del"), new IntegerExp(dtor.loc, 0, Type.tuns32), null);
     Parameters* params = new Parameters;
     params.push(delparam);
-    auto ftype = new TypeFunction(ParameterList(params), Type.tvoidptr, LINK.cpp, dtor.storage_class);
-    auto func = new DtorDeclaration(dtor.loc, dtor.loc, dtor.storage_class, Id.cppdtor);
+    const stc = dtor.storage_class & ~STC.scope_; // because we add the `return this;` later
+    auto ftype = new TypeFunction(ParameterList(params), Type.tvoidptr, LINK.cpp, stc);
+    auto func = new DtorDeclaration(dtor.loc, dtor.loc, stc, Id.cppdtor);
     func.type = ftype;
 
     // Always generate the function with body, because it is not exported from DLLs.
@@ -1168,7 +1170,7 @@ private DtorDeclaration buildExternDDtor(AggregateDeclaration ad, Scope* sc)
  */
 FuncDeclaration buildInv(AggregateDeclaration ad, Scope* sc)
 {
-    switch (ad.invs.dim)
+    switch (ad.invs.length)
     {
     case 0:
         return null;
@@ -1225,11 +1227,11 @@ FuncDeclaration buildPostBlit(StructDeclaration sd, Scope* sc)
     if (sd.isUnionDeclaration())
         return null;
 
-    const hasUserDefinedPosblit = sd.postblits.dim && !sd.postblits[0].isDisabled ? true : false;
+    const hasUserDefinedPosblit = sd.postblits.length && !sd.postblits[0].isDisabled ? true : false;
 
     // by default, the storage class of the created postblit
     StorageClass stc = STC.safe | STC.nothrow_ | STC.pure_ | STC.nogc;
-    Loc declLoc = sd.postblits.dim ? sd.postblits[0].loc : sd.loc;
+    Loc declLoc = sd.postblits.length ? sd.postblits[0].loc : sd.loc;
     Loc loc; // internal code should have no loc to prevent coverage
 
     // if any of the postblits are disabled, then the generated postblit
@@ -1240,7 +1242,7 @@ FuncDeclaration buildPostBlit(StructDeclaration sd, Scope* sc)
     VarDeclaration[] fieldsToDestroy;
     auto postblitCalls = new Statements();
     // iterate through all the struct fields that are not disabled
-    for (size_t i = 0; i < sd.fields.dim && !(stc & STC.disable); i++)
+    for (size_t i = 0; i < sd.fields.length && !(stc & STC.disable); i++)
     {
         auto structField = sd.fields[i];
         if (structField.storage_class & STC.ref_)
@@ -1411,7 +1413,7 @@ FuncDeclaration buildPostBlit(StructDeclaration sd, Scope* sc)
     }
 
     // Build our own "postblit" which executes a, but only if needed.
-    if (postblitCalls.dim || (stc & STC.disable))
+    if (postblitCalls.length || (stc & STC.disable))
     {
         //printf("Building __fieldPostBlit()\n");
         checkShared();
@@ -1426,7 +1428,7 @@ FuncDeclaration buildPostBlit(StructDeclaration sd, Scope* sc)
 
     // create __xpostblit, which is the generated postblit
     FuncDeclaration xpostblit = null;
-    switch (sd.postblits.dim)
+    switch (sd.postblits.length)
     {
     case 0:
         break;

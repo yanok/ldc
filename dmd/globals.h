@@ -1,6 +1,6 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 1999-2023 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
  * https://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
@@ -30,6 +30,7 @@ enum OUTPUTFLAG
 // Can't include arraytypes.h here, need to declare these directly.
 template <typename TYPE> struct Array;
 
+class ErrorSink;
 class FileManager;
 struct Loc;
 
@@ -41,11 +42,10 @@ enum
     DIAGNOSTICoff     // disable diagnostic
 };
 
-typedef unsigned char MessageStyle;
-enum
+enum class MessageStyle : unsigned char
 {
-    MESSAGESTYLEdigitalmars, // file(line,column): message
-    MESSAGESTYLEgnu          // file:line:column: message
+    digitalmars, // file(line,column): message
+    gnu          // file:line:column: message
 };
 
 // The state of array bounds checking
@@ -193,7 +193,9 @@ struct Param
     bool fix16997;               // fix integral promotions for unary + - ~ operators
                                  // https://issues.dlang.org/show_bug.cgi?id=16997
     FeatureState dtorFields;     // destruct fields of partially constructed objects
-                                     // https://issues.dlang.org/show_bug.cgi?id=14246
+                                 // https://issues.dlang.org/show_bug.cgi?id=14246
+    FeatureState systemVariables; // limit access to variables marked @system from @safe code
+
     CHECKENABLE useInvariants;     // generate class invariant checks
     CHECKENABLE useIn;             // generate precondition checks
     CHECKENABLE useOut;            // generate postcondition checks
@@ -360,6 +362,7 @@ struct Global
     unsigned varSequenceNumber;
 
     FileManager* fileManager;
+    ErrorSink* errorSink;       // where the error messages go
 
 #if IN_LLVM
     DString ldc_version;
@@ -429,6 +432,11 @@ struct Loc
     unsigned linnum;
     unsigned charnum;
 
+    static void set(bool showColumns, MessageStyle messageStyle);
+
+    static bool showColumns;
+    static MessageStyle messageStyle;
+
     Loc()
     {
         linnum = 0;
@@ -444,8 +452,8 @@ struct Loc
     }
 
     const char *toChars(
-        bool showColumns = global.params.showColumns,
-        MessageStyle messageStyle = global.params.messageStyle) const;
+        bool showColumns = Loc::showColumns,
+        MessageStyle messageStyle = Loc::messageStyle) const;
     bool equals(const Loc& loc) const;
 };
 

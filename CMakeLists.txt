@@ -111,10 +111,10 @@ include(GetLinuxDistribution)
 #
 
 # Version information
-set(LDC_VERSION "1.31.0") # May be overridden by git hash tag
+set(LDC_VERSION "1.33.0") # May be overridden by git hash tag
 set(DMDFE_MAJOR_VERSION   2)
-set(DMDFE_MINOR_VERSION   101)
-set(DMDFE_PATCH_VERSION   2)
+set(DMDFE_MINOR_VERSION   103)
+set(DMDFE_PATCH_VERSION   1)
 
 set(DMD_VERSION ${DMDFE_MAJOR_VERSION}.${DMDFE_MINOR_VERSION}.${DMDFE_PATCH_VERSION})
 
@@ -637,33 +637,6 @@ if(LDC_WITH_LLD)
     endif()
 endif()
 
-# Plugin support
-if(UNIX)
-    set(LDC_ENABLE_PLUGINS_DEFAULT ON)
-else()
-    set(LDC_ENABLE_PLUGINS_DEFAULT OFF)
-endif()
-set(LDC_ENABLE_PLUGINS ${LDC_ENABLE_PLUGINS_DEFAULT} CACHE BOOL "Build LDC with plugin support (increases binary size)")
-if(LDC_ENABLE_PLUGINS)
-    add_definitions(-DLDC_ENABLE_PLUGINS)
-
-    if(APPLE)
-        # No extra link flags needed.
-    elseif(UNIX)
-        # For plugin support, we need to link with --export-dynamic on Unix.
-        # Make sure the linker supports --export-dynamic (on Solaris it is not supported and also not needed).
-        set(CMAKE_REQUIRED_QUIET_BAK ${CMAKE_REQUIRED_QUIET})
-        set(CMAKE_REQUIRED_QUIET ON) # suppress status messages
-        CHECK_LINK_FLAG("--export-dynamic" LINKER_ACCEPTS_EXPORT_DYNAMIC_FLAG)
-        set(CMAKE_REQUIRED_QUIET ${CMAKE_REQUIRED_QUIET_BAK})
-
-        if(LINKER_ACCEPTS_EXPORT_DYNAMIC_FLAG)
-            set(LDC_LINKERFLAG_LIST "${LDC_LINKERFLAG_LIST};-Wl,--export-dynamic")
-        endif()
-    endif()
-endif()
-message(STATUS "-- Building LDC with plugin support (LDC_ENABLE_PLUGINS): ${LDC_ENABLE_PLUGINS}")
-
 if(NOT DEFINED LDC_LINK_MANUALLY)
     if(MSVC)
         # Use the D host compiler for linking D executables.
@@ -679,6 +652,42 @@ if(LDC_LINK_MANUALLY AND NOT DEFINED D_LINKER_ARGS)
     message(STATUS "Host D compiler linker program: ${D_LINKER_COMMAND}")
     message(STATUS "Host D compiler linker flags: ${D_LINKER_ARGS}")
 endif()
+
+# Plugin support
+if(UNIX)
+    set(LDC_ENABLE_PLUGINS_DEFAULT ON)
+else()
+    set(LDC_ENABLE_PLUGINS_DEFAULT OFF)
+endif()
+set(LDC_ENABLE_PLUGINS ${LDC_ENABLE_PLUGINS_DEFAULT} CACHE BOOL "Build LDC with plugin support (increases binary size)")
+if(LDC_ENABLE_PLUGINS)
+    add_definitions(-DLDC_ENABLE_PLUGINS)
+
+    if(APPLE)
+        # Need to disable dead_strip with LDC host compilers.
+        if("${D_COMPILER_ID}" STREQUAL "LDMD")
+            if(LDC_LINK_MANUALLY)
+                # suboptimal - applies to all D executables (incl. ldmd2, ldc-build-runtime, ldc-prune-cache)
+                list(REMOVE_ITEM D_LINKER_ARGS "-Wl,-dead_strip")
+            else()
+                # just for ldc2 (and ldc2-unittest)
+                append("-disable-linker-strip-dead" DFLAGS_LDC)
+            endif()
+        endif()
+    elseif(UNIX)
+        # For plugin support, we need to link with --export-dynamic on Unix.
+        # Make sure the linker supports --export-dynamic (on Solaris it is not supported and also not needed).
+        set(CMAKE_REQUIRED_QUIET_BAK ${CMAKE_REQUIRED_QUIET})
+        set(CMAKE_REQUIRED_QUIET ON) # suppress status messages
+        CHECK_LINK_FLAG("--export-dynamic" LINKER_ACCEPTS_EXPORT_DYNAMIC_FLAG)
+        set(CMAKE_REQUIRED_QUIET ${CMAKE_REQUIRED_QUIET_BAK})
+
+        if(LINKER_ACCEPTS_EXPORT_DYNAMIC_FLAG)
+            set(LDC_LINKERFLAG_LIST "${LDC_LINKERFLAG_LIST};-Wl,--export-dynamic")
+        endif()
+    endif()
+endif()
+message(STATUS "-- Building LDC with plugin support (LDC_ENABLE_PLUGINS): ${LDC_ENABLE_PLUGINS}")
 
 build_d_executable(
     "${LDC_EXE}"
@@ -804,8 +813,15 @@ if (LDC_INSTALL_LLVM_RUNTIME_LIBS)
         copy_compilerrt_lib("darwin/libclang_rt.xray-fdr_osx.a"        "libldc_rt.xray-fdr.a"       FALSE)
         copy_compilerrt_lib("darwin/libclang_rt.xray-profiling_osx.a"  "libldc_rt.xray-profiling.a" FALSE)
     elseif(UNIX)
-        set(LDC_INSTALL_LLVM_RUNTIME_LIBS_OS   "linux"  CACHE STRING "Non-Mac Posix: OS used as directory name for the compiler-rt source libraries, e.g., 'freebsd'.")
-        set(LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH "x86_64" CACHE STRING "Non-Mac Posix: architecture used as libname suffix for the compiler-rt source libraries, e.g., 'aarch64'.")
+        if(LDC_LLVM_VER LESS 1500)
+            set(LDC_INSTALL_LLVM_RUNTIME_LIBS_OS_DEFAULT "linux")
+            set(LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH_DEFAULT "x86_64")
+        else()
+            set(LDC_INSTALL_LLVM_RUNTIME_LIBS_OS_DEFAULT "x86_64-unknown-linux-gnu")
+            set(LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH_DEFAULT "")
+        endif()
+        set(LDC_INSTALL_LLVM_RUNTIME_LIBS_OS   "${LDC_INSTALL_LLVM_RUNTIME_LIBS_OS_DEFAULT}"   CACHE STRING "Non-Mac Posix: OS used as directory name for the compiler-rt source libraries, e.g., 'freebsd'.")
+        set(LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH "${LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH_DEFAULT}" CACHE STRING "Non-Mac Posix: architecture used as libname suffix for the compiler-rt source libraries, e.g., 'aarch64'.")
         if(LDC_INSTALL_LLVM_RUNTIME_LIBS_ARCH STREQUAL "")
             set(compilerrt_suffix "")
         else()

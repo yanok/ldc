@@ -95,11 +95,11 @@ void checkStructElems(StructLiteralExp *sle, ArrayParam<Type *> elemTypes) {
 /// if it is applied to `sym`, otherwise returns nullptr.
 StructLiteralExp *getMagicAttribute(Dsymbol *sym, const Identifier *id,
                                     const Identifier *from) {
-  if (!sym->userAttribDecl)
+  if (!sym->userAttribDecl())
     return nullptr;
 
   // Loop over all UDAs and early return the expression if a match was found.
-  Expressions *attrs = sym->userAttribDecl->getAttributes();
+  Expressions *attrs = sym->userAttribDecl()->getAttributes();
   expandTuples(attrs);
   for (auto attr : *attrs) {
     if (auto sle = attr->isStructLiteralExp())
@@ -115,12 +115,12 @@ StructLiteralExp *getMagicAttribute(Dsymbol *sym, const Identifier *id,
 /// it is applied to `sym`, otherwise returns nullptr.
 StructLiteralExp *getLastMagicAttribute(Dsymbol *sym, const Identifier *id,
                                         const Identifier *from) {
-  if (!sym->userAttribDecl)
+  if (!sym->userAttribDecl())
     return nullptr;
 
   // Loop over all UDAs and find the last match
   StructLiteralExp *lastMatch = nullptr;
-  Expressions *attrs = sym->userAttribDecl->getAttributes();
+  Expressions *attrs = sym->userAttribDecl()->getAttributes();
   expandTuples(attrs);
   for (auto attr : *attrs) {
     if (auto sle = attr->isStructLiteralExp())
@@ -137,11 +137,11 @@ StructLiteralExp *getLastMagicAttribute(Dsymbol *sym, const Identifier *id,
 void callForEachMagicAttribute(Dsymbol &sym, const Identifier *id,
                                const Identifier *from,
                                std::function<void(StructLiteralExp *)> action) {
-  if (!sym.userAttribDecl)
+  if (!sym.userAttribDecl())
     return;
 
   // Loop over all UDAs and call `action` if a match was found.
-  Expressions *attrs = sym.userAttribDecl->getAttributes();
+  Expressions *attrs = sym.userAttribDecl()->getAttributes();
   expandTuples(attrs);
   for (auto attr : *attrs) {
     if (auto sle = attr->isStructLiteralExp())
@@ -489,10 +489,10 @@ bool parseCallingConvention(llvm::StringRef name,
 } // anonymous namespace
 
 void applyVarDeclUDAs(VarDeclaration *decl, llvm::GlobalVariable *gvar) {
-  if (!decl->userAttribDecl)
+  if (!decl->userAttribDecl())
     return;
 
-  Expressions *attrs = decl->userAttribDecl->getAttributes();
+  Expressions *attrs = decl->userAttribDecl()->getAttributes();
   expandTuples(attrs);
   for (auto &attr : *attrs) {
     auto sle = getLdcAttributesStruct(attr);
@@ -531,11 +531,11 @@ void applyVarDeclUDAs(VarDeclaration *decl, llvm::GlobalVariable *gvar) {
 
 void applyFuncDeclUDAs(FuncDeclaration *decl, IrFunction *irFunc) {
   // function UDAs
-  if (decl->userAttribDecl) {
+  if (decl->userAttribDecl()) {
     llvm::Function *func = irFunc->getLLVMFunc();
     assert(func);
 
-    Expressions *attrs = decl->userAttribDecl->getAttributes();
+    Expressions *attrs = decl->userAttribDecl()->getAttributes();
     expandTuples(attrs);
     for (auto &attr : *attrs) {
       auto sle = getLdcAttributesStruct(attr);
@@ -571,7 +571,9 @@ void applyFuncDeclUDAs(FuncDeclaration *decl, IrFunction *irFunc) {
       } else if (ident == Id::udaAssumeUsed) {
         applyAttrAssumeUsed(*gIR, sle, func);
       } else if (ident == Id::udaWeak || ident == Id::udaKernel ||
-                 ident == Id::udaNoSanitize || ident==Id::udaCallingConvention) {
+                 ident == Id::udaNoSanitize ||
+                 ident == Id::udaCallingConvention ||
+                 ident == Id::udaNoSplitStack) {
         // These UDAs are applied elsewhere, thus should silently be ignored here.
       } else if (ident == Id::udaDynamicCompile) {
         irFunc->dynamicCompile = true;
@@ -680,6 +682,12 @@ bool hasKernelAttr(Dsymbol *sym) {
   }
 
   return true;
+}
+
+/// Check whether `fd` has the `@ldc.attributes.noSplitStack` UDA applied.
+bool hasNoSplitStackUDA(FuncDeclaration *fd) {
+  auto sle = getMagicAttribute(fd, Id::udaNoSplitStack, Id::attributes);
+  return sle != nullptr;
 }
 
 /// Creates a mask (for &) of @ldc.attributes.noSanitize UDA applied to the

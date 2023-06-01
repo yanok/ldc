@@ -24,6 +24,11 @@ else version (WatchOS)
 debug(trace) import core.stdc.stdio : printf;
 debug(info) import core.stdc.stdio : printf;
 
+extern (C) alias CXX_DEMANGLER = char* function (const char* mangled_name,
+                                                char* output_buffer,
+                                                size_t* length,
+                                                int* status) nothrow pure @trusted;
+
 private struct NoHooks
 {
     // supported hooks
@@ -796,7 +801,7 @@ pure @safe:
     TypeTuple:
         B Number Arguments
     */
-    char[] parseType( char[] name = null ) return scope
+    char[] parseType() return scope
     {
         static immutable string[23] primitives = [
             "char", // a
@@ -825,7 +830,7 @@ pure @safe:
         ];
 
         static if (__traits(hasMember, Hooks, "parseType"))
-            if (auto n = hooks.parseType(this, name))
+            if (auto n = hooks.parseType(this, null))
                 return n;
 
         debug(trace) printf( "parseType+\n" );
@@ -856,27 +861,24 @@ pure @safe:
         switch ( t )
         {
         case 'Q': // Type back reference
-            return parseBackrefType( () => parseType( name ) );
+            return parseBackrefType(() => parseType());
         case 'O': // Shared (O Type)
             popFront();
             put( "shared(" );
             parseType();
             put( ')' );
-            pad( name );
             return dst[beg .. len];
         case 'x': // Const (x Type)
             popFront();
             put( "const(" );
             parseType();
             put( ')' );
-            pad( name );
             return dst[beg .. len];
         case 'y': // Immutable (y Type)
             popFront();
             put( "immutable(" );
             parseType();
             put( ')' );
-            pad( name );
             return dst[beg .. len];
         case 'N':
             popFront();
@@ -907,7 +909,6 @@ pure @safe:
             popFront();
             parseType();
             put( "[]" );
-            pad( name );
             return dst[beg .. len];
         case 'G': // TypeStaticArray (G Number Type)
             popFront();
@@ -916,7 +917,6 @@ pure @safe:
             put( '[' );
             put( num );
             put( ']' );
-            pad( name );
             return dst[beg .. len];
         case 'H': // TypeAssocArray (H Type Type)
             popFront();
@@ -926,31 +926,28 @@ pure @safe:
             put( '[' );
             put( tx );
             put( ']' );
-            pad( name );
             return dst[beg .. len];
         case 'P': // TypePointer (P Type)
             popFront();
             parseType();
             put( '*' );
-            pad( name );
             return dst[beg .. len];
         case 'F': case 'U': case 'W': case 'V': case 'R': // TypeFunction
-            return parseTypeFunction( name );
+            return parseTypeFunction();
         case 'C': // TypeClass (C LName)
         case 'S': // TypeStruct (S LName)
         case 'E': // TypeEnum (E LName)
         case 'T': // TypeTypedef (T LName)
             popFront();
             parseQualifiedName();
-            pad( name );
             return dst[beg .. len];
         case 'D': // TypeDelegate (D TypeFunction)
             popFront();
             auto modifiers = parseModifier();
             if ( front == 'Q' )
-                parseBackrefType( () => parseTypeFunction( name, IsDelegate.yes ) );
+                parseBackrefType(() => parseTypeFunction(IsDelegate.yes));
             else
-                parseTypeFunction( name, IsDelegate.yes );
+                parseTypeFunction(IsDelegate.yes);
             if (modifiers)
             {
                 // write modifiers behind the function arguments
@@ -984,7 +981,6 @@ pure @safe:
             {
                 popFront();
                 put( primitives[cast(size_t)(t - 'a')] );
-                pad( name );
                 return dst[beg .. len];
             }
             else if (t == 'z')
@@ -995,12 +991,10 @@ pure @safe:
                 case 'i':
                     popFront();
                     put( "cent" );
-                    pad( name );
                     return dst[beg .. len];
                 case 'k':
                     popFront();
                     put( "ucent" );
-                    pad( name );
                     return dst[beg .. len];
                 default:
                     error();
@@ -1353,7 +1347,7 @@ pure @safe:
         TypeFunction:
             CallConvention FuncAttrs Arguments ArgClose Type
     */
-    char[] parseTypeFunction( char[] name = null, IsDelegate isdg = IsDelegate.no ) return scope
+    char[] parseTypeFunction(IsDelegate isdg = IsDelegate.no) return scope
     {
         debug(trace) printf( "parseTypeFunction+\n" );
         debug(trace) scope(success) printf( "parseTypeFunction-\n" );
@@ -1378,18 +1372,8 @@ pure @safe:
         auto retbeg = len;
         parseType();
         put( ' ' );
-        // append name/delegate/function
-        if ( name.length )
-        {
-            if ( !contains( dst[0 .. len], name ) )
-                put( name );
-            else if ( shift( name ).ptr != name.ptr )
-            {
-                argbeg -= name.length;
-                retbeg -= name.length;
-            }
-        }
-        else if ( IsDelegate.yes == isdg )
+        // append delegate/function
+        if (IsDelegate.yes == isdg)
             put( "delegate" );
         else
             put( "function" );
@@ -2115,19 +2099,22 @@ pure @safe:
 
 
 /**
- * Demangles D mangled names.  If it is not a D mangled name, it returns its
- * argument name.
+ * Demangles D/C++ mangled names.  If it is not a D/C++ mangled name, it
+ * returns its argument name.
  *
  * Params:
  *  buf = The string to demangle.
  *  dst = An optional destination buffer.
+ *  __cxa_demangle = optional C++ demangler
  *
  * Returns:
- *  The demangled name or the original string if the name is not a mangled D
- *  name.
+ *  The demangled name or the original string if the name is not a mangled
+ *  D/C++ name.
  */
-char[] demangle(return scope const(char)[] buf, return scope char[] dst = null ) nothrow pure @safe
+char[] demangle(return scope const(char)[] buf, return scope char[] dst = null, CXX_DEMANGLER __cxa_demangle = null) nothrow pure @safe
 {
+    if (__cxa_demangle && buf.length > 2 && buf[0..2] == "_Z")
+        return demangleCXX(buf, __cxa_demangle, dst);
     auto d = Demangle!()(buf, dst);
     // fast path (avoiding throwing & catching exception) for obvious
     // non-D mangled names
@@ -2210,7 +2197,7 @@ char[] reencodeMangled(return scope const(char)[] mangled) nothrow pure @safe
             }
         }
 
-        bool parseLName(scope ref Remangle d) scope
+        bool parseLName(scope ref Remangle d) scope @trusted
         {
             flushPosition(d);
 
@@ -2261,7 +2248,7 @@ char[] reencodeMangled(return scope const(char)[] mangled) nothrow pure @safe
                 }
                 else
                 {
-                    idpos[id] = refpos;
+                    idpos[id] = refpos; //! scope variable id used as AA key, makes this function @trusted
                     result ~= d.buf[refpos .. d.pos];
                 }
             }
@@ -2706,8 +2693,10 @@ unittest
     {
         char[] buf = new char[i];
         auto ds = demangle(s, buf);
-        assert(ds == "pure nothrow @safe char[] core.demangle.demangle(scope return const(char)[], scope return char[])" ||
-               ds == "pure nothrow @safe char[] core.demangle.demangle(return scope const(char)[], return scope char[])");
+        assert(ds == "pure nothrow @safe char[] core.demangle.demangle(scope return const(char)[], scope return char[], extern (C) char* function(const(char*), char*, ulong*, int*) pure nothrow @trusted*)" ||
+               ds == "pure nothrow @safe char[] core.demangle.demangle(return scope const(char)[], return scope char[], extern (C) char* function(const(char*), char*, ulong*, int*) pure nothrow @trusted*)" ||
+               ds == "pure nothrow @safe char[] core.demangle.demangle(scope return const(char)[], scope return char[], extern (C) char* function(const(char*), char*, uint*, int*) pure nothrow @trusted*)" ||
+               ds == "pure nothrow @safe char[] core.demangle.demangle(return scope const(char)[], return scope char[], extern (C) char* function(const(char*), char*, uint*, int*) pure nothrow @trusted*)", ds);
     }
 }
 
@@ -2724,6 +2713,9 @@ unittest
     s ~= "FiZi";
     expected ~= "F";
     assert(s.demangle == expected);
+
+    // https://issues.dlang.org/show_bug.cgi?id=23562
+    assert(demangle("_Zv") == "_Zv");
 }
 
 // https://issues.dlang.org/show_bug.cgi?id=22235
@@ -2907,4 +2899,78 @@ private string toStringConsume (immutable ManglingFlagInfo[] infos, ref ushort b
         }
     }
     return null;
+}
+
+private shared CXX_DEMANGLER __cxa_demangle;
+
+/**
+ * Returns:
+ *  a CXX_DEMANGLER if a C++ stdlib is loaded
+ */
+
+CXX_DEMANGLER getCXXDemangler() nothrow @trusted
+{
+    if (__cxa_demangle is null)
+    version (Posix)
+    {
+        import core.sys.posix.dlfcn : dlsym;
+        version (DragonFlyBSD) import core.sys.dragonflybsd.dlfcn : RTLD_DEFAULT;
+        version (FreeBSD) import core.sys.freebsd.dlfcn : RTLD_DEFAULT;
+        version (linux) import core.sys.linux.dlfcn : RTLD_DEFAULT;
+        version (NetBSD) import core.sys.netbsd.dlfcn : RTLD_DEFAULT;
+        version (OpenBSD) import core.sys.openbsd.dlfcn : RTLD_DEFAULT;
+        version (Darwin) import core.sys.darwin.dlfcn : RTLD_DEFAULT;
+        version (Solaris) import core.sys.solaris.dlfcn : RTLD_DEFAULT;
+
+        if (auto found = cast(CXX_DEMANGLER) dlsym(RTLD_DEFAULT, "__cxa_demangle"))
+            __cxa_demangle = found;
+    }
+
+    if (__cxa_demangle is null)
+        __cxa_demangle = (const char* mangled_name, char* output_buffer,
+                            size_t* length, int* status) nothrow pure @trusted {
+                                *status = -1;
+                                return null;
+                            };
+
+    return __cxa_demangle;
+}
+
+/**
+ * Demangles C++ mangled names.  If it is not a C++ mangled name, it
+ * returns its argument name.
+ *
+ * Params:
+ *  buf = The string to demangle.
+ *  __cxa_demangle = C++ demangler
+ *  dst = An optional destination buffer.
+ *
+ * Returns:
+ *  The demangled name or the original string if the name is not a mangled
+ *  C++ name.
+ */
+private char[] demangleCXX(return scope const(char)[] buf, CXX_DEMANGLER __cxa_demangle, return scope char[] dst = null,) nothrow pure @trusted
+{
+    char[] c_string = dst; // temporarily use dst buffer if possible
+    c_string.length = buf.length + 1;
+    c_string[0 .. buf.length] = buf[0 .. buf.length];
+    c_string[buf.length] = '\0';
+
+    int status;
+    size_t demangled_length;
+    auto demangled = __cxa_demangle(&c_string[0], null, &demangled_length, &status);
+    scope (exit) {
+        import core.memory;
+        pureFree(cast(void*) demangled);
+    }
+    if (status == 0)
+    {
+        dst.length = demangled_length;
+        dst[] = demangled[0 .. demangled_length];
+        return dst;
+    }
+
+    dst.length = buf.length;
+    dst[] = buf[];
+    return dst;
 }

@@ -207,17 +207,6 @@ llvm::AllocaInst *DtoRawAlloca(LLType *lltype, size_t alignment,
   return ai;
 }
 
-LLValue *DtoGcMalloc(const Loc &loc, LLType *lltype, const char *name) {
-  // get runtime function
-  llvm::Function *fn = getRuntimeFunction(loc, gIR->module, "_d_allocmemory");
-  // parameters
-  LLValue *size = DtoConstSize_t(getTypeAllocSize(lltype));
-  // call runtime allocator
-  LLValue *mem = gIR->CreateCallOrInvoke(fn, size, name);
-  // cast
-  return DtoBitCast(mem, getPtrToType(lltype), name);
-}
-
 LLValue *DtoAllocaDump(DValue *val, const char *name) {
   return DtoAllocaDump(val, val->type, name);
 }
@@ -327,6 +316,14 @@ void DtoCAssert(Module *M, const Loc &loc, LLValue *msg) {
   } else if (triple.getEnvironment() == llvm::Triple::Android) {
     args.push_back(file);
     args.push_back(line);
+    args.push_back(msg);
+  } else if (global.params.isNewlibEnvironment) {
+    const auto irFunc = gIR->func();
+    const auto funcName =
+        irFunc && irFunc->decl ? irFunc->decl->toPrettyChars() : "";
+    args.push_back(file);
+    args.push_back(line);
+    args.push_back(DtoConstCString(funcName));
     args.push_back(msg);
   } else {
     args.push_back(msg);
@@ -847,9 +844,9 @@ void DtoResolveVariable(VarDeclaration *vd) {
   // just forward aliases
   // TODO: Is this required here or is the check in VarDeclaration::codegen
   // sufficient?
-  if (vd->aliassym) {
-    Logger::println("alias sym");
-    DtoResolveDsymbol(vd->aliassym);
+  if (vd->aliasTuple) {
+    Logger::println("aliasTuple");
+    DtoResolveDsymbol(vd->aliasTuple);
     return;
   }
 
@@ -883,7 +880,7 @@ void DtoResolveVariable(VarDeclaration *vd) {
 void DtoVarDeclaration(VarDeclaration *vd) {
   assert(!vd->isDataseg() &&
          "Statics/globals are handled in DtoDeclarationExp.");
-  assert(!vd->aliassym && "Aliases are handled in DtoDeclarationExp.");
+  assert(!vd->aliasTuple && "Aliases are handled in DtoDeclarationExp.");
 
   IF_LOG Logger::println("DtoVarDeclaration(vdtype = %s)", vd->type->toChars());
   LOG_SCOPE
@@ -956,11 +953,11 @@ DValue *DtoDeclarationExp(Dsymbol *declaration) {
   if (VarDeclaration *vd = declaration->isVarDeclaration()) {
     Logger::println("VarDeclaration");
 
-    // if aliassym is set, this VarDecl is redone as an alias to another symbol
+    // if aliasTuple is set, this VarDecl is redone as an alias to another symbol
     // this seems to be done to rewrite Tuple!(...) v;
     // as a TupleDecl that contains a bunch of individual VarDecls
-    if (vd->aliassym) {
-      return DtoDeclarationExp(vd->aliassym);
+    if (vd->aliasTuple) {
+      return DtoDeclarationExp(vd->aliasTuple);
     }
 
     if (vd->storage_class & STCmanifest) {
@@ -1024,7 +1021,7 @@ LLValue *DtoRawVarDeclaration(VarDeclaration *var, LLValue *addr) {
   assert(!var->isDataseg());
 
   // we don't handle aliases either
-  assert(!var->aliassym);
+  assert(!var->aliasTuple);
 
   IrLocal *irLocal = isIrLocalCreated(var) ? getIrLocal(var) : nullptr;
 

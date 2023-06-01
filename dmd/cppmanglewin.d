@@ -1,7 +1,7 @@
 /**
  * Do mangling for C++ linkage for Digital Mars C++ and Microsoft Visual C++.
  *
- * Copyright: Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Copyright: Copyright (C) 1999-2023 by The D Language Foundation, All Rights Reserved
  * Authors: Walter Bright, https://www.digitalmars.com
  * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/cppmanglewin.d, _cppmanglewin.d)
@@ -29,6 +29,7 @@ import dmd.func;
 import dmd.globals;
 import dmd.id;
 import dmd.identifier;
+import dmd.location;
 import dmd.mtype;
 import dmd.common.outbuffer;
 import dmd.root.rootobject;
@@ -134,7 +135,7 @@ private final class VisualCPPMangler : Visitor
     int flags;
     OutBuffer buf;
 
-    extern (D) this(VisualCPPMangler rvl)
+    extern (D) this(VisualCPPMangler rvl) scope
     {
         flags |= (rvl.flags & IS_DMC);
         saved_idents[] = rvl.saved_idents[];
@@ -143,7 +144,7 @@ private final class VisualCPPMangler : Visitor
     }
 
 public:
-    extern (D) this(bool isdmc, Loc loc)
+    extern (D) this(bool isdmc, Loc loc) scope
     {
         if (isdmc)
         {
@@ -720,7 +721,7 @@ extern(D):
         case CppOperator.OpAssign:
             TemplateDeclaration td = ti.tempdecl.isTemplateDeclaration();
             assert(td);
-            assert(ti.tiargs.dim >= 1);
+            assert(ti.tiargs.length >= 1);
             TemplateParameter tp = (*td.parameters)[0];
             TemplateValueParameter tv = tp.isTemplateValueParameter();
             if (!tv || !tv.valType.isString())
@@ -774,7 +775,7 @@ extern(D):
             }
         }
         continue_template:
-        if (ti.tiargs.dim == 1)
+        if (ti.tiargs.length == 1)
         {
             buf.writestring(symName);
             return true;
@@ -998,7 +999,7 @@ extern(D):
             is_dmc_template = true;
         }
         bool is_var_arg = false;
-        for (size_t i = firstTemplateArg; i < actualti.tiargs.dim; i++)
+        for (size_t i = firstTemplateArg; i < actualti.tiargs.length; i++)
         {
             RootObject o = (*actualti.tiargs)[i];
             TemplateParameter tp = null;
@@ -1021,9 +1022,14 @@ extern(D):
             {
                 tmp.mangleTemplateValue(o, tv, actualti, is_dmc_template);
             }
-            else
-            if (!tp || tp.isTemplateTypeParameter())
+            else if (!tp || tp.isTemplateTypeParameter())
             {
+                Type t = isType(o);
+                if (t is null)
+                {
+                    actualti.error("internal compiler error: C++ `%s` template value parameter is not supported", o.toChars());
+                    fatal();
+                }
                 tmp.mangleTemplateType(o);
             }
             else if (tp.isTemplateAliasParameter())
@@ -1275,7 +1281,7 @@ extern(D):
             rettype.accept(tmp);
             tmp.flags &= ~MANGLE_RETURN_TYPE;
         }
-        if (!type.parameterList.parameters || !type.parameterList.parameters.dim)
+        if (!type.parameterList.parameters || !type.parameterList.parameters.length)
         {
             if (type.parameterList.varargs == VarArg.variadic)
                 tmp.buf.writeByte('Z');

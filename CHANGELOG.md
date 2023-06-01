@@ -1,6 +1,56 @@
 # LDC master
 
 #### Big news
+- Frontend, druntime and Phobos are at version [2.103.1](https://dlang.org/changelog/2.103.0.html), incl. new command-line option `-verror-supplements`. (#4345)
+
+#### Platform support
+
+#### Bug fixes
+
+# LDC 1.32.2 (2023-05-12)
+
+#### Big news
+- New command-line option `--fwarn-stack-size=<threshold>` with LLVM 13+. (#4378)
+- New command-line option `--fsplit-stack` for incremental stack allocations, see https://llvm.org/docs/SegmentedStacks.html. (#4379)
+  - New UDA `ldc.attributes.noSplitStack` disables it on a per-function basis. (#4382)
+- New command-line option `--indent` for the `timetrace2txt` tool. (#4391)
+
+#### Bug fixes
+- Fix potentially huge compile slowdowns with `-g` and LLVM 15+. (#4354, #4393)
+- Treat *all* LLVM warnings as regular warnings (e.g., errors with `-w`). Requires LLVM 13+. (#4384)
+
+# LDC 1.32.1 (2023-04-17)
+
+#### Big news
+- The prebuilt Linux packages are now generated on a Ubuntu 20.04 box, so the min required `glibc` version has been raised from 2.26 to 2.31. (#4367)
+
+#### Bug fixes
+- Fix empty `ldc.gccbuiltins_*` modules with LLVM 15+. (#4347, #4350)
+- Fix v1.31 regression wrt. potentially wrong constant pointer offsets. (#4362, #4365)
+- Windows: Fix v1.32 regression wrt. leaking `Throwable.info` backtraces. (#4369)
+- Fix C assert calls for newlib targets. (#4351)
+
+# LDC 1.32.0 (2023-03-12)
+
+#### Big news
+- Frontend, druntime and Phobos are at version [2.102.2](https://dlang.org/changelog/2.102.0.html). (#4323, #4341)
+- LLVM for prebuilt packages bumped to v15.0.7. (#4311)
+- Linker-level dead code elimination is enabled by default for Apple, wasm and *all* ELF targets too now. (#4320)
+- Vector comparisons (==, !=, <, <=, >, >=) now yield a vector mask. Identity comparisons (`is`, `!is`) still yield a scalar `bool`. (3a59ee81)
+- New `timetrace2txt` tool for easier inspection of `--ftime-trace` output. (#4335)
+- `--ftime-trace` now also traces CTFE execution: the start expression of CTFE and function calls during CTFE. (#4339)
+
+#### Platform support
+- Supports LLVM 9.0 - 15.0.
+- Now supports `-mabi` for RISC-V targets. (#4322)
+
+#### Bug fixes
+- GC closures including variables with alignment > 16 bytes are now properly aligned. (ef8ba481)
+- Fix regression with LLVM 13+: some errors in inline assembly don't stop compilation. (#4293, #4331)
+
+# LDC 1.31.0 (2022-02-11)
+
+#### Big news
 - Frontend, druntime and Phobos are at version [2.101.2](https://dlang.org/changelog/2.101.0.html). (#4141, #4279)
 - Bit fields support. (#4015)
 - macOS on Apple M1: linking with `-g` is working again without unaligned pointer warnings/errors. This fixes file:line debug information in exception backtraces (requiring `atos`, a macOS development tool installed with Xcode), without the need to set MACOSX_DEPLOYMENT_TARGET=11 and using a modified LLVM. (#4291)

@@ -1,7 +1,7 @@
 /**
  * Describes a back-end compiler and implements compiler-specific actions.
  *
- * Copyright:   Copyright (C) 1999-2022 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2023 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/compiler.d, _compiler.d)
@@ -10,6 +10,8 @@
  */
 
 module dmd.compiler;
+
+import core.stdc.string;
 
 import dmd.astcodegen;
 import dmd.astenums;
@@ -142,7 +144,7 @@ extern (C++) struct Compiler
      */
     extern(C++) static bool onImport(Module m)
     {
-        if (includeImports)
+        if (includeImports && m.filetype == FileType.d)
         {
             if (includeImportedModuleCheck(ModuleComponentRange(
                 m.md ? m.md.packages : [], m.ident, m.isPackageFile)))
@@ -213,7 +215,7 @@ do
 {
     createMatchNodes();
     size_t nodeIndex = 0;
-    while (nodeIndex < matchNodes.dim)
+    while (nodeIndex < matchNodes.length)
     {
         //printf("matcher ");printMatcher(nodeIndex);printf("\n");
         auto info = matchNodes[nodeIndex++];
@@ -236,7 +238,7 @@ do
         }
         nodeIndex += info.depth;
     }
-    assert(nodeIndex == matchNodes.dim, "code bug");
+    assert(nodeIndex == matchNodes.length, "code bug");
     return includeByDefault;
 }
 
@@ -291,7 +293,7 @@ private void createMatchNodes()
     static size_t findSortedIndexToAddForDepth(size_t depth)
     {
         size_t index = 0;
-        while (index < matchNodes.dim)
+        while (index < matchNodes.length)
         {
             auto info = matchNodes[index];
             if (depth > info.depth)
@@ -301,11 +303,11 @@ private void createMatchNodes()
         return index;
     }
 
-    if (matchNodes.dim == 0)
+    if (matchNodes.length == 0)
     {
         foreach (modulePattern; includeModulePatterns)
         {
-            auto depth = parseModulePatternDepth(modulePattern);
+            auto depth = parseModulePatternDepth(modulePattern[0 .. strlen(modulePattern)]);
             auto entryIndex = findSortedIndexToAddForDepth(depth);
             matchNodes.split(entryIndex, depth + 1);
             parseModulePattern(modulePattern, &matchNodes[entryIndex], depth);
@@ -343,24 +345,20 @@ private void createMatchNodes()
  * Returns:
  *  The component depth of the given module pattern.
  */
-private ushort parseModulePatternDepth(const(char)* modulePattern)
+pure @safe
+private ushort parseModulePatternDepth(const char[] modulePattern)
 {
-    if (modulePattern[0] == '-')
-        modulePattern++;
+    const length = modulePattern.length;
+    size_t i = (length && modulePattern[0] == '-'); // skip past leading '-'
 
     // handle special case
-    if (modulePattern[0] == '.' && modulePattern[1] == '\0')
+    if (i + 1 == length && modulePattern[i] == '.')
         return 0;
 
-    ushort depth = 1;
-    for (;; modulePattern++)
-    {
-        auto c = *modulePattern;
-        if (c == '.')
-            depth++;
-        if (c == '\0')
-            return depth;
-    }
+    int depth = 1;
+    foreach (c; modulePattern[i .. length])
+        depth += c == '.';
+    return cast(ushort)depth;
 }
 unittest
 {
