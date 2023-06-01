@@ -139,10 +139,6 @@ static cl::opt<unsigned, true> errorLimit(
     "verrors", cl::ZeroOrMore, cl::location(global.params.errorLimit),
     cl::desc("Limit the number of error messages (0 means unlimited)"));
 
-static cl::opt<unsigned, true> errorSupplementLimit(
-    "verror-supplements", cl::ZeroOrMore, cl::location(global.params.errorSupplementLimit),
-    cl::desc("Limit the number of supplemental messages for each error (0 means unlimited)"));
-
 static cl::opt<bool, true>
     showGaggedErrors("verrors-spec", cl::ZeroOrMore,
                      cl::location(global.params.showGaggedErrors),
