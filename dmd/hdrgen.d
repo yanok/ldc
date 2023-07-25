@@ -131,6 +131,10 @@ void moduleToBuffer2(Module m, OutBuffer* buf, HdrGenState* hgs)
 
     foreach (s; *m.members)
     {
+        // Skip top-level template instances.
+        if (s.isTemplateInstance() && IN_WEKA())
+            continue;
+
         s.dsymbolToBuffer(buf, hgs);
     }
 }
@@ -596,8 +600,17 @@ public:
     override void visit(ReturnStatement s)
     {
         buf.writestring("return ");
-        if (s.exp)
-            s.exp.expressionToBuffer(buf, hgs);
+        if (s.exp) {
+            // Skip the compiler-generated `return this;` from ctors; caveat: user code `return this;` is not supported.
+            if (s.exp.op == EXP.this_ && IN_WEKA())
+            {
+                buf.writestring("/+ this +/");
+            }
+            else
+            {
+                s.exp.expressionToBuffer(buf, hgs);
+            }
+        }
         buf.writeByte(';');
         buf.writenl();
     }
@@ -1301,6 +1314,10 @@ public:
 
     override void visit(TemplateInstance ti)
     {
+        // Skip instantiations from object.d (assume they are compiler-generated)
+        if (ti.getModule() && ti.getModule().ident == Id.object && IN_WEKA())
+            return;
+
         buf.writestring(ti.name.toChars());
         tiargsToBuffer(ti, buf, hgs);
 
@@ -3406,6 +3423,9 @@ private void visitWithMask(Type t, ubyte modMask, OutBuffer* buf, HdrGenState* h
 
 private void dumpTemplateInstance(TemplateInstance ti, OutBuffer* buf, HdrGenState* hgs)
 {
+    if (!ti.members && !ti.aliasdecl && IN_WEKA())
+        return;
+
     buf.writeByte('{');
     buf.writenl();
     buf.level++;
@@ -3694,6 +3714,23 @@ private void initializerToBuffer(Initializer inx, OutBuffer* buf, HdrGenState* h
 
     void visitExp(ExpInitializer ei)
     {
+        // Recognize CommaExpressions for struct initialization
+        // auto p = S2(4.5); --> S2 p = p = 0 , p.this(4.5F);
+        if (IN_WEKA()) {
+            if (auto ce = ei.exp.isCommaExp) {
+                if (auto callexp = ce.e2.isCallExp) {
+                    if (auto dotvarexp = callexp.e1.isDotVarExp()) {
+                        typeToBufferx(dotvarexp.e1.type, buf, hgs);
+                        buf.writeByte('(');
+                        argsToBuffer(callexp.arguments, buf, hgs);
+                        buf.writeByte(')');
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Unrecognized constructor pattern, follow the old path:
         ei.exp.expressionToBuffer(buf, hgs);
     }
 
