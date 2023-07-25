@@ -602,7 +602,8 @@ public:
         buf.writestring("return ");
         if (s.exp) {
             // Skip the compiler-generated `return this;` from ctors; caveat: user code `return this;` is not supported.
-            if (s.exp.op == EXP.this_ && IN_WEKA())
+            Loc zero_loc;
+            if (s.exp.op == EXP.this_ && s.exp.loc == zero_loc && IN_WEKA())
             {
                 buf.writestring("/+ this +/");
             }
@@ -690,6 +691,13 @@ public:
 
     override void visit(TryFinallyStatement s)
     {
+        // Only emit the body for compiler-generated try-finally blocks.
+        Loc zero_loc;
+        if (s.loc == zero_loc && IN_WEKA()) {
+            s._body.accept(this);
+            return;
+        }
+
         buf.writestring("try");
         buf.writenl();
         buf.writeByte('{');
