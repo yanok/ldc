@@ -1464,6 +1464,12 @@ public:
     {
         if (d.storage_class & STC.local)
             return;
+
+        // Skip compiler generated aliases, e.g. `alias __xdtor = ~this()`
+        Loc zero_loc;
+        if (d.loc == zero_loc && IN_WEKA())
+            return;
+
         buf.writestring("alias ");
         if (d.aliassym)
         {
@@ -1543,6 +1549,10 @@ public:
 
     override void visit(FuncDeclaration f)
     {
+        // Skip compiler generated functions, e.g. `opAssign`
+        if (f.flags & FUNCFLAG.generated && IN_WEKA())
+            return;
+
         //printf("FuncDeclaration::toCBuffer() '%s'\n", f.toChars());
         if (stcToBuffer(buf, f.storage_class))
             buf.writeByte(' ');
