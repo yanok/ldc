@@ -10,7 +10,6 @@
 //--- plugin.d
 import dmd.dmodule : Module;
 import dmd.errors;
-import dmd.location;
 
 extern(C) void runSemanticAnalysis(Module m) {
     if (m.md) {

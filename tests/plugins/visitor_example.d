@@ -11,7 +11,6 @@
 //--- plugin.d
 import dmd.dmodule;
 import dmd.errors;
-import dmd.location;
 import dmd.visitor;
 import dmd.declaration;
 import dmd.dsymbol;
@@ -20,13 +19,28 @@ extern(C++) class MyVisitor : SemanticTimeTransitiveVisitor {
     alias visit = SemanticTimeTransitiveVisitor.visit;
 
     override void visit(VarDeclaration vd) {
-        if (vd.aliasTuple) {
-            vd.aliasTuple.foreachVar((s) {
-                auto vardecl = s.isVarDeclaration();
-                if (vardecl && vardecl.type.needsDestruction()) {
-                    warning(vardecl.loc, "It works!");
+        if (vd.aliassym) {
+            TupleDeclaration tup = vd.aliassym.isTupleDeclaration();
+            visit(tup);
+        }
+    }
+
+    override void visit(TupleDeclaration vd) {
+        import dmd.dtemplate : isDsymbol;
+        import dmd.root.rootobject;
+        import dmd.expression;
+
+        for (size_t i = 0; i < vd.objects.dim; i++) {
+            auto o = (*vd.objects)[i];
+            if (o.dyncast() == DYNCAST.expression) {
+                Expression e = cast(Expression) o;
+                if (DsymbolExp ve = e.isDsymbolExp()) {
+                    auto vardecl = ve.s.isVarDeclaration();
+                    if (vardecl && vardecl.type.needsDestruction()) {
+                        warning(vardecl.loc, "It works!");
+                    }
                 }
-            });
+            }
         }
     }
 }

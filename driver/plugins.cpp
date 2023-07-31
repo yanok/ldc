@@ -25,6 +25,14 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DynamicLibrary.h"
 
+#if LDC_LLVM_VER >= 1400
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Support/Error.h"
+
+#include "driver/cl_options.h"
+#endif
+
 namespace {
 namespace cl = llvm::cl;
 
@@ -106,7 +114,7 @@ void loadLLVMPluginNewPM(const std::string &filename) {
 
 void loadLLVMPlugin(const std::string &filename) {
 #if LDC_LLVM_VER >= 1400
-  if (opts::isUsingLegacyPassManager())
+  if (true /*opts::isUsingLegacyPassManager()*/)
     loadLLVMPluginLegacyPM(filename);
   else
     loadLLVMPluginNewPM(filename);
