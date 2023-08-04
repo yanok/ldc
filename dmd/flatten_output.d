@@ -2207,13 +2207,13 @@ buf.writestring("/+TupleExp+/");
         {
             buf.writeByte('(');
             e.e0.expressionFlattenPrint(buf, hgs);
-            buf.writestring(", tuple(");
+            buf.writestring(", AliasSeq!(");
             argsToBuffer(e.exps, buf, hgs);
             buf.writestring("))");
         }
         else
         {
-            buf.writestring("tuple(");
+            buf.writestring("AliasSeq!(");
             argsToBuffer(e.exps, buf, hgs);
             buf.writeByte(')');
         }
@@ -4175,7 +4175,7 @@ string EXPtoString(EXP op)
         EXP.delegatePointer : "delegateptr",
         EXP.delegateFunctionPointer : "delegatefuncptr",
         EXP.remove : "remove",
-        EXP.tuple : "tuple",
+        EXP.tuple : "sequence",
         EXP.traits : "__traits",
         EXP.default_ : "default",
         EXP.overloadSet : "__overloadset",
