@@ -136,6 +136,13 @@ static cl::opt<bool, true> verbose_cg_ast("vcg-ast", cl::ZeroOrMore, cl::Hidden,
                                           cl::desc("Write AST to .cg file"),
                                           cl::location(global.params.vcg_ast));
 
+#if IN_WEKA
+static cl::opt<bool, true> verbose_cg_flatten(
+    "vcg-flatten", cl::ZeroOrMore,
+    cl::desc("Write AST as compilable D code to .flat.d file"),
+    cl::location(global.params.vcg_flatten));
+#endif
+
 static cl::opt<unsigned, true> errorLimit(
     "verrors", cl::ZeroOrMore, cl::location(global.params.errorLimit),
     cl::desc("Limit the number of error messages (0 means unlimited)"));

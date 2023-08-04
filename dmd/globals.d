@@ -347,6 +347,8 @@ version (IN_LLVM)
     {
         bool enableWekaMods; // Enable specific Weka mods like the template instantiation mods
         uint templateCodegenDepth; // Don't codegen templates beyond this recusion depth.
+
+        bool vcg_flatten;           // write-out codegen-ast
     }
 } // IN_LLVM
 }

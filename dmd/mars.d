@@ -665,6 +665,23 @@ version (IN_LLVM)
             File.write(cgFilename.ptr, buf[]);
         }
     }
+version(IN_WEKA)
+{
+    if (params.vcg_flatten)
+    {
+        import dmd.flatten_output;
+        foreach (mod; modules)
+        {
+            auto buf = OutBuffer();
+            buf.doindent = 1;
+            flattenModuleToBuffer(&buf, mod);
+
+            // write the output to $(filename).flat.d
+            auto cgFilename = FileName.addExt(mod.srcfile.toString(), "flat.d");
+            File.write(cgFilename.ptr, buf[]);
+        }
+    }
+}
 
     if (global.params.doCxxHdrGeneration)
         genCppHdrFiles(modules);
