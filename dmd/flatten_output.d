@@ -66,8 +66,6 @@ struct HdrGenState
     EnumDeclaration inEnumDecl;
 }
 
-enum TEST_EMIT_ALL = 0;
-
 /**
  * Dumps the full contents of module `m` to `buf`.
  * Params:
@@ -861,6 +859,7 @@ public:
 
     override void visit(EnumMember em)
     {
+buf.writestring("/+EnumMember+/");
         if (em.type)
             typeToBuffer(em.type, em.ident, buf, hgs);
         else
@@ -1169,6 +1168,8 @@ public:
 
     override void visit(TemplateDeclaration d)
     {
+buf.writestring("/+TemplateDeclaration+/");
+
         version (none)
         {
             // Should handle template functions for doc generation
@@ -1205,6 +1206,8 @@ public:
 
     bool visitEponymousMember(TemplateDeclaration d)
     {
+buf.writestring("/+visitEponymousMember+/");
+
         if (!d.members || d.members.dim != 1)
             return false;
         Dsymbol onemember = (*d.members)[0];
@@ -1450,6 +1453,7 @@ public:
 
     override void visit(AliasDeclaration d)
     {
+buf.writestring("/+AliasDeclaration+/");
         if (d.storage_class & STC.local)
             return;
 
@@ -1461,6 +1465,7 @@ public:
         buf.writestring("alias ");
         if (d.aliassym)
         {
+buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
             buf.writestring(d.ident.toString());
             buf.writestring(" = ");
             if (stcToBuffer(buf, d.storage_class))
@@ -1469,12 +1474,14 @@ public:
         }
         else if (d.type.ty == Tfunction)
         {
+buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
             if (stcToBuffer(buf, d.storage_class))
                 buf.writeByte(' ');
             typeToBuffer(d.type, d.ident, buf, hgs);
         }
         else if (d.ident)
         {
+buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
             hgs.declstring = (d.ident == Id.string || d.ident == Id.wstring || d.ident == Id.dstring);
             buf.writestring(d.ident.toString());
             buf.writestring(" = ");
@@ -1489,6 +1496,7 @@ public:
 
     override void visit(AliasAssign d)
     {
+buf.writestring("/+AliasAssign+/");
         buf.writestring(d.ident.toString());
         buf.writestring(" = ");
         if (d.aliassym)
@@ -1831,7 +1839,7 @@ public:
 /*********************************************
  * Print expression to buffer.
  */
-private void expressionPrettyPrint(Expression e, OutBuffer* buf, HdrGenState* hgs)
+private void expressionFlattenPrint(Expression e, OutBuffer* buf, HdrGenState* hgs)
 {
     void visit(Expression e)
     {
@@ -1841,6 +1849,7 @@ buf.writestring("/+Expression+/");
 
     void visitInteger(IntegerExp e)
     {
+buf.writestring("/+IntegerExp+/");
         const dinteger_t v = e.toInteger();
         if (e.type)
         {
@@ -1860,9 +1869,14 @@ buf.writestring("/+Expression+/");
                             {
 buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
 
-
-                                buf.printf("%s.%s", sym.toPrettyChars(), em.ident.toChars());
-                                return ;
+                                TemplateInstance ti = sym.parent ? sym.parent.isTemplateInstance() : null;
+                                if (ti && ti.aliasdecl == sym) {
+                                    toCBufferInstance(ti, buf);
+                                    buf.printf(".%s", em.ident.toChars());
+                                }
+                                else
+                                    buf.printf("%s.%s", sym.toChars(), em.ident.toChars());
+                                return;
                             }
                         }
                     }
@@ -2047,7 +2061,18 @@ buf.writestring("/+DsymbolExp+/");
     {
 buf.writestring("/+StructLiteralExp+/");
 
-        buf.writestring(e.sd.toChars());
+        TemplateInstance ti = e.sd.parent ? e.sd.parent.isTemplateInstance() : null;
+        if (ti && ti.aliasdecl == e.sd)
+        {
+            printAggregateParent(ti, buf, hgs);
+            toCBufferInstance(ti, buf, hgs.fullQual);
+        }
+        else
+        {
+            printAggregateParent(e.sd, buf, hgs);
+            buf.writestring(hgs.fullQual ? e.sd.toPrettyChars() : e.sd.toChars());
+        }
+
         buf.writeByte('(');
         // CTFE can generate struct literals that contain an AddrExp pointing
         // to themselves, need to avoid infinite recursion:
@@ -2181,7 +2206,7 @@ buf.writestring("/+TupleExp+/");
         if (e.e0)
         {
             buf.writeByte('(');
-            e.e0.expressionPrettyPrint(buf, hgs);
+            e.e0.expressionFlattenPrint(buf, hgs);
             buf.writestring(", tuple(");
             argsToBuffer(e.exps, buf, hgs);
             buf.writestring("))");
@@ -2451,7 +2476,7 @@ buf.writestring("/+CallExp+/");
              * This is ok since types in constructor calls
              * can never depend on parens anyway
              */
-            e.e1.expressionPrettyPrint(buf, hgs);
+            e.e1.expressionFlattenPrint(buf, hgs);
         }
         else
             expToBuffer(e.e1, precedence[e.op], buf, hgs);
@@ -2612,6 +2637,7 @@ buf.writestring("/+ClassReferenceExp+/");
         buf.writestring(e.value.toChars());
     }
 
+buf.writestring("/+" ~ to!string(e.op) ~ "+/");
     switch (e.op)
     {
         default:
@@ -2784,6 +2810,7 @@ public:
 
     override void visit(TemplateAliasParameter tp)
     {
+buf.writestring("/+TemplateAliasParameter+/");
         buf.writestring("alias ");
         if (tp.specType)
             typeToBuffer(tp.specType, tp.ident, buf, hgs);
@@ -3121,7 +3148,7 @@ void functionToBufferWithIdent(TypeFunction tf, OutBuffer* buf, const(char)* ide
 
 void toCBuffer(const Expression e, OutBuffer* buf, HdrGenState* hgs)
 {
-    expressionPrettyPrint(cast()e, buf, hgs);
+    expressionFlattenPrint(cast()e, buf, hgs);
 }
 
 /**************************************************
@@ -3346,7 +3373,7 @@ private void sizeToBuffer(Expression e, OutBuffer* buf, HdrGenState* hgs)
 
 private void expressionToBuffer(Expression e, OutBuffer* buf, HdrGenState* hgs)
 {
-    expressionPrettyPrint(e, buf, hgs);
+    expressionFlattenPrint(e, buf, hgs);
 }
 
 /**************************************************
@@ -3799,6 +3826,24 @@ private void initializerToBuffer(Initializer inx, OutBuffer* buf, HdrGenState* h
     }
 }
 
+// If the type is nested inside another struct/class, we have to output the parent too (recurse).
+void printAggregateParent(Dsymbol sym, OutBuffer* buf, HdrGenState* hgs) {
+    if (!sym.parent)
+        return;
+    if (TemplateInstance ti = sym.parent.isTemplateInstance()) {
+        printAggregateParent(ti.parent, buf, hgs);
+        toCBufferInstance(ti, buf, hgs.fullQual);
+        buf.writeByte('.');
+    }
+    else if (AggregateDeclaration ad = sym.parent.isAggregateDeclaration()) {
+        printAggregateParent(ad, buf, hgs);
+        if (!ad.parent.isTemplateInstance()) {
+            buf.writestring(hgs.fullQual ? ad.toPrettyChars() : ad.toChars());
+            buf.writeByte('.');
+        }
+    }
+    // Stop recursion if the parent is not an aggregate and not a template
+}
 
 private void typeToBufferx(Type t, OutBuffer* buf, HdrGenState* hgs)
 {
@@ -3966,26 +4011,40 @@ buf.writestring("/+TypeEnum+/");
 
     void visitStruct(TypeStruct t)
     {
+buf.writestring("/+TypeStruct+/");
         // https://issues.dlang.org/show_bug.cgi?id=13776
         // Don't use ti.toAlias() to avoid forward reference error
         // while printing messages.
         TemplateInstance ti = t.sym.parent ? t.sym.parent.isTemplateInstance() : null;
         if (ti && ti.aliasdecl == t.sym)
-            buf.writestring(hgs.fullQual ? ti.toPrettyChars() : ti.toChars());
+        {
+            printAggregateParent(ti, buf, hgs);
+            toCBufferInstance(ti, buf, hgs.fullQual);
+        }
         else
+        {
+            printAggregateParent(t.sym, buf, hgs);
             buf.writestring(hgs.fullQual ? t.sym.toPrettyChars() : t.sym.toChars());
+        }
     }
 
     void visitClass(TypeClass t)
     {
+buf.writestring("/+TypeClass+/");
         // https://issues.dlang.org/show_bug.cgi?id=13776
         // Don't use ti.toAlias() to avoid forward reference error
         // while printing messages.
         TemplateInstance ti = t.sym.parent ? t.sym.parent.isTemplateInstance() : null;
         if (ti && ti.aliasdecl == t.sym)
-            buf.writestring(hgs.fullQual ? ti.toPrettyChars() : ti.toChars());
+        {
+            printAggregateParent(ti, buf, hgs);
+            toCBufferInstance(ti, buf, hgs.fullQual);
+        }
         else
+        {
+            printAggregateParent(t.sym, buf, hgs);
             buf.writestring(hgs.fullQual ? t.sym.toPrettyChars() : t.sym.toChars());
+        }
     }
 
     void visitTag(TypeTag t)
@@ -4033,7 +4092,7 @@ buf.writestring("/+TypeEnum+/");
         buf.writestring("noreturn");
     }
 
-
+buf.writestring("/+" ~ to!string(t.ty) ~ "+/");
     switch (t.ty)
     {
         default:        return t.isTypeBasic() ?
