@@ -1803,6 +1803,10 @@ buf.writestring("/+AliasAssign+/");
 
     override void visit(UnitTestDeclaration d)
     {
+buf.writestring("/+UnitTestDeclaration+/");
+        if (!d.fbody)
+            return;
+
         if (hgs.hdrgen)
             return;
         if (stcToBuffer(buf, d.storage_class))
@@ -2189,8 +2193,16 @@ buf.writestring("/+SymOffExp+/");
     void visitVar(VarExp e)
     {
 buf.writestring("/+VarExp+/");
-
-        buf.writestring(e.var.toChars());
+        TemplateInstance ti = e.var.parent ? e.var.parent.isTemplateInstance() : null;
+        if (ti && ti.aliasdecl == e.var)
+        {
+            printAggregateParent(ti, buf, hgs);
+            toCBufferInstance(ti, buf, hgs.fullQual);
+        }
+        else
+        {
+            buf.writestring(e.var.toChars());
+        }
     }
 
     void visitOver(OverExp e)
@@ -2512,9 +2524,11 @@ buf.writestring("/+CallExp+/");
 
     void visitVector(VectorExp e)
     {
-        buf.writestring("cast(");
-        typeToBuffer(e.to, null, buf, hgs);
-        buf.writeByte(')');
+        if (false) {
+            buf.writestring("cast(");
+            typeToBuffer(e.to, null, buf, hgs);
+            buf.writeByte(')');
+        }
         expToBuffer(e.e1, precedence[e.op], buf, hgs);
     }
 
@@ -2637,7 +2651,7 @@ buf.writestring("/+ClassReferenceExp+/");
         buf.writestring(e.value.toChars());
     }
 
-buf.writestring("/+" ~ to!string(e.op) ~ "+/");
+//buf.writestring("/+EXP." ~ to!string(e.op) ~ "+/");
     switch (e.op)
     {
         default:
@@ -3505,7 +3519,8 @@ private void tiargsToBuffer(TemplateInstance ti, OutBuffer* buf, HdrGenState* hg
         buf.writestring("()");
         return;
     }
-    if (ti.tiargs.dim == 1)
+    // Don't special-case dim==1, such that we always get parens ( ) around the template args.
+    if (false && ti.tiargs.dim == 1)
     {
         RootObject oarg = (*ti.tiargs)[0];
         if (Type t = isType(oarg))
