@@ -51,6 +51,8 @@ import dmd.tokens;
 import dmd.utils;
 import dmd.visitor;
 
+//version = PRINT_NODE;
+
 struct HdrGenState
 {
     bool hdrgen;        /// true if generating header file
@@ -77,6 +79,10 @@ void flattenModuleToBuffer(OutBuffer* buf, Module m)
     HdrGenState hgs;
     hgs.fullDump = true;
     toCBuffer(m, buf, &hgs);
+    buf.writestring(q{
+pragma(inline, true) void ___flatten_nop() @nogc nothrow @safe {};
+static import std.array; // for std.array.staticArray
+}   );
 }
 
 void moduleToBuffer2(Module m, OutBuffer* buf, HdrGenState* hgs)
@@ -859,7 +865,7 @@ public:
 
     override void visit(EnumMember em)
     {
-buf.writestring("/+EnumMember+/");
+version (PRINT_NODE) { buf.writestring("/+EnumMember+/"); }
         if (em.type)
             typeToBuffer(em.type, em.ident, buf, hgs);
         else
@@ -1168,7 +1174,7 @@ buf.writestring("/+EnumMember+/");
 
     override void visit(TemplateDeclaration d)
     {
-buf.writestring("/+TemplateDeclaration+/");
+version (PRINT_NODE) { buf.writestring("/+TemplateDeclaration+/"); }
 
         version (none)
         {
@@ -1206,7 +1212,7 @@ buf.writestring("/+TemplateDeclaration+/");
 
     bool visitEponymousMember(TemplateDeclaration d)
     {
-buf.writestring("/+visitEponymousMember+/");
+version (PRINT_NODE) { buf.writestring("/+visitEponymousMember+/"); }
 
         if (!d.members || d.members.dim != 1)
             return false;
@@ -1453,7 +1459,7 @@ buf.writestring("/+visitEponymousMember+/");
 
     override void visit(AliasDeclaration d)
     {
-buf.writestring("/+AliasDeclaration+/");
+version (PRINT_NODE) { buf.writestring("/+AliasDeclaration+/"); }
         if (d.storage_class & STC.local)
             return;
 
@@ -1465,7 +1471,7 @@ buf.writestring("/+AliasDeclaration+/");
         buf.writestring("alias ");
         if (d.aliassym)
         {
-buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
+version (PRINT_NODE) { buf.writestring("/+" ~ to!string(__LINE__) ~ "+/"); }
             buf.writestring(d.ident.toString());
             buf.writestring(" = ");
             if (stcToBuffer(buf, d.storage_class))
@@ -1474,14 +1480,14 @@ buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
         }
         else if (d.type.ty == Tfunction)
         {
-buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
+version (PRINT_NODE) { buf.writestring("/+" ~ to!string(__LINE__) ~ "+/"); }
             if (stcToBuffer(buf, d.storage_class))
                 buf.writeByte(' ');
             typeToBuffer(d.type, d.ident, buf, hgs);
         }
         else if (d.ident)
         {
-buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
+version (PRINT_NODE) { buf.writestring("/+" ~ to!string(__LINE__) ~ "+/"); }
             hgs.declstring = (d.ident == Id.string || d.ident == Id.wstring || d.ident == Id.dstring);
             buf.writestring(d.ident.toString());
             buf.writestring(" = ");
@@ -1496,7 +1502,7 @@ buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
 
     override void visit(AliasAssign d)
     {
-buf.writestring("/+AliasAssign+/");
+version (PRINT_NODE) { buf.writestring("/+AliasAssign+/"); }
         buf.writestring(d.ident.toString());
         buf.writestring(" = ");
         if (d.aliassym)
@@ -1545,14 +1551,22 @@ buf.writestring("/+AliasAssign+/");
 
     override void visit(FuncDeclaration f)
     {
+version (PRINT_NODE) { buf.writestring("/+FuncDeclaration " ~ to!string(f.ident) ~ "+/"); }
         // Skip compiler generated functions, e.g. `opAssign`
         if (f.flags & FUNCFLAG.generated && IN_WEKA())
             return;
 
-        //printf("FuncDeclaration::toCBuffer() '%s'\n", f.toChars());
-        if (stcToBuffer(buf, f.storage_class))
-            buf.writeByte(' ');
         auto tf = cast(TypeFunction)f.type;
+
+        auto stc_mask = ~STC.undefined_;
+        // If type is known, remove `auto` to prevent Error: function `...` storage class `auto` has no effect if return type is not inferred
+        if (tf.next && IN_WEKA()) {
+            stc_mask = ~STC.auto_;
+        }
+
+        //printf("FuncDeclaration::toCBuffer() '%s'\n", f.toChars());
+        if (stcToBuffer(buf, f.storage_class & stc_mask))
+            buf.writeByte(' ');
         typeToBuffer(tf, f.ident, buf, hgs);
 
         if (hgs.hdrgen)
@@ -1734,6 +1748,11 @@ buf.writestring("/+AliasAssign+/");
 
     override void visit(PostBlitDeclaration d)
     {
+version (PRINT_NODE) { buf.writestring("/+PostBlitDeclaration " ~ to!string(d.ident) ~ "+/"); }
+        // Skip compiler generated functions, e.g. `opAssign`
+        if (d.flags & FUNCFLAG.generated && IN_WEKA())
+            return;
+
         if (stcToBuffer(buf, d.storage_class))
             buf.writeByte(' ');
         buf.writestring("this(this)");
@@ -1742,6 +1761,11 @@ buf.writestring("/+AliasAssign+/");
 
     override void visit(DtorDeclaration d)
     {
+version (PRINT_NODE) { buf.writestring("/+DtorDeclaration " ~ to!string(d.ident) ~ "+/"); }
+        // Skip compiler generated functions, e.g. `opAssign`
+        if (d.flags & FUNCFLAG.generated && IN_WEKA())
+            return;
+
         if (stcToBuffer(buf, d.storage_class))
             buf.writeByte(' ');
         buf.writestring("~this()");
@@ -1803,7 +1827,7 @@ buf.writestring("/+AliasAssign+/");
 
     override void visit(UnitTestDeclaration d)
     {
-buf.writestring("/+UnitTestDeclaration+/");
+version (PRINT_NODE) { buf.writestring("/+UnitTestDeclaration+/"); }
         if (!d.fbody)
             return;
 
@@ -1847,13 +1871,13 @@ private void expressionFlattenPrint(Expression e, OutBuffer* buf, HdrGenState* h
 {
     void visit(Expression e)
     {
-buf.writestring("/+Expression+/");
+version (PRINT_NODE) { buf.writestring("/+Expression+/"); }
         buf.writestring(EXPtoString(e.op));
     }
 
     void visitInteger(IntegerExp e)
     {
-buf.writestring("/+IntegerExp+/");
+version (PRINT_NODE) { buf.writestring("/+IntegerExp+/"); }
         const dinteger_t v = e.toInteger();
         if (e.type)
         {
@@ -1871,7 +1895,7 @@ buf.writestring("/+IntegerExp+/");
                         {
                             if ((cast(EnumMember)em).value.toInteger == v)
                             {
-buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
+version (PRINT_NODE) { buf.writestring("/+" ~ to!string(__LINE__) ~ "+/"); }
 
                                 TemplateInstance ti = sym.parent ? sym.parent.isTemplateInstance() : null;
                                 if (ti && ti.aliasdecl == sym) {
@@ -1994,7 +2018,7 @@ buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
 
     void visitIdentifier(IdentifierExp e)
     {
-buf.writestring("/+IdentifierExp+/");
+version (PRINT_NODE) { buf.writestring("/+IdentifierExp+/"); }
 
         if (hgs.hdrgen || hgs.ddoc)
             buf.writestring(e.ident.toHChars2());
@@ -2004,7 +2028,7 @@ buf.writestring("/+IdentifierExp+/");
 
     void visitDsymbol(DsymbolExp e)
     {
-buf.writestring("/+DsymbolExp+/");
+version (PRINT_NODE) { buf.writestring("/+DsymbolExp+/"); }
 
         buf.writestring(e.s.toChars());
     }
@@ -2041,9 +2065,23 @@ buf.writestring("/+DsymbolExp+/");
 
     void visitArrayLiteral(ArrayLiteralExp e)
     {
+        // User code
+        //      enum a = [1,2,3];
+        //      void foo(int i) @nogc {
+        //          auto b = a[i];
+        //      }
+        // will be converted into
+        //      enum a = [1,2,3];
+        //      void foo(int i) @nogc {
+        //          auto b = [1,2,3][i]; // Error: array literal in `@nogc` function `foo` may cause a GC allocation
+        //      }
+        // Thus we use std.array.staticArray([1,2,3]) to prevent the allocation.
+        // This _does_ change the semantics of user code `auto a = [1,2,3];`, where `a` will become static array type instead of a slice !
+        buf.writestring("std.array.staticArray(");
         buf.writeByte('[');
         argsToBuffer(e.elements, buf, hgs, e.basis);
         buf.writeByte(']');
+        buf.writestring(")");
     }
 
     void visitAssocArrayLiteral(AssocArrayLiteralExp e)
@@ -2063,7 +2101,7 @@ buf.writestring("/+DsymbolExp+/");
 
     void visitStructLiteral(StructLiteralExp e)
     {
-buf.writestring("/+StructLiteralExp+/");
+version (PRINT_NODE) { buf.writestring("/+StructLiteralExp+/"); }
 
         TemplateInstance ti = e.sd.parent ? e.sd.parent.isTemplateInstance() : null;
         if (ti && ti.aliasdecl == e.sd)
@@ -2104,13 +2142,13 @@ buf.writestring("/+StructLiteralExp+/");
 
     void visitType(TypeExp e)
     {
-buf.writestring("/+TypeExp+/");
+version (PRINT_NODE) { buf.writestring("/+TypeExp+/"); }
         typeToBuffer(e.type, null, buf, hgs);
     }
 
     void visitScope(ScopeExp e)
     {
-buf.writestring("/+ScopeExp+/");
+version (PRINT_NODE) { buf.writestring("/+ScopeExp+/"); }
 
         if (e.sds.isTemplateInstance())
         {
@@ -2134,13 +2172,13 @@ buf.writestring("/+ScopeExp+/");
 
     void visitTemplate(TemplateExp e)
     {
-buf.writestring("/+TemplateExp+/");
+version (PRINT_NODE) { buf.writestring("/+TemplateExp+/"); }
         buf.writestring(e.td.toChars());
     }
 
     void visitNew(NewExp e)
     {
-buf.writestring("/+NewExp+/");
+version (PRINT_NODE) { buf.writestring("/+NewExp+/"); }
 
         if (e.thisexp)
         {
@@ -2159,7 +2197,7 @@ buf.writestring("/+NewExp+/");
 
     void visitNewAnonClass(NewAnonClassExp e)
     {
-buf.writestring("/+NewAnonClassExp+/");
+version (PRINT_NODE) { buf.writestring("/+NewAnonClassExp+/"); }
 
         if (e.thisexp)
         {
@@ -2180,7 +2218,7 @@ buf.writestring("/+NewAnonClassExp+/");
 
     void visitSymOff(SymOffExp e)
     {
-buf.writestring("/+SymOffExp+/");
+version (PRINT_NODE) { buf.writestring("/+SymOffExp+/"); }
 
         if (e.offset)
             buf.printf("(& %s%+lld)", e.var.toChars(), e.offset);
@@ -2192,7 +2230,7 @@ buf.writestring("/+SymOffExp+/");
 
     void visitVar(VarExp e)
     {
-buf.writestring("/+VarExp+/");
+version (PRINT_NODE) { buf.writestring("/+VarExp+/"); }
         TemplateInstance ti = e.var.parent ? e.var.parent.isTemplateInstance() : null;
         if (ti && ti.aliasdecl == e.var)
         {
@@ -2207,13 +2245,13 @@ buf.writestring("/+VarExp+/");
 
     void visitOver(OverExp e)
     {
-buf.writestring("/+OverExp+/");
+version (PRINT_NODE) { buf.writestring("/+OverExp+/"); }
         buf.writestring(e.vars.ident.toString());
     }
 
     void visitTuple(TupleExp e)
     {
-buf.writestring("/+TupleExp+/");
+version (PRINT_NODE) { buf.writestring("/+TupleExp+/"); }
 
         if (e.e0)
         {
@@ -2233,14 +2271,14 @@ buf.writestring("/+TupleExp+/");
 
     void visitFunc(FuncExp e)
     {
-buf.writestring("/+FuncExp+/");
+version (PRINT_NODE) { buf.writestring("/+FuncExp+/"); }
         e.fd.dsymbolToBuffer(buf, hgs);
         //buf.writestring(e.fd.toChars());
     }
 
     void visitDeclaration(DeclarationExp e)
     {
-buf.writestring("/+DeclarationExp+/");
+version (PRINT_NODE) { buf.writestring("/+DeclarationExp+/"); }
         /* Normal dmd execution won't reach here - regular variable declarations
          * are handled in visit(ExpStatement), so here would be used only when
          * we'll directly call Expression.toChars() for debugging.
@@ -2320,7 +2358,7 @@ buf.writestring("/+DeclarationExp+/");
 
     void visitUna(UnaExp e)
     {
-buf.writestring("/+UnaExp+/");
+version (PRINT_NODE) { buf.writestring("/+UnaExp+/"); }
 
         buf.writestring(EXPtoString(e.op));
         expToBuffer(e.e1, precedence[e.op], buf, hgs);
@@ -2328,7 +2366,7 @@ buf.writestring("/+UnaExp+/");
 
     void visitBin(BinExp e)
     {
-buf.writestring("/+BinExp+/");
+version (PRINT_NODE) { buf.writestring("/+BinExp+/"); }
 
         expToBuffer(e.e1, precedence[e.op], buf, hgs);
         buf.writeByte(' ');
@@ -2339,7 +2377,7 @@ buf.writestring("/+BinExp+/");
 
     void visitComma(CommaExp e)
     {
-buf.writestring("/+CommaExp+/");
+version (PRINT_NODE) { buf.writestring("/+CommaExp+/"); }
 
         // CommaExp is generated by the compiler so it shouldn't
         // appear in error messages or header files.
@@ -2420,7 +2458,7 @@ buf.writestring("/+CommaExp+/");
 
     void visitDotId(DotIdExp e)
     {
-buf.writestring("/+DotIdExp+/");
+version (PRINT_NODE) { buf.writestring("/+DotIdExp+/"); }
         expToBuffer(e.e1, PREC.primary, buf, hgs);
         if (e.arrow)
             buf.writestring("->");
@@ -2431,7 +2469,7 @@ buf.writestring("/+DotIdExp+/");
 
     void visitDotTemplate(DotTemplateExp e)
     {
-buf.writestring("/+DotTemplateExp+/");
+version (PRINT_NODE) { buf.writestring("/+DotTemplateExp+/"); }
         expToBuffer(e.e1, PREC.primary, buf, hgs);
         buf.writeByte('.');
         buf.writestring(e.td.toChars());
@@ -2439,10 +2477,19 @@ buf.writestring("/+DotTemplateExp+/");
 
     void visitDotVar(DotVarExp e)
     {
-buf.writestring("/+DotVarExp+/");
+version (PRINT_NODE) { buf.writestring("/+DotVarExp+/"); }
         if (IN_WEKA() && e.var.ident == Id.ctor) {
             // Special case for constructor calls. Only output typename
+            // Type.this() --> Type
             typeToBuffer(e.e1.type, null, buf, hgs);
+        } else if (IN_WEKA() && (e.var.ident == Id.dtor || e.var.ident == Id.__fieldDtor)) {
+            // Skip destructor calls completely.
+            buf.writestring("/+");
+            expToBuffer(e.e1, PREC.primary, buf, hgs);
+            buf.writeByte('.');
+            buf.writestring(e.var.toChars());
+            buf.writestring("+/");
+            buf.writestring("___flatten_nop"); // The CallExp will add parens "()", so replace the call with a nop function.
         } else {
             expToBuffer(e.e1, PREC.primary, buf, hgs);
             buf.writeByte('.');
@@ -2452,7 +2499,7 @@ buf.writestring("/+DotVarExp+/");
 
     void visitDotTemplateInstance(DotTemplateInstanceExp e)
     {
-buf.writestring("/+DotTemplateInstanceExp+/");
+version (PRINT_NODE) { buf.writestring("/+DotTemplateInstanceExp+/"); }
         expToBuffer(e.e1, PREC.primary, buf, hgs);
         buf.writeByte('.');
         e.ti.dsymbolToBuffer(buf, hgs);
@@ -2460,7 +2507,7 @@ buf.writestring("/+DotTemplateInstanceExp+/");
 
     void visitDelegate(DelegateExp e)
     {
-buf.writestring("/+DelegateExp+/");
+version (PRINT_NODE) { buf.writestring("/+DelegateExp+/"); }
         buf.writeByte('&');
         if (!e.func.isNested() || e.func.needThis())
         {
@@ -2472,7 +2519,7 @@ buf.writestring("/+DelegateExp+/");
 
     void visitDotType(DotTypeExp e)
     {
-buf.writestring("/+DotTypeExp+/");
+version (PRINT_NODE) { buf.writestring("/+DotTypeExp+/"); }
         expToBuffer(e.e1, PREC.primary, buf, hgs);
         buf.writeByte('.');
         buf.writestring(e.sym.toChars());
@@ -2480,7 +2527,7 @@ buf.writestring("/+DotTypeExp+/");
 
     void visitCall(CallExp e)
     {
-buf.writestring("/+CallExp+/");
+version (PRINT_NODE) { buf.writestring("/+CallExp+/"); }
         if (e.e1.op == EXP.type)
         {
             /* Avoid parens around type to prevent forbidden cast syntax:
@@ -2592,7 +2639,7 @@ buf.writestring("/+CallExp+/");
 
     void visitDot(DotExp e)
     {
-buf.writestring("/+DotExp+/");
+version (PRINT_NODE) { buf.writestring("/+DotExp+/"); }
 
         expToBuffer(e.e1, PREC.primary, buf, hgs);
         buf.writeByte('.');
@@ -2609,7 +2656,7 @@ buf.writestring("/+DotExp+/");
 
     void visitPost(PostExp e)
     {
-buf.writestring("/+PostExp+/");
+version (PRINT_NODE) { buf.writestring("/+PostExp+/"); }
 
         expToBuffer(e.e1, precedence[e.op], buf, hgs);
         buf.writestring(EXPtoString(e.op));
@@ -2617,7 +2664,7 @@ buf.writestring("/+PostExp+/");
 
     void visitPre(PreExp e)
     {
-buf.writestring("/+PreExp+/");
+version (PRINT_NODE) { buf.writestring("/+PreExp+/"); }
         buf.writestring(EXPtoString(e.op));
         expToBuffer(e.e1, precedence[e.op], buf, hgs);
     }
@@ -2641,21 +2688,20 @@ buf.writestring("/+PreExp+/");
 
     void visitDefaultInit(DefaultInitExp e)
     {
-buf.writestring("/+DefaultInitExp+/");
+version (PRINT_NODE) { buf.writestring("/+DefaultInitExp+/"); }
         buf.writestring(EXPtoString(e.op));
     }
 
     void visitClassReference(ClassReferenceExp e)
     {
-buf.writestring("/+ClassReferenceExp+/");
+version (PRINT_NODE) { buf.writestring("/+ClassReferenceExp+/"); }
         buf.writestring(e.value.toChars());
     }
 
-//buf.writestring("/+EXP." ~ to!string(e.op) ~ "+/");
+// version (PRINT_NODE) { buf.writestring("/+EXP." ~ to!string(e.op) ~ "+/"); }
     switch (e.op)
     {
         default:
-            buf.writestring("/+default+/");
             if (auto be = e.isBinExp())
                 return visitBin(be);
             else if (auto ue = e.isUnaExp())
@@ -2824,7 +2870,7 @@ public:
 
     override void visit(TemplateAliasParameter tp)
     {
-buf.writestring("/+TemplateAliasParameter+/");
+version (PRINT_NODE) { buf.writestring("/+TemplateAliasParameter+/"); }
         buf.writestring("alias ");
         if (tp.specType)
             typeToBuffer(tp.specType, tp.ident, buf, hgs);
@@ -2956,10 +3002,6 @@ bool stcToBuffer(OutBuffer* buf, StorageClass stc)
     {
         //buf.writestring((stc & STC.returnScope) ? "return-scope-inferred " : "return-ref-inferred ");
         stc &= ~(STC.return_ | STC.returninferred);
-    }
-
-    if (IN_WEKA()) {
-        stc &= ~STC.auto_;
     }
 
     /* Put scope ref return into a standard order
@@ -3183,7 +3225,7 @@ void argExpTypesToCBuffer(OutBuffer* buf, Expressions* arguments)
 
 void toCBuffer(const TemplateParameter tp, OutBuffer* buf, HdrGenState* hgs)
 {
-buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
+version (PRINT_NODE) { buf.writestring("/+" ~ to!string(__LINE__) ~ "+/"); }
     scope v = new TemplateParameterFlattenPrintVisitor(buf, hgs);
     (cast() tp).accept(v);
 }
@@ -3566,23 +3608,23 @@ private void objectToBuffer(RootObject oarg, OutBuffer* buf, HdrGenState* hgs)
      */
     if (auto t = isType(oarg))
     {
-buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
+version (PRINT_NODE) { buf.writestring("/+" ~ to!string(__LINE__) ~ "+/"); }
         //printf("\tt: %s ty = %d\n", t.toChars(), t.ty);
         typeToBuffer(t, null, buf, hgs);
     }
     else if (auto e = isExpression(oarg))
     {
-buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
+version (PRINT_NODE) { buf.writestring("/+" ~ to!string(__LINE__) ~ "+/"); }
         if (e.op == EXP.variable) {
-buf.writestring("/+e.optimize+/");
+version (PRINT_NODE) { buf.writestring("/+e.optimize+/"); }
             e = e.optimize(WANTvalue); // added to fix https://issues.dlang.org/show_bug.cgi?id=7375
         }
         expToBuffer(e, PREC.assign, buf, hgs);
-buf.writestring("/++/");
+version (PRINT_NODE) { buf.writestring("/++/"); }
     }
     else if (Dsymbol s = isDsymbol(oarg))
     {
-buf.writestring("/+" ~ to!string(__LINE__) ~ "+/");
+version (PRINT_NODE) { buf.writestring("/+" ~ to!string(__LINE__) ~ "+/"); }
         const p = s.ident ? s.ident.toChars() : s.toChars();
         buf.writestring(p);
     }
@@ -3959,12 +4001,12 @@ private void typeToBufferx(Type t, OutBuffer* buf, HdrGenState* hgs)
 
     void visitTypeQualifiedHelper(TypeQualified t)
     {
-buf.writestring("/+TypeQualified+/");
+version (PRINT_NODE) { buf.writestring("/+TypeQualified+/"); }
         foreach (id; t.idents)
         {
             if (id.dyncast() == DYNCAST.dsymbol)
             {
-buf.writestring("/+DYNCAST.dsymbol+/");
+version (PRINT_NODE) { buf.writestring("/+DYNCAST.dsymbol+/"); }
                 buf.writeByte('.');
                 TemplateInstance ti = cast(TemplateInstance)id;
                 ti.dsymbolToBuffer(buf, hgs);
@@ -3991,21 +4033,21 @@ buf.writestring("/+DYNCAST.dsymbol+/");
 
     void visitIdentifier(TypeIdentifier t)
     {
-buf.writestring("/+TypeIdentifier+/");
+version (PRINT_NODE) { buf.writestring("/+TypeIdentifier+/"); }
         buf.writestring(t.ident.toString());
         visitTypeQualifiedHelper(t);
     }
 
     void visitInstance(TypeInstance t)
     {
-buf.writestring("/+TypeInstance+/");
+version (PRINT_NODE) { buf.writestring("/+TypeInstance+/"); }
         t.tempinst.dsymbolToBuffer(buf, hgs);
         visitTypeQualifiedHelper(t);
     }
 
     void visitTypeof(TypeTypeof t)
     {
-buf.writestring("/+TypeTypeof+/");
+version (PRINT_NODE) { buf.writestring("/+TypeTypeof+/"); }
         buf.writestring("typeof(");
         t.exp.expressionToBuffer(buf, hgs);
         buf.writeByte(')');
@@ -4020,13 +4062,13 @@ buf.writestring("/+TypeTypeof+/");
 
     void visitEnum(TypeEnum t)
     {
-buf.writestring("/+TypeEnum+/");
+version (PRINT_NODE) { buf.writestring("/+TypeEnum+/"); }
         buf.writestring(hgs.fullQual ? t.sym.toPrettyChars() : t.sym.toChars());
     }
 
     void visitStruct(TypeStruct t)
     {
-buf.writestring("/+TypeStruct+/");
+version (PRINT_NODE) { buf.writestring("/+TypeStruct+/"); }
         // https://issues.dlang.org/show_bug.cgi?id=13776
         // Don't use ti.toAlias() to avoid forward reference error
         // while printing messages.
@@ -4045,7 +4087,7 @@ buf.writestring("/+TypeStruct+/");
 
     void visitClass(TypeClass t)
     {
-buf.writestring("/+TypeClass+/");
+version (PRINT_NODE) { buf.writestring("/+TypeClass+/"); }
         // https://issues.dlang.org/show_bug.cgi?id=13776
         // Don't use ti.toAlias() to avoid forward reference error
         // while printing messages.
@@ -4107,7 +4149,7 @@ buf.writestring("/+TypeClass+/");
         buf.writestring("noreturn");
     }
 
-buf.writestring("/+" ~ to!string(t.ty) ~ "+/");
+version (PRINT_NODE) { buf.writestring("/+" ~ to!string(t.ty) ~ "+/"); }
     switch (t.ty)
     {
         default:        return t.isTypeBasic() ?
