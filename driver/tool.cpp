@@ -76,7 +76,7 @@ std::string getProgram(const char *fallbackName,
 
 ////////////////////////////////////////////////////////////////////////////////
 
-std::string getGcc() { return getProgram("cc", &gcc, "CC"); }
+std::string getGcc(const char *fallback) { return getProgram(fallback, &gcc, "CC"); }
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -121,62 +121,45 @@ void appendTargetArgsForGcc(std::vector<std::string> &args) {
     }
     return;
 
-  case Triple::riscv64:
-    {
-      std::string mabi = getABI(triple);
-      args.push_back("-mabi=" + mabi);
+  case Triple::riscv64: {
+    extern llvm::TargetMachine* gTargetMachine;
+    const auto featuresStr = gTargetMachine->getTargetFeatureString();
+    llvm::SmallVector<llvm::StringRef, 8> features;
+    featuresStr.split(features, ",", -1, false);
 
-      extern llvm::TargetMachine* gTargetMachine;
-      auto featuresStr = gTargetMachine->getTargetFeatureString();
-      llvm::SmallVector<llvm::StringRef, 8> features;
-      featuresStr.split(features, ",", -1, false);
+    const std::string mabi = getABI(triple, features);
+    args.push_back("-mabi=" + mabi);
 
-      // Returns true if 'feature' is enabled and false otherwise. Handles the
-      // case where the feature is specified multiple times ('+m,-m'), and
-      // takes the last occurrence.
-      auto hasFeature = [&features](llvm::StringRef feature) {
-        for (int i = features.size() - 1; i >= 0; i--) {
-          auto f = features[i];
-          if (f.substr(1) == feature) {
-            return f[0] == '+';
-          }
-        }
-        return false;
-      };
+    std::string march = triple.isArch64Bit() ? "rv64" : "rv32";
+    const bool m = isFeatureEnabled(features, "m");
+    const bool a = isFeatureEnabled(features, "a");
+    const bool f = isFeatureEnabled(features, "f");
+    const bool d = isFeatureEnabled(features, "d");
+    const bool c = isFeatureEnabled(features, "c");
+    bool g = false;
 
-      std::string march;
-      if (triple.isArch64Bit())
-        march = "rv64";
-      else
-        march = "rv32";
-      bool m = hasFeature("m");
-      bool a = hasFeature("a");
-      bool f = hasFeature("f");
-      bool d = hasFeature("d");
-      bool c = hasFeature("c");
-      bool g = false;
-
-      if (m && a && f && d) {
-        march += "g";
-        g = true;
-      } else {
-        march += "i";
-        if (m)
-          march += "m";
-        if (a)
-          march += "a";
-        if (f)
-          march += "f";
-        if (d)
-          march += "d";
-      }
-      if (c)
-        march += "c";
-      if (!g)
-        march += "_zicsr_zifencei";
-      args.push_back("-march=" + march);
+    if (m && a && f && d) {
+      march += "g";
+      g = true;
+    } else {
+      march += "i";
+      if (m)
+        march += "m";
+      if (a)
+        march += "a";
+      if (f)
+        march += "f";
+      if (d)
+        march += "d";
     }
+    if (c)
+      march += "c";
+    if (!g)
+      march += "_zicsr_zifencei";
+    args.push_back("-march=" + march);
     return;
+  }
+
   default:
     break;
   }
@@ -223,11 +206,11 @@ std::vector<const char *> getFullArgs(const char *tool,
 
 ////////////////////////////////////////////////////////////////////////////////
 
-int executeToolAndWait(const std::string &tool_,
+int executeToolAndWait(const Loc &loc, const std::string &tool_,
                        const std::vector<std::string> &args, bool verbose) {
   const auto tool = findProgramByName(tool_);
   if (tool.empty()) {
-    error(Loc(), "cannot find program `%s`", tool_.c_str());
+    error(loc, "cannot find program `%s`", tool_.c_str());
     return -1;
   }
 
@@ -249,9 +232,9 @@ int executeToolAndWait(const std::string &tool_,
       args::executeAndWait(std::move(fullArgs), rspEncoding, &errorMsg);
 
   if (status) {
-    error(Loc(), "%s failed with status: %d", tool.c_str(), status);
+    error(loc, "%s failed with status: %d", tool.c_str(), status);
     if (!errorMsg.empty()) {
-      errorSupplemental(Loc(), "message: %s", errorMsg.c_str());
+      errorSupplemental(loc, "message: %s", errorMsg.c_str());
     }
   }
 
@@ -266,6 +249,7 @@ namespace windows {
 
 namespace {
 bool setupMsvcEnvironmentImpl(
+    bool forPreprocessingOnly,
     std::vector<std::pair<std::wstring, wchar_t *>> *rollback) {
   const bool x64 = global.params.targetTriple->isArch64Bit();
 
@@ -280,30 +264,63 @@ bool setupMsvcEnvironmentImpl(
 
   const auto begin = std::chrono::steady_clock::now();
 
-  VSOptions vsOptions;
-  vsOptions.initialize();
-  if (!vsOptions.VSInstallDir)
-    return false;
-
-  llvm::SmallVector<const char *, 3> libPaths;
-  if (auto vclibdir = vsOptions.getVCLibDir(x64))
-    libPaths.push_back(vclibdir);
-  if (auto ucrtlibdir = vsOptions.getUCRTLibPath(x64))
-    libPaths.push_back(ucrtlibdir);
-  if (auto sdklibdir = vsOptions.getSDKLibPath(x64))
-    libPaths.push_back(sdklibdir);
-
-  llvm::SmallVector<const char *, 2> binPaths;
-  const char *secondaryBindir = nullptr;
-  if (auto bindir = vsOptions.getVCBinDir(x64, secondaryBindir)) {
-    binPaths.push_back(bindir);
-    if (secondaryBindir)
-      binPaths.push_back(secondaryBindir);
+  static VSOptions vsOptions; // cache, as this can be expensive
+  if (!vsOptions.VSInstallDir) {
+    vsOptions.initialize();
+    if (!vsOptions.VSInstallDir)
+      return false;
   }
 
-  const bool success = libPaths.size() == 3 && !binPaths.empty();
-  if (!success)
-    return false;
+  // cache the environment variable prefixes too
+  static llvm::SmallVector<const char *, 2> binPaths;
+  static llvm::SmallVector<const char *, 6> includePaths;
+  static llvm::SmallVector<const char *, 3> libPaths;
+
+  if (binPaths.empty()) {
+    // PATH
+    const char *secondaryBindir = nullptr;
+    if (auto bindir = vsOptions.getVCBinDir(x64, secondaryBindir)) {
+      binPaths.push_back(bindir);
+      if (secondaryBindir)
+        binPaths.push_back(secondaryBindir);
+    } else {
+      return false;
+    }
+  }
+
+  if (forPreprocessingOnly && includePaths.empty()) {
+    // INCLUDE
+    if (auto vcincludedir = vsOptions.getVCIncludeDir()) {
+      includePaths.push_back(vcincludedir);
+    } else {
+      return false;
+    }
+    if (auto sdkincludedir = vsOptions.getSDKIncludePath()) {
+      includePaths.push_back(FileName::combine(sdkincludedir, "ucrt"));
+      includePaths.push_back(FileName::combine(sdkincludedir, "shared"));
+      includePaths.push_back(FileName::combine(sdkincludedir, "um"));
+      includePaths.push_back(FileName::combine(sdkincludedir, "winrt"));
+      includePaths.push_back(FileName::combine(sdkincludedir, "cppwinrt"));
+    } else {
+      includePaths.clear();
+      return false;
+    }
+  }
+
+  if (!forPreprocessingOnly && libPaths.empty()) {
+    // LIB
+    if (auto vclibdir = vsOptions.getVCLibDir(x64))
+      libPaths.push_back(vclibdir);
+    if (auto ucrtlibdir = vsOptions.getUCRTLibPath(x64))
+      libPaths.push_back(ucrtlibdir);
+    if (auto sdklibdir = vsOptions.getSDKLibPath(x64))
+      libPaths.push_back(sdklibdir);
+
+    if (libPaths.size() != 3) {
+      libPaths.clear();
+      return false;
+    }
+  }
 
   if (!rollback) // check for availability only
     return true;
@@ -311,9 +328,12 @@ bool setupMsvcEnvironmentImpl(
   if (global.params.verbose)
     message("Prepending to environment variables:");
 
-  const auto preprendToEnvVar =
+  const auto prependToEnvVar =
       [rollback](const char *key, const wchar_t *wkey,
                  const llvm::SmallVectorImpl<const char *> &entries) {
+        if (entries.empty())
+          return;
+
         wchar_t *originalValue = _wgetenv(wkey);
 
         llvm::SmallString<256> head;
@@ -343,8 +363,9 @@ bool setupMsvcEnvironmentImpl(
       };
 
   rollback->reserve(2);
-  preprendToEnvVar("LIB", L"LIB", libPaths);
-  preprendToEnvVar("PATH", L"PATH", binPaths);
+  prependToEnvVar("INCLUDE", L"INCLUDE", includePaths);
+  prependToEnvVar("LIB", L"LIB", libPaths);
+  prependToEnvVar("PATH", L"PATH", binPaths);
 
   if (global.params.verbose) {
     const auto end = std::chrono::steady_clock::now();
@@ -357,11 +378,11 @@ bool setupMsvcEnvironmentImpl(
 }
 } // anonymous namespace
 
-bool isMsvcAvailable() { return setupMsvcEnvironmentImpl(nullptr); }
+bool isMsvcAvailable() { return setupMsvcEnvironmentImpl(false, nullptr); }
 
-bool MsvcEnvironmentScope::setup() {
+bool MsvcEnvironmentScope::setup(bool forPreprocessingOnly) {
   rollback.clear();
-  return setupMsvcEnvironmentImpl(&rollback);
+  return setupMsvcEnvironmentImpl(forPreprocessingOnly, &rollback);
 }
 
 MsvcEnvironmentScope::~MsvcEnvironmentScope() {

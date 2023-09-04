@@ -191,7 +191,7 @@ llvm::AllocaInst *DtoArrayAlloca(Type *type, unsigned arraysize,
       lltype, gIR->module.getDataLayout().getAllocaAddrSpace(),
       DtoConstUint(arraysize), name, gIR->topallocapoint());
   if (auto alignment = DtoAlignment(type)) {
-    ai->setAlignment(LLAlign(alignment));
+    ai->setAlignment(llvm::Align(alignment));
   }
   return ai;
 }
@@ -202,7 +202,7 @@ llvm::AllocaInst *DtoRawAlloca(LLType *lltype, size_t alignment,
       lltype, gIR->module.getDataLayout().getAllocaAddrSpace(), name,
       gIR->topallocapoint());
   if (alignment) {
-    ai->setAlignment(LLAlign(alignment));
+    ai->setAlignment(llvm::Align(alignment));
   }
   return ai;
 }
@@ -919,19 +919,29 @@ void DtoVarDeclaration(VarDeclaration *vd) {
     Type *type = isSpecialRefVar(vd) ? vd->type->pointerTo() : vd->type;
 
     llvm::Value *allocainst;
+    bool isRealAlloca = false;
     LLType *lltype = DtoType(type); // void for noreturn
     if (lltype->isVoidTy() || gDataLayout->getTypeSizeInBits(lltype) == 0) {
       allocainst = llvm::ConstantPointerNull::get(getPtrToType(lltype));
     } else if (type != vd->type) {
       allocainst = DtoAlloca(type, vd->toChars());
+      isRealAlloca = true;
     } else {
       allocainst = DtoAlloca(vd, vd->toChars());
+      isRealAlloca = true;
     }
 
     irLocal->value = allocainst;
 
     if (!lltype->isVoidTy())
       gIR->DBuilder.EmitLocalVariable(allocainst, vd);
+
+    // Lifetime annotation is only valid on alloca.
+    if (isRealAlloca) {
+      // The lifetime of a stack variable starts from the point it is declared
+      gIR->funcGen().localVariableLifetimeAnnotator.addLocalVariable(
+          allocainst, DtoConstUlong(type->size()));
+    }
   }
 
   IF_LOG Logger::cout() << "llvm value for decl: " << *getIrLocal(vd)->value
@@ -1178,7 +1188,7 @@ LLConstant *DtoConstExpInit(const Loc &loc, Type *targetType, Expression *exp) {
       val = llvm::ConstantArray::get(at, elements);
     }
 
-    (void)numTotalVals;
+    (void)numTotalVals; (void) product; // Silence unused variable warning when assert is disabled.
     assert(product == numTotalVals);
     return val;
   }
@@ -1192,10 +1202,8 @@ LLConstant *DtoConstExpInit(const Loc &loc, Type *targetType, Expression *exp) {
         static_cast<TypeSArray *>(tv->basetype)->dim->toInteger();
 #if LDC_LLVM_VER >= 1200
     const auto elementCount = llvm::ElementCount::getFixed(elemCount);
-#elif LDC_LLVM_VER >= 1100
-    const auto elementCount = llvm::ElementCount(elemCount, false);
 #else
-    const auto elementCount = elemCount;
+    const auto elementCount = llvm::ElementCount(elemCount, false);
 #endif
     return llvm::ConstantVector::getSplat(elementCount, val);
   }
@@ -1271,11 +1279,7 @@ static char *DtoOverloadedIntrinsicName(TemplateInstance *ti,
   if (dtype->isPPC_FP128Ty()) { // special case
     replacement = "ppcf128";
   } else if (dtype->isVectorTy()) {
-#if LDC_LLVM_VER >= 1100
     auto vectorType = llvm::cast<llvm::FixedVectorType>(dtype);
-#else
-    auto vectorType = llvm::cast<llvm::VectorType>(dtype);
-#endif
     llvm::raw_string_ostream stream(replacement);
     stream << 'v' << vectorType->getNumElements() << prefix
            << gDataLayout->getTypeSizeInBits(vectorType->getElementType());

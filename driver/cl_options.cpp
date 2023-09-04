@@ -400,16 +400,18 @@ cl::list<std::string>
                    cl::value_desc("linkerflag"), cl::cat(linkingCategory),
                    cl::Prefix);
 
-cl::list<std::string>
-    ccSwitches("Xcc", cl::desc("Pass <ccflag> to GCC/Clang for linking"),
-               cl::value_desc("ccflag"), cl::cat(linkingCategory));
+cl::list<std::string> ccSwitches(
+    "Xcc", cl::value_desc("ccflag"), cl::cat(linkingCategory),
+    cl::desc("Pass <ccflag> to GCC/Clang for linking/preprocessing"));
 
-cl::opt<std::string>
-    moduleDeps("deps", cl::ValueOptional, cl::ZeroOrMore,
-               cl::value_desc("filename"),
-               cl::desc("Write module dependencies to <filename> (only imports). "
-                        "'-deps' alone prints module dependencies "
-                        "(imports/file/version/debug/lib)"));
+cl::list<std::string> cppSwitches("P", cl::value_desc("cppflag"), cl::Prefix,
+                                  cl::desc("Pass <cppflag> to C preprocessor"));
+
+cl::opt<std::string> moduleDeps(
+    "deps", cl::ValueOptional, cl::ZeroOrMore, cl::value_desc("filename"),
+    cl::desc("Write module dependencies to <filename> (only imports). "
+             "'-deps' alone prints module dependencies "
+             "(imports/file/version/debug/lib)"));
 
 cl::opt<std::string>
     makeDeps("makedeps", cl::ValueOptional, cl::ZeroOrMore,
@@ -860,7 +862,8 @@ void hideLLVMOptions() {
       "internalize-public-api-list", "iterative-counter-promotion",
       "join-liveintervals", "jump-table-type", "limit-float-precision",
       "lower-global-dtors-via-cxa-atexit",
-      "lto-embed-bitcode", "matrix-default-layout", "matrix-propagate-shape",
+      "lto-embed-bitcode", "matrix-default-layout",
+      "matrix-print-after-transpose-opt", "matrix-propagate-shape",
       "max-counter-promotions", "max-counter-promotions-per-loop",
       "mc-relax-all", "mc-x86-disable-arith-relaxation", "mcabac", "meabi",
       "memop-size-large", "memop-size-range", "merror-missing-parenthesis",
@@ -892,9 +895,9 @@ void hideLLVMOptions() {
       "speculative-counter-promotion-to-loop", "spiller", "spirv-debug",
       "spirv-erase-cl-md", "spirv-lower-const-expr", "spirv-mem2reg",
       "spirv-no-deref-attr", "spirv-text", "spirv-verify-regularize-passes",
-      "split-machine-functions", "spv-lower-saddwithoverflow-validate",
-      "spvbool-validate", "spvmemmove-validate",
-      "stack-alignment", "stack-protector-guard",
+      "split-machine-functions", "spv-dump-deps",
+      "spv-lower-saddwithoverflow-validate", "spvbool-validate",
+      "spvmemmove-validate", "stack-alignment", "stack-protector-guard",
       "stack-protector-guard-offset", "stack-protector-guard-reg",
       "stack-size-section", "stack-symbol-ordering",
       "stackmap-version", "static-func-full-module-prefix",

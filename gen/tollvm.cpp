@@ -232,9 +232,13 @@ LinkageWithCOMDAT DtoLinkage(Dsymbol *sym) {
   if (hasWeakUDA(sym)) {
     linkage = LLGlobalValue::WeakAnyLinkage;
   } else {
-    // Function (incl. delegate) literals are emitted into each referencing
-    // compilation unit, so use linkonce_odr for all lambdas and all global
-    // variables they define.
+    /* Function (incl. delegate) literals are emitted into each referencing
+     * compilation unit, so use internal linkage for all lambdas and all global
+     * variables they define.
+     * This makes sure these symbols don't accidentally collide when linking
+     * object files compiled by different compiler invocations (lambda mangles
+     * aren't stable - see https://issues.dlang.org/show_bug.cgi?id=23722).
+     */
     auto potentialLambda = sym;
     if (auto vd = sym->isVarDeclaration()) {
       if (vd->isDataseg())
@@ -242,7 +246,7 @@ LinkageWithCOMDAT DtoLinkage(Dsymbol *sym) {
     }
 
     if (potentialLambda->isFuncLiteralDeclaration()) {
-      linkage = LLGlobalValue::LinkOnceODRLinkage;
+      linkage = LLGlobalValue::InternalLinkage;
     } else if (sym->isInstantiated()) {
       linkage = templateLinkage;
     }
@@ -315,8 +319,9 @@ void setVisibility(Dsymbol *sym, llvm::GlobalObject *obj) {
   } else {
     if (sym->isExport()) {
       obj->setVisibility(LLGlobalValue::DefaultVisibility); // overrides @hidden
-    } else if (!hasHiddenUDA) {
+    } else if (!obj->hasLocalLinkage() && !hasHiddenUDA) {
       // Hide with -fvisibility=hidden, or linkonce_odr etc.
+      // Note that symbols with local linkage cannot be hidden (LLVM assertion).
       // The Apple linker warns about hidden linkonce_odr symbols from object
       // files compiled with -linkonce-templates being folded with *public*
       // weak_odr symbols from non-linkonce-templates code (e.g., Phobos), so
@@ -403,7 +408,8 @@ void DtoMemSet(LLValue *dst, LLValue *val, LLValue *nbytes, unsigned align) {
 
   dst = DtoBitCast(dst, VoidPtrTy);
 
-  gIR->ir->CreateMemSet(dst, val, nbytes, LLMaybeAlign(align), false /*isVolatile*/);
+  gIR->ir->CreateMemSet(dst, val, nbytes, llvm::MaybeAlign(align),
+                        false /*isVolatile*/);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -425,7 +431,7 @@ void DtoMemCpy(LLValue *dst, LLValue *src, LLValue *nbytes, unsigned align) {
   dst = DtoBitCast(dst, VoidPtrTy);
   src = DtoBitCast(src, VoidPtrTy);
 
-  auto A = LLMaybeAlign(align);
+  auto A = llvm::MaybeAlign(align);
   gIR->ir->CreateMemCpy(dst, A, src, A, nbytes, false /*isVolatile*/);
 }
 
@@ -532,9 +538,7 @@ LLValue *DtoLoad(DLValue *src, const char *name) {
 // the type.
 LLValue *DtoAlignedLoad(LLType *type, LLValue *src, const char *name) {
   llvm::LoadInst *ld = DtoLoadImpl(type, src, name);
-  if (auto alignment = getABITypeAlign(ld->getType())) {
-    ld->setAlignment(LLAlign(alignment));
-  }
+  ld->setAlignment(gDataLayout->getABITypeAlign(ld->getType()));
   return ld;
 }
 
@@ -570,9 +574,7 @@ void DtoAlignedStore(LLValue *src, LLValue *dst) {
   assert(!src->getType()->isIntegerTy(1) &&
          "Should store bools as i8 instead of i1.");
   llvm::StoreInst *st = gIR->ir->CreateStore(src, dst);
-  if (auto alignment = getABITypeAlign(src->getType())) {
-    st->setAlignment(LLAlign(alignment));
-  }
+  st->setAlignment(gDataLayout->getABITypeAlign(src->getType()));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -587,9 +589,7 @@ LLType *stripAddrSpaces(LLType *t)
   if (!pt)
     return t;
 
-#if LDC_LLVM_VER >= 1600
-  return getVoidPtrType();
-#elif LDC_LLVM_VER >= 1400
+#if LDC_LLVM_VER >= 1400
   if (pt->isOpaque())
     return getVoidPtrType();
   else {
@@ -749,7 +749,7 @@ size_t getTypeStoreSize(LLType *t) { return gDataLayout->getTypeStoreSize(t); }
 size_t getTypeAllocSize(LLType *t) { return gDataLayout->getTypeAllocSize(t); }
 
 unsigned int getABITypeAlign(LLType *t) {
-  return gDataLayout->getABITypeAlignment(t);
+  return gDataLayout->getABITypeAlign(t).value();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

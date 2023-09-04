@@ -1,11 +1,42 @@
 # LDC master
 
 #### Big news
-- Frontend, druntime and Phobos are at version [2.103.1](https://dlang.org/changelog/2.103.0.html), incl. new command-line option `-verror-supplements`. (#4345)
 
 #### Platform support
 
 #### Bug fixes
+
+# LDC 1.34.0 (2023-08-26)
+
+#### Big news
+- Frontend, druntime and Phobos are at version [2.104.2](https://dlang.org/changelog/2.104.0.html). (#4440)
+- Support for [LLVM 16](https://releases.llvm.org/16.0.0/docs/ReleaseNotes.html). The prebuilt packages use v16.0.6. (#4411, #4423)
+  - We have come across miscompiles with LLVM 16's newly-enabled-by-default function specializations (on Win64 and macOS). To be on the safe side, LDC disables them by default for all targets via `-func-specialization-size-threshold=1000000000` in `etc/ldc2.conf` (and separately for LTO on Posix platforms). To enable the function specializations, explicitly override it with e.g. `-func-specialization-size-threshold=100` (the LLVM 16 default) and, for LTO on Posix, a similar LTO plugin option in the linker cmdline (see linker cmdline with `-v`).
+
+#### Platform support
+- Supports LLVM 11.0 - 16.0. Support for LLVM 9 and 10 was dropped.
+- 64-bit RISC-V: Now defaults to `-mattr=+m,+a,+f,+d,+c` ('rv64gc' ABI) for non-bare-metal targets, i.e., if the target triple includes a valid operating system. (#4390)
+
+#### Bug fixes
+- Fix function pointers/delegates on Harvard architectures (e.g., AVR). (#4432, #4465)
+
+# LDC 1.33.0 (2023-07-23)
+
+#### Big news
+- Frontend, druntime and Phobos are at version [2.103.1](https://dlang.org/changelog/2.103.0.html), incl. new command-line option `-verror-supplements`. (#4345)
+- The `--plugin` commandline option now also accepts semantic analysis plugins. Semantic analysis plugins are recognized by exporting the symbol: `extern(C) void runSemanticAnalysis(Module m)`. The plugin's `runSemanticAnalysis` function is called for each module, after all other semantic analysis steps (also after DCompute SemA), just before object codegen. (#4430)
+- New tool `ldc-build-plugin` that helps compiling user plugins. It downloads the correct LDC source version (if it's not already available), and calls LDC with the correct commandline flags to build a plugin. (#4430)
+- New commandline option `-femit-local-var-lifetime` that enables variable lifetime (scope) annotation to LLVM IR codegen. Lifetime annotation enables stack memory reuse for local variables with non-overlapping scope. (#4395)
+- C files are now automatically preprocessed using the external C compiler (configurable via `-gcc` or the `CC` environment variable, and `-Xcc` for extra flags). Extra preprocessor flags (e.g., include dirs and manual defines) can be added via new command-line option `-P`. (#4417)
+  - Windows: If `clang-cl.exe` is on `PATH`, it is preferred over Microsoft's `cl.exe` by default (e.g., to avoid printing the C source file name to stderr during preprocessing).
+- Less pedantic checks for conflicting C(++) function declarations when compiling multiple modules to a single object file ('Error: Function type does not match previously declared function with the same mangled name'). The error now only appears if an object file actually references multiple conflicting functions. (#4420)
+- New command-line option `--fcf-protection`, which enables Intel's Control-Flow Enforcement Technology (CET). (#4437)
+
+#### Platform support
+- Supports LLVM 9.0 - 15.0.
+
+#### Bug fixes
+- Handle potential lambda mangle collisions across separately compiled object files (and the linker then silently picking an arbitrary implementation). Lambdas (and their nested global variables) are now internal to each referencing object file (`static` linkage in C). (#4415)
 
 # LDC 1.32.2 (2023-05-12)
 

@@ -38,7 +38,7 @@ set(BUILD_SHARED_LIBS     AUTO                                CACHE STRING "Whet
 set(D_FLAGS               -w;-de;-preview=dip1000;-preview=dtorfields;-preview=fieldwise CACHE STRING "Runtime D compiler flags, separated by ';'")
 set(D_EXTRA_FLAGS         ""                                  CACHE STRING "Runtime extra D compiler flags, separated by ';'")
 set(D_FLAGS_DEBUG         -g;-link-defaultlib-debug;-d-debug  CACHE STRING "Runtime D compiler flags (debug libraries), separated by ';'")
-set(D_FLAGS_RELEASE       -O3;-release                        CACHE STRING "Runtime D compiler flags (release libraries), separated by ';'")
+set(D_FLAGS_RELEASE       -O3;-release;-femit-local-var-lifetime  CACHE STRING "Runtime D compiler flags (release libraries), separated by ';'")
 set(COMPILE_ALL_D_FILES_AT_ONCE ON                            CACHE BOOL   "Compile all D files for the runtime libs in a single command line instead of separately. Disabling this is useful for many CPU cores and/or iterative development.")
 set(RT_ARCHIVE_WITH_LDC   ON                                  CACHE STRING "Whether to archive the static runtime libs via LDC instead of CMake archiver")
 set(RT_CFLAGS             ""                                  CACHE STRING "Runtime extra C compiler flags, separated by ' '")
@@ -251,6 +251,12 @@ elseif(${BUILD_SHARED_LIBS} STREQUAL "OFF")
     set(ADDITIONAL_DEFAULT_LDC_SWITCHES "${ADDITIONAL_DEFAULT_LDC_SWITCHES}\n        \"-link-defaultlib-shared=false\",")
 endif()
 
+# LLVM 16: Disable function specializations by default.
+# They cause miscompiles of e.g. the frontend for some targets (macOS x86_64 and Windows x64).
+if(LDC_LLVM_VER GREATER 1599 AND LDC_LLVM_VER LESS 1700)
+    set(ADDITIONAL_DEFAULT_LDC_SWITCHES "${ADDITIONAL_DEFAULT_LDC_SWITCHES}\n        \"-func-specialization-size-threshold=1000000000\",")
+endif()
+
 # Default wasm stack is only 64kb, this is rather small, let's bump it to 1mb
 set(WASM_DEFAULT_LDC_SWITCHES "${WASM_DEFAULT_LDC_SWITCHES}\n        \"-L-z\", \"-Lstack-size=1048576\",")
 # Protect from stack overflow overwriting global memory
@@ -335,6 +341,7 @@ if(TARGET gen_gccbuiltins)
     add_custom_command(
         OUTPUT ${module}
         COMMAND gen_gccbuiltins ${module} "${name}"
+        DEPENDS gen_gccbuiltins
     )
   endfunction()
 
