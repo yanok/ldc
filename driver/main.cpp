@@ -447,6 +447,16 @@ void parseCommandLine(Strings &sourceFiles) {
     deprecation(Loc(), "`-dip25` no longer has any effect");
   }
 
+  // -betterC implies -allinst (since D v2.105)
+  if (global.params.betterC) {
+    global.params.allInst = true;
+  }
+
+  // -wo implies at least -wi (print the warnings)
+  if (global.params.obsolete && global.params.warnings == DIAGNOSTICoff) {
+    global.params.warnings = DIAGNOSTICinform;
+  }
+
   global.params.output_o =
       (opts::output_o == cl::BOU_UNSET &&
        !(opts::output_bc || opts::output_ll || opts::output_s ||
@@ -758,6 +768,16 @@ void registerPredefinedTargetVersions() {
   case llvm::Triple::wasm64:
     VersionCondition::addPredefinedGlobalIdent("WebAssembly");
     break;
+#if LDC_LLVM_VER >= 1600
+  case llvm::Triple::loongarch32:
+    VersionCondition::addPredefinedGlobalIdent("LoongArch32");
+    registerPredefinedFloatABI("LoongArch_SoftFloat", "LoongArch_HardFloat");
+    break;
+  case llvm::Triple::loongarch64:
+    VersionCondition::addPredefinedGlobalIdent("LoongArch64");
+    registerPredefinedFloatABI("LoongArch_SoftFloat", "LoongArch_HardFloat");
+    break;
+#endif // LDC_LLVM_VER >= 1600
   default:
     warning(Loc(), "unknown target CPU architecture: %s",
             triple.getArchName().str().c_str());
@@ -1123,6 +1143,7 @@ int cppmain() {
   global.compileEnv.previewIn = global.params.previewIn;
   global.compileEnv.ddocOutput = global.params.ddoc.doOutput;
   global.compileEnv.shortenedMethods = global.params.shortenedMethods;
+  global.compileEnv.obsolete = global.params.obsolete;
 
   if (opts::fTimeTrace) {
     initializeTimeTrace(opts::fTimeTraceGranularity, 0, opts::allArguments[0]);

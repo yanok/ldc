@@ -59,6 +59,10 @@ llvm::Type *getRealType(const llvm::Triple &triple) {
 
   case Triple::riscv32:
   case Triple::riscv64:
+#if LDC_LLVM_VER >= 1600
+  case Triple::loongarch32:
+  case Triple::loongarch64:
+#endif // LDC_LLVM_VER >= 1600
     return LLType::getFP128Ty(ctx);
 
   default:
@@ -128,10 +132,8 @@ void Target::_init(const Param &params) {
   const llvm::StringRef archName = triple.getArchName();
   architectureName = {archName.size(), archName.data()};
 
-  is64bit = triple.isArch64Bit();
   isLP64 = gDataLayout->getPointerSizeInBits() == 64;
   run_noext = !triple.isOSWindows();
-  omfobj = false;
 
   if (isMSVC) {
     obj_ext = {3, "obj"};

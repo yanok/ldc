@@ -316,6 +316,8 @@ immutable Msgtable[] msgtable =
     { "_d_newThrowable" },
     { "_d_newclassT" },
     { "_d_newclassTTrace" },
+    { "_d_newitemT" },
+    { "_d_newitemTTrace" },
     { "_d_assert_fail" },
     { "dup" },
     { "_aaApply" },
@@ -551,6 +553,7 @@ immutable Msgtable[] msgtable =
     { "_pure", "pure" },
     { "define" },
     { "undef" },
+    { "ident" },
 
     // IN_LLVM: LDC-specific pragmas
     { "LDC_intrinsic" },
