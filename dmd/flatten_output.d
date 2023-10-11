@@ -51,7 +51,7 @@ import dmd.tokens;
 import dmd.utils;
 import dmd.visitor;
 
-//version = PRINT_NODE;
+version = PRINT_NODE;
 
 struct HdrGenState
 {
@@ -1311,6 +1311,8 @@ version (PRINT_NODE) { buf.writestring("/+visitEponymousMember+/"); }
 
     override void visit(TemplateInstance ti)
     {
+version (PRINT_NODE) { buf.writestring("/+visitTemplateInstance+/"); }
+
         // Skip instantiations from object.d (assume they are compiler-generated)
         if (ti.getModule() && ti.getModule().ident == Id.object && IN_WEKA())
             return;
@@ -1327,6 +1329,8 @@ version (PRINT_NODE) { buf.writestring("/+visitEponymousMember+/"); }
 
     override void visit(TemplateMixin tm)
     {
+version (PRINT_NODE) { buf.writestring("/+visitTemplateMixin+/"); }
+
         buf.writestring("mixin ");
         typeToBuffer(tm.tqual, null, buf, hgs);
         tiargsToBuffer(tm, buf, hgs);
@@ -1524,6 +1528,7 @@ version (PRINT_NODE) { buf.writestring("/+AliasAssign+/"); }
 
     void visitVarDecl(VarDeclaration v, bool anywritten)
     {
+version (PRINT_NODE) { buf.writestring("/+VarDecl+/"); }
         if (anywritten)
         {
             buf.writestring(", ");
@@ -1533,8 +1538,32 @@ version (PRINT_NODE) { buf.writestring("/+AliasAssign+/"); }
         {
             if (stcToBuffer(buf, v.storage_class))
                 buf.writeByte(' ');
-            if (v.type)
-                typeToBuffer(v.type, v.ident, buf, hgs);
+            if (v.type) {
+                // Eagerly use `auto`, but only in case the initializer type is the same as the variable type.
+                // Code like this should _not_ use "auto" for example:
+                // struct S { int i; this(int i) { i = i;} }
+                // void foo() { S s = 1; } // cannot use `auto` here!
+                // `null` is (incorrectly?) deemed .equivalent(...) to any pointer, so exclude it for conversion to `auto`.
+                bool wroteAuto = false;
+                if (v._init)
+                {
+                    auto ie = v._init.isExpInitializer();
+                    if (ie && (ie.exp.op == EXP.construct || ie.exp.op == EXP.blit)
+                        && v.type.equivalent((cast(AssignExp)ie.exp).e2.type)
+                        && !(cast(AssignExp)ie.exp).e2.isNullExp())
+                    {
+                        wroteAuto = true;
+                        buf.writestring("auto");
+                        if (v.ident)
+                        {
+                            buf.writeByte(' ');
+                            buf.writestring(v.ident.toString());
+                        }
+                    }
+                }
+                if (!wroteAuto) // standard DMD path
+                    typeToBuffer(v.type, v.ident, buf, hgs);
+            }
             else
                 buf.writestring(v.ident.toString());
         }
@@ -2239,6 +2268,9 @@ version (PRINT_NODE) { buf.writestring("/+VarExp+/"); }
         }
         else
         {
+version (PRINT_NODE) { buf.writestring("/+not TI+/"); }
+buf.printf("/+  (%d)  +/", ti !is null);
+
             buf.writestring(e.var.toChars());
         }
     }
