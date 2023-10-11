@@ -66,6 +66,9 @@ struct HdrGenState
 
     bool declstring; // set while declaring alias for string,wstring or dstring
     EnumDeclaration inEnumDecl;
+
+    int inside_tiargsToBuffer; /// > 0 while printing tiargsToBuffer
+    bool voldemort_encountered;
 }
 
 /**
@@ -80,7 +83,8 @@ void flattenModuleToBuffer(OutBuffer* buf, Module m)
     hgs.fullDump = true;
     toCBuffer(m, buf, &hgs);
     buf.writestring(q{
-pragma(inline, true) void ___flatten_nop() @nogc nothrow @safe {};
+// Generated code by compiler for flattened output.
+pragma(inline, true) void ___flatten_nop() @nogc nothrow @safe {}
 static import std.array; // for std.array.staticArray
 }   );
 }
@@ -2115,6 +2119,8 @@ version (PRINT_NODE) { buf.writestring("/+DsymbolExp+/"); }
 
     void visitAssocArrayLiteral(AssocArrayLiteralExp e)
     {
+version (PRINT_NODE) { buf.writestring("/+AssocArrayLiteralExp+/"); }
+
         buf.writeByte('[');
         foreach (i, key; *e.keys)
         {
@@ -2163,6 +2169,7 @@ version (PRINT_NODE) { buf.writestring("/+StructLiteralExp+/"); }
 
     void visitCompoundLiteral(CompoundLiteralExp e)
     {
+version (PRINT_NODE) { buf.writestring("/+CompoundLiteralExp+/"); }
         buf.writeByte('(');
         typeToBuffer(e.type, null, buf, hgs);
         buf.writeByte(')');
@@ -2268,9 +2275,6 @@ version (PRINT_NODE) { buf.writestring("/+VarExp+/"); }
         }
         else
         {
-version (PRINT_NODE) { buf.writestring("/+not TI+/"); }
-buf.printf("/+  (%d)  +/", ti !is null);
-
             buf.writestring(e.var.toChars());
         }
     }
@@ -2400,7 +2404,26 @@ version (PRINT_NODE) { buf.writestring("/+UnaExp+/"); }
     {
 version (PRINT_NODE) { buf.writestring("/+BinExp+/"); }
 
-        expToBuffer(e.e1, precedence[e.op], buf, hgs);
+        // If this is an assign expression (`b += 1`) and e1 is a cast expression,
+        // then that cast _must_ be added by semantic analysis, because `cast(..) b += 1` is invalid D code.
+        // Simply comment-out that cast in that case.
+        auto e1 = e.e1;
+        if (e.isBinAssignExp()) {
+            if (auto ce = e.e1.isCastExp()) {
+                buf.writestring("/+cast(");
+                if (ce.to)
+                    typeToBuffer(ce.to, null, buf, hgs);
+                else
+                {
+                    MODtoBuffer(buf, ce.mod);
+                }
+                buf.writestring(")+/");
+
+                e1 = ce.e1;
+            }
+        }
+
+        expToBuffer(e1, precedence[e.op], buf, hgs);
         buf.writeByte(' ');
         buf.writestring(EXPtoString(e.op));
         buf.writeByte(' ');
@@ -2526,6 +2549,9 @@ version (PRINT_NODE) { buf.writestring("/+DotVarExp+/"); }
             expToBuffer(e.e1, PREC.primary, buf, hgs);
             buf.writeByte('.');
             buf.writestring(e.var.toChars());
+            if (TemplateInstance ti = e.var.parent.isTemplateInstance()) {
+                tiargsToBuffer(ti, buf, hgs);
+            }
         }
     }
 
@@ -2590,6 +2616,8 @@ version (PRINT_NODE) { buf.writestring("/+CallExp+/"); }
 
     void visitCast(CastExp e)
     {
+version (PRINT_NODE) { buf.writestring("/+CastExp+/"); }
+
         buf.writestring("cast(");
         if (e.to)
             typeToBuffer(e.to, null, buf, hgs);
@@ -3582,6 +3610,26 @@ private void dumpTemplateInstance(TemplateInstance ti, OutBuffer* buf, HdrGenSta
 
 private void tiargsToBuffer(TemplateInstance ti, OutBuffer* buf, HdrGenState* hgs)
 {
+    // We can only output explicit template args if there is no Voldemort-type lurking.
+    // In case Voldemort or private types are detected, surround the whole argument list with `/+ .. +/`.
+    // We assume this is rare, so inserting `/+` at the start does not need to be high performant.
+    hgs.inside_tiargsToBuffer++;
+    scope(exit) hgs.inside_tiargsToBuffer--;
+
+    auto buffer_start_offset = buf.length();
+
+    if (hgs.inside_tiargsToBuffer == 1) {
+        hgs.voldemort_encountered = false;
+    }
+    scope(exit) {
+        if (hgs.inside_tiargsToBuffer == 1) {
+            if (hgs.voldemort_encountered)
+                buf.insert(buffer_start_offset, "/+++");
+            if (hgs.voldemort_encountered)
+                buf.writestring("+++/");
+        }
+    }
+
     buf.writeByte('!');
     if (ti.nest)
     {
