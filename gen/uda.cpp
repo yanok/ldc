@@ -391,8 +391,9 @@ void applyVarDeclUDAs(VarDeclaration *decl, llvm::GlobalVariable *gvar) {
           ident->toChars());
     } else if (ident == Id::udaAssumeUsed) {
       applyAttrAssumeUsed(*gIR, sle, gvar);
-    } else if (ident == Id::udaWeak || ident == Id::udaNoSplitStack) {
-      // @weak is applied elsewhere
+    } else if (ident == Id::udaWeak || ident == Id::udaNoSplitStack ||
+               ident == Id::udaNoFlattenTemplArgs) {
+      // These UDAs are applied elsewhere
     } else if (ident == Id::udaDynamicCompile ||
                ident == Id::udaDynamicCompileEmit) {
       sle->error(
@@ -450,7 +451,8 @@ void applyFuncDeclUDAs(FuncDeclaration *decl, IrFunction *irFunc) {
       } else if (ident == Id::udaAssumeUsed) {
         applyAttrAssumeUsed(*gIR, sle, func);
       } else if (ident == Id::udaWeak || ident == Id::udaKernel ||
-                 ident == Id::udaNoSanitize) {
+                 ident == Id::udaNoSanitize ||
+                 ident == Id::udaNoFlattenTemplArgs) {
         // These UDAs are applied elsewhere, thus should silently be ignored here.
       } else if (ident == Id::udaDynamicCompile) {
         irFunc->dynamicCompile = true;
@@ -545,6 +547,12 @@ bool hasKernelAttr(Dsymbol *sym) {
 /// Check whether `fd` has the `@ldc.attributes.noSplitStack` UDA applied.
 bool hasNoSplitStackUDA(FuncDeclaration *fd) {
   auto sle = getMagicAttribute(fd, Id::udaNoSplitStack, Id::attributes);
+  return sle != nullptr;
+}
+
+/// Check whether `sym` has the `@ldc.attributes.noFlattenTemplArgs` UDA applied.
+extern "C" bool hasNoFlattenTemplArgsUDA(Dsymbol *sym) {
+  auto sle = getMagicAttribute(sym, Id::udaNoFlattenTemplArgs, Id::attributes);
   return sle != nullptr;
 }
 

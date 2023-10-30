@@ -3608,8 +3608,24 @@ private void dumpTemplateInstance(TemplateInstance ti, OutBuffer* buf, HdrGenSta
 
 }
 
+extern(C) bool hasNoFlattenTemplArgsUDA(Dsymbol sym); // from ldc/gen/uda.h
+
 private void tiargsToBuffer(TemplateInstance ti, OutBuffer* buf, HdrGenState* hgs)
 {
+//    if (ti.tempdecl) {
+//        if (hasNoFlattenTemplArgsUDA(ti.tempdecl)) {
+//            buf.writestring("/+@noFlattenTemplArgs+/");
+//            return;
+//        }
+
+    if (ti.aliasdecl && hasNoFlattenTemplArgsUDA(ti.aliasdecl)) {
+        buf.writestring("/+@noFlattenTemplArgs!!+/");
+        return;
+    }
+//    } else {
+//        buf.writestring("/+tempdecl==null+/");
+//    }
+
     // We can only output explicit template args if there is no Voldemort-type lurking.
     // In case Voldemort or private types are detected, surround the whole argument list with `/+ .. +/`.
     // We assume this is rare, so inserting `/+` at the start does not need to be high performant.
