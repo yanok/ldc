@@ -98,6 +98,7 @@ struct Id
     static Identifier *udaNoSanitize;
     static Identifier *udaNoSplitStack;
     static Identifier *udaNoFlattenTemplArgs;
+    static Identifier *udaNoFlattenVoldemort;
     static Identifier *io;
 #endif
 };

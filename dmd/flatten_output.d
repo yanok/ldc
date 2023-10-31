@@ -51,7 +51,7 @@ import dmd.tokens;
 import dmd.utils;
 import dmd.visitor;
 
-version = PRINT_NODE;
+//version = PRINT_NODE;
 
 struct HdrGenState
 {
@@ -3609,6 +3609,7 @@ private void dumpTemplateInstance(TemplateInstance ti, OutBuffer* buf, HdrGenSta
 }
 
 extern(C) bool hasNoFlattenTemplArgsUDA(Dsymbol sym); // from ldc/gen/uda.h
+extern(C) bool hasNoFlattenVoldemortUDA(Dsymbol sym); // from ldc/gen/uda.h
 
 private void tiargsToBuffer(TemplateInstance ti, OutBuffer* buf, HdrGenState* hgs)
 {
@@ -3684,10 +3685,31 @@ private void tiargsToBuffer(TemplateInstance ti, OutBuffer* buf, HdrGenState* hg
     {
         if (i)
             buf.writestring(", ");
+
+        if (isVoldemortObject(arg)) {
+            hgs.voldemort_encountered = true;
+            buf.writestring("VOLDEMORT: ");
+            //break; // no point continuing outputting template arguments
+        }
         objectToBuffer(arg, buf, hgs);
     }
     ti.nestDown();
     buf.writeByte(')');
+}
+
+private bool isVoldemortObject(RootObject obj)
+{
+    if (Dsymbol dsym = isDsymbol(obj)) {
+        return hasNoFlattenVoldemortUDA(dsym);
+    }
+
+    if (Type ty = isType(obj)) {
+        if (Dsymbol dsym = ty.toDsymbol(null)) {
+            return hasNoFlattenVoldemortUDA(dsym);
+        }
+    }
+
+    return false;
 }
 
 /****************************************

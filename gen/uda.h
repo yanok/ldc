@@ -37,5 +37,6 @@ enum class DComputeCompileFor : int
 extern "C" DComputeCompileFor hasComputeAttr(Dsymbol *sym);
 bool hasNoSplitStackUDA(FuncDeclaration *fd);
 extern "C" bool hasNoFlattenTemplArgsUDA(Dsymbol *sym);
+extern "C" bool hasNoFlattenVoldemortUDA(Dsymbol *sym);
 
 unsigned getMaskFromNoSanitizeUDA(FuncDeclaration &fd);
