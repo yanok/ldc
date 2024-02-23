@@ -119,9 +119,6 @@
 - *Preliminary* support for LLVM 15, incl. adding support for the 'new' pass manager (`-passmanager`) and opaque IR pointers (`-opaque-pointers`). (way too many PRs to list!)
 - New command-line option `-fno-delete-null-pointer-checks`, mimicking the same option of GCC and Clang. (#4297)
 - New UDA `ldc.attributes.callingConvention("...")`, which overrides the default calling convention. For expert use only! (#4299)
-- Bit fields support. (#4015)
-- macOS on Apple M1: linking with `-g` is working again without unaligned pointer warnings/errors. This fixes file:line debug information in exception backtraces (requiring `atos`, a macOS development tool installed with Xcode), without the need to set MACOSX_DEPLOYMENT_TARGET=11 and using a modified LLVM. (#4291)
-- New commandline option `-fno-delete-null-pointer-checks`, mimicking the same commandline option of GCC and Clang. (#4297)
 - New command-line option `-fno-discard-value-names` to keep value names in LLVM IR. (#4012)
 - dcompute: Support for OpenCL image I/O. (#3835)
 
