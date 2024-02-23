@@ -9,10 +9,19 @@
 
 module ftimetrace;
 
-// COARSE-NOT: intrinsics
-// FINE: intrinsics
+// FINE: stdio
 // FINE: ftime-trace.d:[[@LINE+1]]
-import ldc.intrinsics;
+import std.stdio;
+
+int ctfe()
+{
+    int sum;
+    foreach (i; 0..100)
+    {
+        sum += i;
+    }
+    return sum;
+}
 
 // COARSE-NOT: foo
 // FINE: foo
