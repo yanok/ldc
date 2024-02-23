@@ -4970,7 +4970,7 @@ extern (C++) final class TypeFunction : TypeNext
     override MATCH constConv(Type to)
     {
         // Attributes need to match exactly, otherwise it's an implicit conversion
-        if (this.ty != to.ty || !this.attributesEqual(cast(TypeFunction) to, true))
+        if (this.ty != to.ty || !this.attributesEqual(cast(TypeFunction) to))
             return MATCH.nomatch;
 
         return super.constConv(to);
