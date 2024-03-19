@@ -3743,7 +3743,7 @@ struct AsmProcessor {
         // DMD uses labels secondarily to other symbols, so check
         // if IdentifierExp::semantic won't find anything.
         Dsymbol *scopesym;
-        if (!sc->search(stmt->loc, ident, &scopesym)) {
+        if (!sc->search(stmt->loc, ident, scopesym)) {
           if (LabelDsymbol *labelsym = sc->func->searchLabel(ident, stmt->loc)) {
             e = createDsymbolExp(stmt->loc, labelsym);
             if (opTakesLabel()) {
@@ -3755,11 +3755,12 @@ struct AsmProcessor {
       }
 
       e = expressionSemantic(e, sc);
-      e = e->optimize(WANTvalue);
+      e = optimize(e, WANTvalue);
 
       // Special case for floating point constant declarations.
       if (e->op == EXP::float64) {
-        Dsymbol *sym = sc->search(stmt->loc, ident, nullptr);
+        Dsymbol *scopesym;
+        Dsymbol *sym = sc->search(stmt->loc, ident, scopesym);
         if (sym) {
           VarDeclaration *v = sym->isVarDeclaration();
           if (v) {
@@ -3866,10 +3867,14 @@ struct AsmProcessor {
             token->value == TOK::float80Literal) {
           if (op == Op_df) {
             const float value = static_cast<float>(token->floatvalue);
-            insnTemplate << reinterpret_cast<const uint32_t &>(value);
+            uint32_t reinterpreted; // explicitly use memcpy because of strict-aliasing
+            std::memcpy(&reinterpreted, &value, sizeof value);
+            insnTemplate << reinterpreted;
           } else if (op == Op_dd) {
             const double value = static_cast<double>(token->floatvalue);
-            insnTemplate << reinterpret_cast<const uint64_t &>(value);
+            uint64_t reinterpreted; // explicitly use memcpy because of strict-aliasing
+            std::memcpy(&reinterpreted, &value, sizeof value);
+            insnTemplate << reinterpreted;
           } else if (op == Op_de) {
             llvm::APFloat value(0.0);
             CTFloat::toAPFloat(token->floatvalue, value);
