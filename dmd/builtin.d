@@ -229,7 +229,8 @@ Expression eval_unimp(Loc loc, FuncDeclaration fd, Expressions* arguments)
 Expression eval_ctfeWrite(Loc loc, FuncDeclaration fd, Expressions* arguments)
 {
     import core.stdc.stdio: fprintf, stderr;
-    import dmd.ctfeexpr: CTFEExp, resolveSlice;
+    import dmd.expression: CTFEExp;
+    import dmd.ctfeexpr: resolveSlice;
 
     Expression e = (*arguments)[0];
     const se = resolveSlice(e).toStringExp();
