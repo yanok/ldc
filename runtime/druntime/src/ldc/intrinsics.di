@@ -28,6 +28,7 @@ else version (LDC_LLVM_1500) enum LLVM_version = 1500;
 else version (LDC_LLVM_1600) enum LLVM_version = 1600;
 else version (LDC_LLVM_1700) enum LLVM_version = 1700;
 else version (LDC_LLVM_1800) enum LLVM_version = 1800;
+else version (LDC_LLVM_1801) enum LLVM_version = 1801;
 else static assert(false, "LDC LLVM version not supported");
 
 enum LLVM_atleast(int major) = (LLVM_version >= major * 100);
@@ -619,6 +620,7 @@ pragma(LDC_intrinsic, "llvm.debugtrap")
 
 /// Provides information about the expected (that is, most probable) runtime
 /// value of an integer expression to the optimizer.
+/// The intrinsic returns `val`.
 ///
 /// Params:
 ///     val = The runtime value, of integer type.
@@ -626,6 +628,13 @@ pragma(LDC_intrinsic, "llvm.debugtrap")
 pragma(LDC_intrinsic, "llvm.expect.i#")
     T llvm_expect(T)(T val, T expectedVal)
         if (__traits(isIntegral, T));
+
+/// The intrinsic allows the optimizer to assume that the provided `condition` is
+/// always true whenever the control flow reaches the intrinsic call. If the condition
+/// is violated during execution, the behavior is undefined.
+/// No machine code is generated for this intrinsic.
+pragma(LDC_intrinsic, "llvm.assume")
+    void llvm_assume(bool condition);
 
 /// LLVM optimizer treats this intrinsic as having side effect, so it can be
 /// inserted into a loop to indicate that the loop shouldn't be assumed to

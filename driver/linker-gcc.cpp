@@ -621,14 +621,6 @@ void ArgsBuilder::build(llvm::StringRef outputPath,
 void ArgsBuilder::addLinker() {
   llvm::StringRef linker = opts::linker;
 
-  // Default to ld.bfd for Android (placing .tdata and .tbss sections adjacent
-  // to each other as required by druntime's rt.sections_android, contrary to
-  // gold and lld as of Android NDK r21d).
-  if (global.params.targetTriple->getEnvironment() == llvm::Triple::Android &&
-      opts::linker.getNumOccurrences() == 0) {
-    linker = "bfd";
-  }
-
   if (!linker.empty())
     args.push_back(("-fuse-ld=" + linker).str());
 }
@@ -636,6 +628,10 @@ void ArgsBuilder::addLinker() {
 //////////////////////////////////////////////////////////////////////////////
 
 void ArgsBuilder::addUserSwitches() {
+#if LDC_LLVM_VER >= 1800
+  #define startswith starts_with
+#endif
+
   // additional linker and cc switches (preserve order across both lists)
   for (unsigned ilink = 0, icc = 0;;) {
     unsigned linkpos = ilink < opts::linkerSwitches.size()
@@ -664,6 +660,10 @@ void ArgsBuilder::addUserSwitches() {
       break;
     }
   }
+
+#if LDC_LLVM_VER >= 1800
+  #undef startswith
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////

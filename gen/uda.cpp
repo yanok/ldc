@@ -315,6 +315,10 @@ void applyAttrTarget(StructLiteralExp *sle, llvm::Function *func,
   // The current implementation here does not do any checking of the specified
   // string and simply passes all to llvm.
 
+#if LDC_LLVM_VER >= 1800
+  #define startswith starts_with
+#endif
+
   checkStructElems(sle, {Type::tstring});
   llvm::StringRef targetspec = getFirstElemString(sle);
 
@@ -324,6 +328,9 @@ void applyAttrTarget(StructLiteralExp *sle, llvm::Function *func,
   llvm::StringRef CPU;
   std::vector<std::string> features;
 
+  // Preserve the order of the features as they appear in the source
+  // code. `hasFnAttribute` returns all the features accumulated
+  // so far and they should remain at the beginning of the result.
   if (func->hasFnAttribute("target-features")) {
     auto attr = func->getFnAttribute("target-features");
     features.push_back(std::string(attr.getValueAsString()));
@@ -367,14 +374,14 @@ void applyAttrTarget(StructLiteralExp *sle, llvm::Function *func,
   }
 
   if (!features.empty()) {
-    // Sorting the features puts negative features ("-") after positive features
-    // ("+"). This provides the desired behavior of negative features overriding
-    // positive features regardless of their order in the source code.
-    sort(features.begin(), features.end());
     func->addFnAttr("target-features",
                     llvm::join(features.begin(), features.end(), ","));
     irFunc->targetFeaturesOverridden = true;
   }
+
+#if LDC_LLVM_VER >= 1800
+  #undef startswith
+#endif
 }
 
 void applyAttrAssumeUsed(IRState &irs, StructLiteralExp *sle,
@@ -441,7 +448,11 @@ bool parseCallingConvention(llvm::StringRef name,
           .Case("intel_ocl_bicc", llvm::CallingConv::Intel_OCL_BI)
           .Case("x86_64_sysvcc", llvm::CallingConv::X86_64_SysV)
           .Case("win64cc", llvm::CallingConv::Win64)
+#if LDC_LLVM_VER >= 1800
+          .Case("webkit_jscc", llvm::CallingConv::WASM_EmscriptenInvoke)
+#else
           .Case("webkit_jscc", llvm::CallingConv::WebKit_JS)
+#endif
           .Case("anyregcc", llvm::CallingConv::AnyReg)
           .Case("preserve_mostcc", llvm::CallingConv::PreserveMost)
           .Case("preserve_allcc", llvm::CallingConv::PreserveAll)

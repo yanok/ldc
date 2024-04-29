@@ -45,6 +45,8 @@
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
+#include <llvm/IR/Constant.h>
+#include <llvm/Analysis/ConstantFolding.h>
 #include <stack>
 
 using namespace dmd;
@@ -1141,7 +1143,6 @@ LLConstant *DtoConstExpInit(const Loc &loc, Type *targetType, Expression *exp) {
 
   LLType *llType = val->getType();
   LLType *targetLLType = DtoMemType(baseTargetType);
-
   // shortcut for zeros
   if (val->isNullValue())
     return llvm::Constant::getNullValue(targetLLType);
@@ -1149,7 +1150,11 @@ LLConstant *DtoConstExpInit(const Loc &loc, Type *targetType, Expression *exp) {
   // extend i1 to i8
   if (llType->isIntegerTy(1)) {
     llType = LLType::getInt8Ty(gIR->context());
+#if LDC_LLVM_VER < 1800
     val = llvm::ConstantExpr::getZExt(val, llType);
+#else
+    val = llvm::ConstantFoldCastOperand(llvm::Instruction::ZExt, val, llType, *gDataLayout);
+#endif
   }
 
   if (llType == targetLLType)
@@ -1213,7 +1218,11 @@ LLConstant *DtoConstExpInit(const Loc &loc, Type *targetType, Expression *exp) {
            "On initializer integer type mismatch, the target should be wider "
            "than the source.");
 
+#if LDC_LLVM_VER < 1800
     return llvm::ConstantExpr::getZExtOrBitCast(val, target);
+#else
+    return llvm::ConstantFoldCastOperand(llvm::Instruction::ZExt, val, target, *gDataLayout);
+#endif
   }
 
   Logger::println("Unhandled type mismatch, giving up.");
@@ -1241,6 +1250,8 @@ static char *DtoOverloadedIntrinsicName(TemplateInstance *ti,
                                         TemplateDeclaration *td) {
   IF_LOG Logger::println("DtoOverloadedIntrinsicName");
   LOG_SCOPE;
+
+  assert(td->intrinsicName);
 
   IF_LOG {
     Logger::println("template instance: %s", ti->toChars());
@@ -1304,7 +1315,7 @@ static char *DtoOverloadedIntrinsicName(TemplateInstance *ti,
 
   IF_LOG Logger::println("final intrinsic name: %s", name.c_str());
 
-  return strdup(name.c_str());
+  return mem.xstrdup(name.c_str());
 }
 
 /// For D frontend
@@ -1312,11 +1323,9 @@ static char *DtoOverloadedIntrinsicName(TemplateInstance *ti,
 void DtoSetFuncDeclIntrinsicName(TemplateInstance *ti, TemplateDeclaration *td,
                                  FuncDeclaration *fd) {
   if (fd->llvmInternal == LLVMintrinsic) {
-    fd->intrinsicName = DtoOverloadedIntrinsicName(ti, td);
-    const auto cstr = fd->intrinsicName;
-    fd->mangleOverride = {cstr ? strlen(cstr) : 0, cstr};
-  } else {
-    fd->intrinsicName = td->intrinsicName ? strdup(td->intrinsicName) : nullptr;
+    const auto cstr = DtoOverloadedIntrinsicName(ti, td);
+    assert(cstr);
+    fd->mangleOverride = {strlen(cstr), cstr};
   }
 }
 

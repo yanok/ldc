@@ -192,6 +192,10 @@ void tryParse(const llvm::SmallVectorImpl<const char *> &args, size_t i,
 }
 
 bool tryParseLowmem(const llvm::SmallVectorImpl<const char *> &args) {
+#if LDC_LLVM_VER >= 1800
+  #define startswith starts_with
+#endif
+
   bool lowmem = false;
   for (size_t i = 1; i < args.size(); ++i) {
     if (args::isRunArg(args[i]))
@@ -209,6 +213,10 @@ bool tryParseLowmem(const llvm::SmallVectorImpl<const char *> &args) {
     }
   }
   return lowmem;
+
+#if LDC_LLVM_VER >= 1800
+  #undef startswith
+#endif
 }
 
 const char *

@@ -14,6 +14,7 @@
 #include "dmd/id.h"
 #include "dmd/mtype.h"
 #include "dmd/target.h"
+#include "dmd/template.h"
 #include "gen/abi/abi.h"
 #include "gen/classes.h"
 #include "gen/dvalue.h"
@@ -31,6 +32,7 @@
 #include "ir/irfunction.h"
 #include "ir/irtype.h"
 #include "llvm/IR/LLVMContext.h"
+#include <llvm/IR/DerivedTypes.h>
 
 using namespace dmd;
 
@@ -266,7 +268,12 @@ static LLType *getPtrToAtomicType(LLType *type) {
   case 32:
   case 64:
   case 128:
+#if LDC_LLVM_VER < 1800
     return LLType::getIntNPtrTy(gIR->context(), static_cast<unsigned>(N));
+#else
+    return LLType::getIntNTy(gIR->context(), static_cast<unsigned>(N))
+        ->getPointerTo();
+#endif
   default:
     return nullptr;
   }
@@ -544,18 +551,21 @@ bool DtoLowerMagicIntrinsic(IRState *p, FuncDeclaration *fndecl, CallExp *e,
       fatal();
     }
 
-    assert(fndecl->intrinsicName);
+    TemplateInstance *ti = fndecl->parent->isTemplateInstance();
+    assert(ti);
+    const char *opString = ti->tempdecl->isTemplateDeclaration()->intrinsicName;
+    assert(opString);
+
     static const char *ops[] = {"xchg", "add", "sub", "and",  "nand", "or",
                                 "xor",  "max", "min", "umax", "umin", nullptr};
 
     int op = 0;
     for (;; ++op) {
       if (ops[op] == nullptr) {
-        error(e->loc, "unknown `atomicrmw` operation `%s`",
-              fndecl->intrinsicName);
+        error(e->loc, "unknown `atomicrmw` operation `%s`", opString);
         fatal();
       }
-      if (strcmp(fndecl->intrinsicName, ops[op]) == 0) {
+      if (strcmp(opString, ops[op]) == 0) {
         break;
       }
     }
