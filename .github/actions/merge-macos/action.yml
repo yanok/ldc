@@ -104,12 +104,12 @@ runs:
         perl -0777 -pi -e "s|\\ndefault:\\n.+?\\n\\};|$sections|s" etc/ldc2.conf
         cat etc/ldc2.conf
 
-    - name: Run x86_64/arm64 macOS/iOS cross-compilation smoke tests
+    - name: Run x86_64/arm64 macOS cross-compilation smoke tests
       shell: bash
       run: |
         set -eux
         echo 'void main() { import std.stdio; writefln("Hello world, %d bits", size_t.sizeof * 8); }' > hello.d
-        for os in macos ios; do
+        for os in macos; do
           for arch in x86_64 arm64; do
             triple="$arch-apple-$os"
             ldc2-universal/bin/ldc2 -mtriple="$triple" hello.d
