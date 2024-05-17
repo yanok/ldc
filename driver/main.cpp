@@ -855,6 +855,7 @@ void registerPredefinedTargetVersions() {
     if (triple.getEnvironment() == llvm::Triple::Android) {
       VersionCondition::addPredefinedGlobalIdent("Android");
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Bionic");
+      VersionCondition::addPredefinedGlobalIdent("CppRuntime_Clang");
     } else if (triple.isMusl()) {
       VersionCondition::addPredefinedGlobalIdent("CRuntime_Musl");
       VersionCondition::addPredefinedGlobalIdent("CppRuntime_Gcc");

@@ -19,7 +19,7 @@ jobs:
             os: ubuntu-20.04
             host_dc: ldc-beta
             # FIXME: no usable official package available yet
-            llvm_version: https://github.com/ldc-developers/llvm-project/releases/download/ldc-v18.1.4/llvm-18.1.4-linux-x86_64.tar.xz
+            llvm_version: https://github.com/ldc-developers/llvm-project/releases/download/ldc-v18.1.5/llvm-18.1.5-linux-x86_64.tar.xz
           - job_name: macOS 14, LLVM 17, latest LDC beta
             os: macos-14
             host_dc: ldc-beta
@@ -65,7 +65,7 @@ jobs:
           submodules: true
           fetch-depth: 50
       - name: Install ninja
-        uses: symmetryinvestments/gha-setup-ninja@v1
+        uses: symmetryinvestments/gha-setup-ninja@v2
       - name: Install D host compiler
         uses: dlang-community/setup-dlang@v1
         with:
@@ -91,7 +91,7 @@ jobs:
           sudo apt-get install gdb=9.1-0ubuntu1 llvm libzstd-dev
 
       - name: Try to restore cached LLVM
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: llvm
           key: llvm-${{ matrix.llvm_version }}-${{ runner.os }}
@@ -179,8 +179,8 @@ jobs:
           excludes='dmd-testsuite|lit-tests|ldc2-unittest'
           if [[ '${{ runner.os }}' == macOS ]]; then
             N=$(sysctl -n hw.logicalcpu)
-            # FIXME: fails with enabled optimizations on M1 runners
             if [[ '${{ matrix.os }}' == macos-14 ]]; then
+              # FIXME: crashes frequently with enabled optimizations on M1 runners
               excludes+='|^std.internal.math.gammafunction(-shared)?$'
             fi
           else
