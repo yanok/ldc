@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CLANG_VERSION: 14.0.0
-  LLVM_VERSION: 14.0.3
+  CLANG_VERSION: 15.0.6
+  LLVM_VERSION: 18.1.5
 
 jobs:
   build-native:
@@ -63,7 +63,6 @@ jobs:
               -DEXTRA_CXXFLAGS=-flto=full
             with_pgo: true
             llvm_version: 17.0.6 # FIXME: sporadic 'libc++abi: Pure virtual function called!' compiler crashes with LLVM 18 (see https://github.com/ldc-developers/ldc/pull/4604, https://github.com/ldc-developers/ldc/pull/4541)
-            clang_version: 15.0.6
 
     name: ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
@@ -81,7 +80,7 @@ jobs:
       - name: Install prerequisites
         uses: ./.github/actions/1-setup
         with:
-          clang_version: ${{ runner.os == 'Windows' && '18.1.5' || matrix.clang_version || env.CLANG_VERSION }}
+          clang_version: ${{ runner.os == 'Windows' && '18.1.5' || env.CLANG_VERSION }}
           llvm_version: ${{ matrix.llvm_version || env.LLVM_VERSION }}
           arch: ${{ matrix.arch }}
       - name: Build bootstrap LDC
