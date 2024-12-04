@@ -391,7 +391,7 @@ void applyVarDeclUDAs(VarDeclaration *decl, llvm::GlobalVariable *gvar) {
           ident->toChars());
     } else if (ident == Id::udaAssumeUsed) {
       applyAttrAssumeUsed(*gIR, sle, gvar);
-    } else if (ident == Id::udaWeak || ident == Id::udaNoSplitStack) {
+    } else if (ident == Id::udaWeak || ident == Id::udaNoSplitStack || ident == Id::udaCtfe) {
       // @weak is applied elsewhere
     } else if (ident == Id::udaDynamicCompile ||
                ident == Id::udaDynamicCompileEmit) {
@@ -450,7 +450,7 @@ void applyFuncDeclUDAs(FuncDeclaration *decl, IrFunction *irFunc) {
       } else if (ident == Id::udaAssumeUsed) {
         applyAttrAssumeUsed(*gIR, sle, func);
       } else if (ident == Id::udaWeak || ident == Id::udaKernel ||
-                 ident == Id::udaNoSanitize) {
+                 ident == Id::udaNoSanitize || ident == Id::udaCtfe) {
         // These UDAs are applied elsewhere, thus should silently be ignored here.
       } else if (ident == Id::udaDynamicCompile) {
         irFunc->dynamicCompile = true;

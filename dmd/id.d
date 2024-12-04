@@ -568,6 +568,7 @@ immutable Msgtable[] msgtable =
     { "udaHidden", "_hidden" },
     { "udaNoSanitize", "noSanitize" },
     { "udaNoSplitStack", "_noSplitStack" },
+    { "udaCtfe", "_ctfe" },
 
     // IN_LLVM: DCompute specific types and functionss
     { "dcompute" },
