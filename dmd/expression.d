@@ -3827,7 +3827,7 @@ extern (C++) final class FuncExp : Expression
     {
         if (fd.ident == Id.empty)
         {
-            const(char)[] s;
+            string s;
             if (fd.fes)
                 s = "__foreachbody";
             else if (fd.tok == TOK.reserved)
@@ -3861,7 +3861,7 @@ extern (C++) final class FuncExp : Expression
                 symtab = sds.symtab;
             }
             assert(symtab);
-            Identifier id = Identifier.generateId(s, symtab.length() + 1);
+            Identifier id = Identifier.generateIdWithLoc(s, loc);
             fd.ident = id;
             if (td)
                 td.ident = id;
