@@ -512,6 +512,22 @@ bool hasWeakUDA(Dsymbol *sym) {
   return true;
 }
 
+/// Checks whether 'sym' has the @ldc.attibutes._ctfe() UDA applied.
+bool hasCtfeUDA(Dsymbol *sym) {
+  auto sle = getMagicAttribute(sym, Id::udaCtfe, Id::attributes);
+  if (!sle)
+    return false;
+
+  checkStructElems(sle, {});
+  if (!sym->isFuncDeclaration() && !sym->isTemplateDeclaration()) {
+    // TODO: Check that the template is a templated function.
+    // We need to expose TemplateDeclaration definition to C++ for that.
+    // Or better make it a common attribute and check from DMD code.
+    sym->error("`@ldc.attributes.ctfe` can only be applied to functions");
+  }
+  return true;
+}
+
 /// Returns 0 if 'sym' does not have the @ldc.dcompute.compute() UDA applied.
 /// Returns 1 + n if 'sym' does and is @compute(n).
 extern "C" DComputeCompileFor hasComputeAttr(Dsymbol *sym) {
