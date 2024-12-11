@@ -69,6 +69,9 @@ runs:
 
         # use assertions for untagged builds
         assertsSuffix="-withAsserts"
+        if [[ "$version" = 14.* ]]; then
+          assertsSuffix=""
+        fi
         if [[ '${{ github.ref }}' = refs/tags/* ]]; then
           assertsSuffix=""
         fi
