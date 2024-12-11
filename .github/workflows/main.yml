@@ -12,6 +12,7 @@ concurrency:
 env:
   CLANG_VERSION: 14.0.0
   LLVM_VERSION: 14.0.3
+  local: false
 
 jobs:
   build-native:
@@ -70,8 +71,11 @@ jobs:
         with:
           submodules: true
           fetch-depth: 50
+      - name: 'Local: link to hostexecutor'
+        if: env.local == 'true'
+        run: ln -s hostexecutor ../ldc
       - name: 'macOS 14: Switch to Xcode 16'
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-14' && env.local != 'true'
         run: sudo xcode-select -switch /Applications/Xcode_16.app
       - name: Install prerequisites
         uses: ./.github/actions/1-setup
