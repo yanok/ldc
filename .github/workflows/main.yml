@@ -50,7 +50,7 @@ jobs:
             with_pgo: true
 
           - job_name: macOS arm64
-            os: macos-14
+            os: macos-13
             arch: arm64
             bootstrap_cmake_flags: >-
               -DBUILD_LTO_LIBS=ON
