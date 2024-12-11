@@ -36,6 +36,7 @@ jobs:
               -DD_COMPILER_FLAGS="-O -flto=full -defaultlib=phobos2-ldc-lto,druntime-ldc-lto"
               -DEXTRA_CXXFLAGS=-flto=full
             with_pgo: true
+            with_mimalloc: true
 
           - job_name: macOS x86_64
             os: macos-13
@@ -49,6 +50,7 @@ jobs:
               -DBUILD_LTO_LIBS=ON
               -DD_COMPILER_FLAGS="-O -L-exported_symbol '-L__*' -L-w"
             with_pgo: true
+            with_mimalloc: false
 
           - job_name: macOS arm64
             os: macos-13
@@ -59,6 +61,7 @@ jobs:
               -DBUILD_LTO_LIBS=ON
               -DD_COMPILER_FLAGS="-O -L-exported_symbol '-L__*' -L-w"
             with_pgo: true
+            with_mimalloc: false
 
     name: ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
@@ -105,6 +108,7 @@ jobs:
           cmake_flags: ${{ matrix.extra_cmake_flags }}
           arch: ${{ matrix.arch }}
           with_pgo: ${{ matrix.with_pgo }}
+          with_mimalloc: ${{ matrix.with_mimalloc }}
 
       - name: Run LDC D unittests
         if: success() || failure()
