@@ -291,6 +291,9 @@ public:
 
   void visit(FuncDeclaration *decl) override {
     if (hasCtfeUDA(decl)) return;
+    auto tinst = decl->parent->isTemplateInstance();
+    if (tinst && hasCtfeUDA(tinst->tempdecl)) return;
+
     // don't touch function aliases, they don't contribute any new symbols
     if (!decl->isFuncAliasDeclaration()) {
       DtoDefineFunction(decl);
@@ -304,10 +307,6 @@ public:
                            decl->toPrettyChars());
     LOG_SCOPE
 
-    if (hasCtfeUDA(decl->tempdecl)) {
-      Logger::println("Ctfe-only template, skipping.");
-      return;
-    }
     if (decl->ir->isDefined()) {
       Logger::println("Already defined, skipping.");
       return;
