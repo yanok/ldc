@@ -9,8 +9,7 @@ inputs:
 runs:
   using: composite
   steps:
-
-    - name: 'Linux: Install required apt packages'
+    - name: "Linux: Install required apt packages"
       if: runner.os == 'Linux'
       shell: bash
       run: |
@@ -26,7 +25,7 @@ runs:
         # Make sure to link libzstd statically
         sudo rm /usr/lib/x86_64-linux-gnu/libzstd.so
 
-    - name: 'Linux: Download & extract clang' # into ../clang
+    - name: "Linux: Download & extract clang" # into ../clang
       if: runner.os == 'Linux'
       shell: bash
       run: |
@@ -38,7 +37,7 @@ runs:
         tar -xf clang.tar.xz --strip 1 -C clang
         rm clang.tar.xz
         clang/bin/clang --version
-    - name: 'Windows: Install clang'
+    - name: "Windows: Install clang"
       if: runner.os == 'Windows'
       shell: bash
       run: |
@@ -96,7 +95,7 @@ runs:
 
         llvm/bin/llvm-config --version
 
-    - name: 'Linux: Make lld the default linker'
+    - name: "Linux: Make lld the default linker"
       if: runner.os == 'Linux'
       shell: bash
       run: |
@@ -112,7 +111,7 @@ runs:
       with:
         # macOS arm64: use LDC v1.39.0 using LLVM v17, as Xcode v16
         compiler: ${{ inputs.arch == 'arm64' && 'ldc-1.39.0' || 'ldc-latest' }}
-    - name: 'Posix: Clear LD_LIBRARY_PATH env variable' # don't use host druntime/Phobos .so/.dylib etc.
+    - name: "Posix: Clear LD_LIBRARY_PATH env variable" # don't use host druntime/Phobos .so/.dylib etc.
       if: runner.os != 'Windows'
       shell: bash
       run: echo "LD_LIBRARY_PATH=" >> $GITHUB_ENV
@@ -130,12 +129,12 @@ runs:
         python3 -c "import lit.main; lit.main.main();" --version . | head -n 1
 
     # the druntime tests require GNU make
-    - name: 'Windows: Make sure GNU make is installed'
+    - name: "Windows: Make sure GNU make is installed"
       if: runner.os == 'Windows'
       shell: cmd
       run: make --version
 
-    - name: 'Windows: Download & extract libcurl' # into ../libcurl/ldc2
+    - name: "Windows: Download & extract libcurl" # into ../libcurl/ldc2
       if: runner.os == 'Windows'
       shell: bash
       run: |
@@ -157,12 +156,12 @@ runs:
         fi
         ls -lh ldc2/
 
-    - name: 'Windows: Set LDC_VSDIR env variable' # to somewhat speed-up MSVC auto-detection
+    - name: "Windows: Set LDC_VSDIR env variable" # to somewhat speed-up MSVC auto-detection
       if: runner.os == 'Windows'
       shell: bash
       run: echo "LDC_VSDIR=$(vswhere -latest -property installationPath)" >> $GITHUB_ENV
 
-    - name: 'Windows x86: Make CMake configure 64-bit clang-cl for 32-bit code emission'
+    - name: "Windows x86: Make CMake configure 64-bit clang-cl for 32-bit code emission"
       if: runner.os == 'Windows' && inputs.arch == 'x86'
       shell: bash
       run: |
