@@ -10,7 +10,10 @@ runs:
         arch='aarch64'
         triple="$arch-linux-gnu"
 
-        install/bin/ldc-build-runtime --ninja \
+        ls
+        ls install || true
+        ls install/bin || true
+        $PWD/install/bin/ldc-build-runtime --ninja \
           --buildDir="build-libs-$arch" \
           --dFlags="-mtriple=$triple" \
           --ldcSrcDir="$PWD/ldc"
