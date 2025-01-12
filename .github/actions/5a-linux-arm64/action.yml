@@ -12,7 +12,7 @@ runs:
 
         ./installed/bin/ldc-build-runtime --ninja \
           --buildDir="build-libs-$arch" \
-          --dFlags="-mtriple=$triple" \
+          --dFlags="-mtriple=$triple -gcc=clang" \
           --cFlags="--target=$triple" \
           --ldcSrcDir="$PWD/ldc"
 
