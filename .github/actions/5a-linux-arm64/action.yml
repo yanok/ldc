@@ -13,6 +13,7 @@ runs:
         ./installed/bin/ldc-build-runtime --ninja \
           --buildDir="build-libs-$arch" \
           --dFlags="-mtriple=$triple" \
+          --cFlags="--target=$triple" \
           --ldcSrcDir="$PWD/ldc"
 
         mkdir "installed/lib-$arch"
