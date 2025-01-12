@@ -19,7 +19,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-
           - job_name: Linux x86_64
             os: ubuntu-20.04
             arch: x86_64
@@ -72,7 +71,7 @@ jobs:
         with:
           submodules: true
           fetch-depth: 50
-      - name: 'macOS 14: Switch to Xcode 16'
+      - name: "macOS 14: Switch to Xcode 16"
         if: matrix.os == 'macos-14'
         run: sudo xcode-select -switch /Applications/Xcode_16.app
       - name: Install prerequisites
@@ -89,7 +88,7 @@ jobs:
           arch: ${{ matrix.arch }}
       # FIXME: on macOS arm64, LLVM 18 (from LDC) and LLVM 17 (from Xcode 16) seem incompatible,
       #        leading to sporadic 'libc++abi: Pure virtual function called!' compiler crashes
-      - name: 'macOS 14: Use host LDC (with Xcode-compatible LLVM version) as bootstrap LDC'
+      - name: "macOS 14: Use host LDC (with Xcode-compatible LLVM version) as bootstrap LDC"
         if: matrix.os == 'macos-14'
         run: ln -s $(dirname $(dirname $(which ldmd2))) ../bootstrap-ldc
       - name: Build LDC with PGO instrumentation & gather profile from compiling default libs
@@ -113,22 +112,25 @@ jobs:
         uses: ./.github/actions/5-install
         with:
           arch: ${{ matrix.arch }}
-#      - name: 'macOS: Cross-compile iOS libraries, copy to install dir & extend ldc2.conf'
-#        if: runner.os == 'macOS'
-#        uses: ./.github/actions/5a-ios
-#        with:
-#          arch: ${{ matrix.arch }}
+      #      - name: 'macOS: Cross-compile iOS libraries, copy to install dir & extend ldc2.conf'
+      #        if: runner.os == 'macOS'
+      #        uses: ./.github/actions/5a-ios
+      #        with:
+      #          arch: ${{ matrix.arch }}
 
+      - name: "Linux: Cross-compile ARM64 libraries, copy to install dir & extend ldc2.conf"
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/5a-linux-arm64
       - name: Run a few integration tests against the installed compiler
         uses: ./.github/actions/6-integration-test
- #     - name: 'macOS: Run iOS cross-compilation integration test'
- #       if: runner.os == 'macOS'
- #       run: |
- #         set -eux
- #         cd ..
- #         triple='${{ matrix.arch }}-apple-ios'
- #         installed/bin/ldc2 -mtriple="$triple" hello.d -of=hello_ios
- #         installed/bin/ldc2 -mtriple="$triple" hello.d -of=hello_ios_shared -link-defaultlib-shared
+      #     - name: 'macOS: Run iOS cross-compilation integration test'
+      #       if: runner.os == 'macOS'
+      #       run: |
+      #         set -eux
+      #         cd ..
+      #         triple='${{ matrix.arch }}-apple-ios'
+      #         installed/bin/ldc2 -mtriple="$triple" hello.d -of=hello_ios
+      #         installed/bin/ldc2 -mtriple="$triple" hello.d -of=hello_ios_shared -link-defaultlib-shared
 
       - name: Create package & upload artifact(s)
         uses: ./.github/actions/7-package
@@ -144,7 +146,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Merge x86_64 & arm64 packages to universal one
         uses: ./.github/actions/merge-macos
-
 
   upload-to-github:
     name: Upload to GitHub
