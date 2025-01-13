@@ -2,6 +2,15 @@ name: "Linux: Cross-compile ARM64 libraries & copy to install dir"
 runs:
   using: composite
   steps:
+
+    - name: Install Cross-Compile Support (ARM64)
+      uses: cyberjunk/gha-ubuntu-cross@v5
+      with:
+        arch: arm64
+
+          #    - name: Install libx11-dev for ARM64
+          #run: sudo apt-get install libx11-dev:arm64
+
     - shell: bash
       run: |
         set -eux
