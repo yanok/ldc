@@ -15,6 +15,7 @@ runs:
           --buildDir="build-libs-$arch" \
           --dFlags="-mtriple=$triple -gcc=clang" \
           --cFlags="--target=$triple" \
+          --linkerFlags="--target=$triple" \
           --ldcSrcDir="$PWD/ldc"
 
         mkdir "installed/lib-$arch"
