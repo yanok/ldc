@@ -10,6 +10,7 @@ runs:
         arch='aarch64'
         triple="$arch-linux-gnu"
 
+        export CC=clang
         ./installed/bin/ldc-build-runtime --ninja \
           --buildDir="build-libs-$arch" \
           --dFlags="-mtriple=$triple -gcc=clang" \
