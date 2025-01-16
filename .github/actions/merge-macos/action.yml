@@ -7,11 +7,6 @@ runs:
       with:
         name: osx-x86_64
         path: artifacts/
-    - name: Download OSX arm64 artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: osx-arm64
-        path: artifacts/
     - name: Download Linux x86_64 artifact
       uses: actions/download-artifact@v4
       with:
@@ -26,7 +21,7 @@ runs:
         mkdir ldc2-osx-{x86_64,arm64}
         mkdir ldc2-linux-x86_64
         tar -xf artifacts/ldc2-*-osx-x86_64.tar.xz --strip 1 -C ldc2-osx-x86_64
-        tar -xf artifacts/ldc2-*-osx-arm64.tar.xz  --strip 1 -C ldc2-osx-arm64
+        #tar -xf artifacts/ldc2-*-osx-arm64.tar.xz  --strip 1 -C ldc2-osx-arm64
         tar -xf artifacts/ldc2-*-linux-x86_64.tar.xz --strip 1 -C ldc2-linux-x86_64
 
         cp -R ldc2-osx-x86_64 ldc2-universal
@@ -34,16 +29,11 @@ runs:
 
         # rename/copy lib dirs
         mv lib                            lib-x86_64
-        cp -R ../ldc2-osx-arm64/lib       lib-arm64
+        #cp -R ../ldc2-osx-arm64/lib       lib-arm64
         # cp -R ../ldc2-arm64/lib-ios-arm64 ./
         cp -R ../ldc2-linux-x86_64/lib          lib-linux-x86_64
         cp -R ../ldc2-linux-x86_64/lib-aarch64  lib-linux-arm64
 
-        # merge executables to universal ones
-        for exe in bin/*; do
-          rm $exe
-          lipo -create -output $exe ../ldc2-x86_64/$exe ../ldc2-arm64/$exe
-        done
 
         # ios_triple_suffix=$(grep -o -E '\-apple-ios[0-9\.]+' etc/ldc2.conf | head -n1)
         # ios_version=${ios_triple_suffix:10}
@@ -130,7 +120,7 @@ runs:
         set -eux
         echo 'void main() { import std.stdio; writefln("Hello world, %d bits", size_t.sizeof * 8); }' > hello.d
         for os in macos; do
-          for arch in x86_64 arm64; do
+          for arch in x86_64; do
             triple="$arch-apple-$os"
             ldc2-universal/bin/ldc2 -mtriple="$triple" hello.d
             ldc2-universal/bin/ldc2 -mtriple="$triple" hello.d -link-defaultlib-shared
