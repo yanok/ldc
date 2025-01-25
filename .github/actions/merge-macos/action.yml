@@ -4,12 +4,12 @@ runs:
   steps:
 
     - name: Download x86_64 artifact
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: osx-x86_64
         path: artifacts/
     - name: Download arm64 artifact
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: osx-arm64
         path: artifacts/
@@ -122,7 +122,7 @@ runs:
         tar -cJf newArtifacts/$artifactName.tar.xz --options='compression-level=9' $artifactName
 
     - name: Upload universal package
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: osx-universal
         path: newArtifacts/
