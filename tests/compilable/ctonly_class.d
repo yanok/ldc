@@ -1,3 +1,4 @@
+// RUN: %ldc -c %s
 
 class C {
     int v;

@@ -1,3 +1,5 @@
+// RUN: %ldc -c %s
+
 int f(int x, int y) @__ctfe {
     return x + y;
 }

@@ -1,3 +1,4 @@
+// RUN: %ldc -c %s
 
 import std.algorithm.searching;
 import std.range;

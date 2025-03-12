@@ -1,8 +1,10 @@
+// RUN: not %ldc -c %s 2>&1 | FileCheck %s
+
 /* TEST_OUTPUT:
 ---
-fail_compilation/ctonly_class.d(24): Error: cannot call @__ctfe function `ctonly_class.C.f` from non-@__ctfe function `D main`
-fail_compilation/ctonly_class.d(25): Error: cannot call @__ctfe function `ctonly_class.C.g` from non-@__ctfe function `D main`
-fail_compilation/ctonly_class.d(27): Error: cannot call @__ctfe function `ctonly_class.CtOnly.this` from non-@__ctfe function `D main`
+fail_compilation/ctonly_class.d(26): Error: cannot call @__ctfe function `ctonly_class.C.f` from non-@__ctfe function `D main`
+fail_compilation/ctonly_class.d(27): Error: cannot call @__ctfe function `ctonly_class.C.g` from non-@__ctfe function `D main`
+fail_compilation/ctonly_class.d(29): Error: cannot call @__ctfe function `ctonly_class.CtOnly.this` from non-@__ctfe function `D main`
 ---
 */
 class C {

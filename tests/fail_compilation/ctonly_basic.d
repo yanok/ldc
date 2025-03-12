@@ -1,9 +1,11 @@
+// RUN: not %ldc -c %s 2>&1 | FileCheck %s
+
 /* TEST_OUTPUT:
 ---
-fail_compilation/ctonly_basic.d(23): Error: cannot call @__ctfe function `ctonly_basic.f` from non-@__ctfe function `D main`
-fail_compilation/ctonly_basic.d(23): Error: cannot call @__ctfe function `ctonly_basic.g!2.g` from non-@__ctfe function `D main`
-fail_compilation/ctonly_basic.d(23): Error: cannot take address of @__ctfe function `f`
-fail_compilation/ctonly_basic.d(23): Error: cannot take address of @__ctfe function `g`
+fail_compilation/ctonly_basic.d(25): Error: cannot call @__ctfe function `ctonly_basic.f` from non-@__ctfe function `D main`
+fail_compilation/ctonly_basic.d(25): Error: cannot call @__ctfe function `ctonly_basic.g!2.g` from non-@__ctfe function `D main`
+fail_compilation/ctonly_basic.d(25): Error: cannot take address of @__ctfe function `f`
+fail_compilation/ctonly_basic.d(25): Error: cannot take address of @__ctfe function `g`
 ---
 */
 
