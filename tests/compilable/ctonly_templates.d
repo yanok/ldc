@@ -1,3 +1,5 @@
+// RUN: %ldc -c %s
+
 import std.algorithm.iteration;
 import std.array;
 
