@@ -291,6 +291,7 @@ public:
 
   void visit(FuncDeclaration *decl) override {
     auto type = decl->type;
+    // don't generate code marked or inferred with @__ctfe
     if (type && type->toTypeFunction()->isCtonly()) {
       return;
     }
