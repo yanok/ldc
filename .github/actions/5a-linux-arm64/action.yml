@@ -14,11 +14,14 @@ runs:
     - shell: bash
       run: |
         set -eux
-        cd ..
 
         # keep using our own lld as a linker
         sudo rm /usr/bin/aarch64-linux-gnu-ld
-        sudo ln -sf /usr/bin/ld /usr
+        ld --version
+        sudo ln -sf "$(dirname "$PWD")/llvm/bin/ld.lld" /usr/bin/ld
+        ld --version
+
+        cd ..
 
         arch='aarch64'
         triple="$arch-linux-gnu"
