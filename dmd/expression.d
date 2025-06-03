@@ -3861,7 +3861,7 @@ extern (C++) final class FuncExp : Expression
                 symtab = sds.symtab;
             }
             assert(symtab);
-            Identifier id = Identifier.generateIdWithLoc(s, loc, cast(string) toDString(sc.parent.toPrettyChars()));
+            Identifier id = Identifier.generateIdWithLoc(s, loc, cast(const void*) sc.parent);
             fd.ident = id;
             if (td)
                 td.ident = id;

@@ -218,7 +218,7 @@ nothrow:
      *      Identifier (inside Identifier.idPool) with deterministic name based
      *      on the source location.
      */
-    extern (D) static Identifier generateIdWithLoc(string prefix, const ref Loc loc, string parent = "")
+    extern (D) static Identifier generateIdWithLoc(string prefix, const ref Loc loc, const void* parent = null)
     {
         // generate `<prefix>_L<line>_C<col>`
         OutBuffer idBuf;
@@ -244,13 +244,14 @@ nothrow:
          * directly, but that would unnecessary lengthen symbols names. See issue:
          * https://issues.dlang.org/show_bug.cgi?id=23722
          */
-        static struct Key { Loc loc; string prefix; string parent; }
+        static struct Key { Loc loc; string prefix; const(void)* parent; }
         __gshared uint[Key] counters;
 
+        const key = Key(loc, prefix, parent);
         static if (__traits(compiles, counters.update(Key.init, () => 0u, (ref uint a) => 0u)))
         {
             // 2.082+
-            counters.update(Key(loc, prefix, parent),
+            counters.update(key,
                 () => 1u,          // insertion
                 (ref uint counter) // update
                 {
@@ -262,7 +263,6 @@ nothrow:
         }
         else
         {
-            const key = Key(loc, prefix, parent);
             if (auto pCounter = key in counters)
             {
                 idBuf.writestring("_");
