@@ -37,7 +37,7 @@ runs:
         cp -R ../ldc2-osx-arm64/lib       lib-arm64
         # cp -R ../ldc2-arm64/lib-ios-arm64 ./
         cp -R ../ldc2-linux-x86_64/lib          lib-linux-x86_64
-        cp -R ../ldc2-linux-x86_64/lib-aarch64  lib-linux-arm64
+        # cp -R ../ldc2-linux-x86_64/lib-aarch64  lib-linux-arm64
 
         # merge executables to universal ones
         for exe in bin/*; do
